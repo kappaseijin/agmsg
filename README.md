@@ -31,6 +31,8 @@ In real use it looks like this — Claude Code asking Codex for a code review an
 
 ## Quick Start
 
+**Requires:** `bash` and `sqlite3`. macOS ships both. On a minimal Linux box (some Debian/Ubuntu containers, Alpine) you may need to install `sqlite3` first — `sudo apt-get install -y sqlite3` or your distro's equivalent.
+
 ```bash
 # 1. Install (one-liner)
 bash <(curl -fsSL https://raw.githubusercontent.com/fujibee/agmsg/main/setup.sh)
@@ -49,6 +51,8 @@ git clone https://github.com/fujibee/agmsg.git && cd agmsg && ./install.sh
 
 That's it. The slash command prompts you for a team name and an agent name on first use, then asks you to pick a [delivery mode](#delivery-modes) (default on Claude Code: `monitor` — real-time push; Codex defaults to `turn` because it has no Monitor tool). After that, you talk to your agent naturally — see [First run](#first-run) below.
 
+Prefer a different install method? See [Install](#install) below for `npm` / `npx` and the Claude Code plugin marketplace paths.
+
 ## How it works
 
 agmsg is a thin transport. Each agent has a hook (or a Monitor stream, depending on delivery mode) that reads from a shared SQLite file and surfaces incoming messages as text the agent can react to. Sending is a `send.sh` call that appends a row. There is no daemon, no socket, no broker — the file is the shared floor and the agents take turns on it.
@@ -57,7 +61,40 @@ The store is WAL-mode SQLite, so multiple readers and a single writer coexist wi
 
 ## Install
 
+agmsg ends up at `~/.agents/skills/agmsg/` no matter which install path you take. Pick whichever fits your setup.
+
+**Which path gets the latest?** The `git clone` and `setup.sh` (curl) paths install straight from `main`, so they're always current. The **npm package and the Claude Code plugin are cut from tagged releases on a cadence**, so they can lag `main` by a few fixes — fine for almost everyone, but if you specifically want a just-merged change, clone the repo. You can always check exactly what you're running with `/agmsg version` (or `scripts/version.sh`): a tagged release reads like `v1.0.3`, while a checkout ahead of the last release reads like `v1.0.3-6-g1a2b3c4` (6 commits past `v1.0.3`).
+
+### npm / npx
+
 ```bash
+npx agmsg            # one-shot, no global install
+# or
+npm i -g agmsg && agmsg install
+```
+
+The npm package is a thin bootstrapper that downloads and runs the canonical `setup.sh`. Published from this repo via [npm Trusted Publisher (OIDC)](https://docs.npmjs.com/trusted-publishers) with [SLSA provenance](https://slsa.dev/) — the attestation is visible at <https://www.npmjs.com/package/agmsg>.
+
+### Claude Code plugin marketplace
+
+Inside Claude Code:
+
+```
+/plugin marketplace add fujibee/agmsg
+/plugin install agmsg@fujibee-agmsg
+/reload-plugins
+/agmsg
+```
+
+The plugin install path drops the skill into `~/.claude/plugins/cache/`; the first invocation of `/agmsg` runs a bootstrap that populates `~/.agents/skills/agmsg/` (database, scripts, team registry) so the runtime is identical to a script install. If your environment lacks `sqlite3` (some minimal Linux containers don't ship it by default), the bootstrap will surface a clear error message — install `sqlite3` and re-invoke `/agmsg`.
+
+### Direct script
+
+Clone the repo first, then run the installer — this is also the path that always tracks the latest `main`:
+
+```bash
+git clone https://github.com/fujibee/agmsg.git
+cd agmsg
 ./install.sh              # Interactive (asks command name, default: agmsg)
 ./install.sh --cmd m      # Non-interactive with custom command name
 ./install.sh --agent-type gemini  # Install a Gemini-oriented SKILL.md
@@ -65,10 +102,12 @@ The store is WAL-mode SQLite, so multiple readers and a single writer coexist wi
 
 The **command name** determines:
 - Skill folder: `~/.agents/skills/<cmd>/`
-- Claude Code: `/<cmd>`
-- Codex/Gemini/Antigravity: `$<cmd>`
+- Claude Code / Copilot CLI: `/<cmd>`
+- Codex / Gemini CLI / Antigravity: `$<cmd>`
 
-After install, **restart your agent** (Claude Code / Codex / Gemini CLI / Antigravity) so it picks up the new skill.
+`--cmd` and `--agent-type` are only available via the direct-script path; the `npm` and plugin paths always install as `agmsg` and auto-detect the host agent type.
+
+After install, **restart your agent** (Claude Code / Codex / Gemini CLI / Copilot CLI / Antigravity) so it picks up the new skill.
 
 ### Native Windows / PowerShell shortcut
 
@@ -364,7 +403,7 @@ bats tests/    # requires bats-core: brew install bats-core
 
 - **Product Hunt**: #5 Product of the Day, [2026-06-09 launch](https://www.producthunt.com/products/agmsg) — 219 upvotes, 39 comments
 - **Derivative projects**: `agmsg-shogi`, `agmsg-go`, `agmsg-mcp` (community-built)
-- **External contributors**: [@MiuraKatsu](https://github.com/MiuraKatsu) (Gemini support + whoami auto-detect), [@roundrop](https://github.com/roundrop) (Copilot CLI support), [@TOMONOSUKEJP](https://github.com/TOMONOSUKEJP) (native Windows / Git Bash), [@kenshin-yamada](https://github.com/kenshin-yamada) (watcher scoping fix), [@utenadev](https://github.com/utenadev) (OpenCode contribution)
+- **External contributors**: [@MiuraKatsu](https://github.com/MiuraKatsu) (Gemini support + whoami auto-detect), [@roundrop](https://github.com/roundrop) (Copilot CLI support), [@TOMONOSUKEJP](https://github.com/TOMONOSUKEJP) (native Windows / Git Bash), [@kenshin-yamada](https://github.com/kenshin-yamada) (watcher scoping fix), [@utenadev](https://github.com/utenadev) (OpenCode contribution), [@lucianlamp](https://github.com/lucianlamp) (native Windows PowerShell helpers), [@tatsuya6502](https://github.com/tatsuya6502) (sandboxed Bash tool support)
 
 ## Contributing
 
