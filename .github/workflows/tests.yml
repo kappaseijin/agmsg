@@ -1,0 +1,62 @@
+name: tests
+
+# Run the full Bats suite on every PR and on pushes to main. The suite is
+# fast (~2 min) and this repo is public, so GitHub-hosted runners are free —
+# running everything every time is simpler and safer than selectively running
+# "only the changed tests", which would miss regressions in shared libs
+# (lib/*.sh) that fan out across many scripts.
+#
+# Docs-only changes are skipped via paths-ignore.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+
+permissions:
+  contents: read
+
+jobs:
+  bats:
+    name: bats (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Cover both GNU (Linux) and BSD (macOS) userlands — the scripts shell out
+      # to sed/stat/mktemp/ps etc. whose flags differ between them.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure sqlite3 is available (Linux)
+        if: runner.os == 'Linux'
+        run: sqlite3 --version >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y sqlite3; }
+
+      # Install a modern bats-core (the suite uses BATS_TEST_TMPDIR) into a
+      # HOME-local npm prefix. This avoids both the ubuntu runner's EACCES on
+      # `npm i -g` under /usr/local and the macOS SIP block on /usr/lib that the
+      # bats-core action's default install paths hit.
+      - name: Install bats
+        run: |
+          npm config set prefix "$HOME/.npm-global"
+          npm install -g bats
+          echo "$HOME/.npm-global/bin" >> "$GITHUB_PATH"
+
+      - name: Show tool versions
+        run: |
+          bash --version | head -1
+          sqlite3 --version
+          bats --version
+
+      - name: Run bats suite
+        run: bats --print-output-on-failure tests/
