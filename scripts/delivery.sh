@@ -317,13 +317,27 @@ do_set() {
   local TYPE="${2:?Missing type}"
   local PROJECT="${3:?Missing project_path}"
 
+  # Two-stage validation. First: is this even a real mode? The four mode names
+  # are engine vocabulary (not type-specific), so a typo is caught here with a
+  # generic message before any per-type logic.
   case "$MODE" in monitor|turn|both|off) ;; *)
     echo "Unknown mode: $MODE (use monitor|turn|both|off)" >&2; exit 1 ;;
   esac
-  if [ "$TYPE" = "codex" ] && [ "$MODE" = "both" ]; then
-    echo "Error: 'both' mode is not supported for codex bridge beta. Use 'monitor', 'turn', or 'off'." >&2
-    exit 1
-  fi
+  # Second: does THIS type accept the mode? A type declares the modes its CLI
+  # accepts via the delivery_modes= manifest key (e.g. codex omits 'both' — the
+  # bridge beta has no both-mode; rule-file types like opencode omit
+  # 'monitor'/'both'). Reject anything not listed, before any file is touched.
+  # Types without the key fall back to the full set so an unconfigured manifest
+  # still works.
+  local SUPPORTED_MODES
+  SUPPORTED_MODES=$(agmsg_type_get "$TYPE" delivery_modes 2>/dev/null || true)
+  [ -z "$SUPPORTED_MODES" ] && SUPPORTED_MODES="monitor turn both off"
+  case " $SUPPORTED_MODES " in
+    *" $MODE "*) ;;
+    *)
+      echo "Error: '$MODE' mode is not supported for $TYPE (supported: $SUPPORTED_MODES)." >&2
+      exit 1 ;;
+  esac
 
   apply_settings "$TYPE" "$PROJECT" "$MODE"
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# opencode delivery plug — markdown rule-file, but turn|off only (no Monitor-tool
-# equivalent, so monitor/both are rejected). Uses resolve_hooks_file + SKILL_DIR
+# opencode delivery plug — markdown rule-file. Only turn|off reach this function:
+# opencode's manifest declares delivery_modes=turn off, so delivery.sh's central
+# gate rejects monitor/both before apply runs. Uses resolve_hooks_file + SKILL_DIR
 # from delivery.sh's sourced context.
 agmsg_delivery_apply() {
   local type="$1"
@@ -8,18 +9,6 @@ agmsg_delivery_apply() {
   local mode="$3"
   local rule_file
   rule_file=$(resolve_hooks_file "$type" "$project")
-
-  case "$mode" in
-    turn|off) ;;
-    monitor|both)
-      echo "Error: '$mode' mode is not supported for $type (no Monitor-tool equivalent). Use 'turn' or 'off'." >&2
-      return 1
-      ;;
-    *)
-      echo "Unknown mode: $mode (use turn|off)" >&2
-      return 1
-      ;;
-  esac
 
   rm -f "$rule_file"
 

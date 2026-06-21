@@ -1242,10 +1242,12 @@ EOF
   grep -q "session-start.sh" "$hook_file"
 }
 
-@test "delivery set both (codex): rejected for bridge beta" {
+@test "delivery set both (codex): rejected by the delivery_modes gate" {
+  # codex's manifest omits 'both' (delivery_modes=monitor turn off), so the
+  # central gate in delivery.sh rejects it before any file is touched.
   run bash "$SCRIPTS/delivery.sh" set both codex "$TEST_PROJECT"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"not supported for codex bridge beta"* ]]
+  [[ "$output" == *"not supported for codex"* ]]
 }
 
 

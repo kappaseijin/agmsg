@@ -1,27 +1,15 @@
 #!/usr/bin/env bash
-# copilot delivery plug — JSON hooks file (.github/hooks/agmsg.json), turn|off
-# only (no Monitor-tool equivalent). Uses resolve_hooks_file + SKILL_DIR from
-# delivery.sh's sourced context.
+# copilot delivery plug — JSON hooks file (.github/hooks/agmsg.json). Only turn|off
+# reach this function: copilot's manifest declares delivery_modes=turn off, so
+# delivery.sh's central gate rejects monitor/both before apply runs (and before
+# any file is touched, so a fat-fingered 'monitor' can't wipe a working turn
+# hook). Uses resolve_hooks_file + SKILL_DIR from delivery.sh's sourced context.
 agmsg_delivery_apply() {
   local type="$1"
   local project="$2"
   local mode="$3"
   local hooks_file
   hooks_file=$(resolve_hooks_file "$type" "$project")
-
-  # Validate the mode BEFORE touching any existing file. Rejecting
-  # monitor/both must not destroy a working turn hook.
-  case "$mode" in
-    turn|off) ;;
-    monitor|both)
-      echo "Error: '$mode' mode is not supported for $type (no Monitor-tool equivalent). Use 'turn' or 'off'." >&2
-      return 1
-      ;;
-    *)
-      echo "Unknown mode: $mode (use turn|off)" >&2
-      return 1
-      ;;
-  esac
 
   # Strip first so re-applying turn is an idempotent rewrite and turn->off
   # cleanly removes the file.
