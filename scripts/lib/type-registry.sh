@@ -100,6 +100,23 @@ agmsg_type_get() {
   printf '%s\n' "$val"
 }
 
+# Echo the absolute path to <name>'s SKILL command template, resolved from the
+# manifest `template=` key relative to the type's own directory
+# (types/<name>/template.md). Returns 1 if the type or its template= key is
+# unknown. template= is a type-dir-relative filename; reject absolute paths or
+# traversal so a third-party manifest can't redirect reads outside its type dir
+# (mirrors resolve_hooks_file's guard in delivery.sh).
+agmsg_type_template_path() {
+  local name="$1" dir rel
+  dir="$(agmsg_type_dir "$name")" || return 1
+  rel="$(agmsg_type_get "$name" template)"
+  [ -n "$rel" ] || return 1
+  case "$rel" in
+    /*|*..*) echo "Invalid template for $name: $rel" >&2; return 1 ;;
+  esac
+  printf '%s\n' "$dir/$rel"
+}
+
 # Comma-or-space list helper: 0 if <value> is in the space-separated <name>'s <key>.
 agmsg_type_has() {
   local name="$1" key="$2" want="$3" tok

@@ -21,6 +21,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AGENTS_DIR="$HOME/.agents"
 
+# Type registry — resolve each type's SKILL command template from its manifest
+# (types/<name>/template.md) instead of a hardcoded templates/ path. Read-only
+# helpers; safe to source.
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/scripts/lib/type-registry.sh"
+
 # Resolve a provenance version for the source being installed, so an installed
 # copy is uniquely identifiable even between tagged releases (the canonical
 # VERSION only bumps at release). From a git checkout: `git describe` — tag +
@@ -239,27 +245,24 @@ if [ "$UPDATE_ONLY" = true ]; then
       AGENT_TYPE="codex"
     fi
   fi
-  SKILL_TEMPLATE="cmd.codex.md"
-  if [ "$AGENT_TYPE" = "gemini" ]; then
-    SKILL_TEMPLATE="cmd.gemini.md"
-  elif [ "$AGENT_TYPE" = "antigravity" ]; then
-    SKILL_TEMPLATE="cmd.antigravity.md"
-  elif [ "$AGENT_TYPE" = "opencode" ]; then
-    SKILL_TEMPLATE="cmd.opencode.md"
-  fi
-  sed "s/__SKILL_NAME__/$SKILL_NAME/g" "$SCRIPT_DIR/templates/$SKILL_TEMPLATE" > "$SKILL_DIR/SKILL.md"
+  # The shared SKILL.md uses the codex template by default; gemini/antigravity/
+  # opencode get their own. (claude-code and copilot reuse the codex-typed
+  # shared SKILL.md; their dedicated copies are dropped separately below.)
+  TPL_TYPE="codex"
+  case "$AGENT_TYPE" in
+    gemini|antigravity|opencode) TPL_TYPE="$AGENT_TYPE" ;;
+  esac
+  sed "s/__SKILL_NAME__/$SKILL_NAME/g" "$(agmsg_type_template_path "$TPL_TYPE")" > "$SKILL_DIR/SKILL.md"
   # Recursive copy so nested helper dirs (scripts/lib/) ship without enumerating files.
   cp -R "$SCRIPT_DIR/scripts/." "$SKILL_DIR/scripts/"
-  # Ship the agent-type manifests so the type registry resolves types post-install.
+  # Ship the agent-type manifests (and their co-located SKILL templates) so the
+  # type registry resolves types post-install.
   mkdir -p "$SKILL_DIR/types"
   cp -R "$SCRIPT_DIR/types/." "$SKILL_DIR/types/"
-  for tmpl in "$SCRIPT_DIR/templates/"cmd.*.md; do
-    sed "s/__SKILL_NAME__/$SKILL_NAME/g" "$tmpl" > "$SKILL_DIR/templates/$(basename "$tmpl")"
-  done
   # Refresh the Claude Code slash command file (was missed in earlier --update flows).
   CC_COMMANDS_DIR="$HOME/.claude/commands"
   if [ -d "$CC_COMMANDS_DIR" ] && [ -f "$CC_COMMANDS_DIR/$SKILL_NAME.md" ]; then
-    sed "s/__SKILL_NAME__/$SKILL_NAME/g" "$SCRIPT_DIR/templates/cmd.claude-code.md" > "$CC_COMMANDS_DIR/$SKILL_NAME.md"
+    sed "s/__SKILL_NAME__/$SKILL_NAME/g" "$(agmsg_type_template_path claude-code)" > "$CC_COMMANDS_DIR/$SKILL_NAME.md"
   fi
   # Refresh / install the Copilot CLI skill (Copilot reads SKILL.md from its
   # own skills dir; the shared ~/.agents/skills/<name>/SKILL.md is
@@ -269,13 +272,13 @@ if [ "$UPDATE_ONLY" = true ]; then
   COPILOT_SKILL_DIR="$HOME/.copilot/skills/$SKILL_NAME"
   if [ -d "$HOME/.copilot" ]; then
     mkdir -p "$COPILOT_SKILL_DIR"
-    sed "s/__SKILL_NAME__/$SKILL_NAME/g" "$SCRIPT_DIR/templates/cmd.copilot.md" > "$COPILOT_SKILL_DIR/SKILL.md"
+    sed "s/__SKILL_NAME__/$SKILL_NAME/g" "$(agmsg_type_template_path copilot)" > "$COPILOT_SKILL_DIR/SKILL.md"
   fi
   # Refresh / install the OpenCode skill (same reasoning as Copilot above).
   OPENCODE_SKILL_DIR="$HOME/.config/opencode/skills/$SKILL_NAME"
   if [ -d "$HOME/.config/opencode" ]; then
     mkdir -p "$OPENCODE_SKILL_DIR"
-    sed "s/__SKILL_NAME__/$SKILL_NAME/g" "$SCRIPT_DIR/templates/cmd.opencode.md" > "$OPENCODE_SKILL_DIR/SKILL.md"
+    sed "s/__SKILL_NAME__/$SKILL_NAME/g" "$(agmsg_type_template_path opencode)" > "$OPENCODE_SKILL_DIR/SKILL.md"
   fi
   cp "$SCRIPT_DIR/openai.yaml" "$SKILL_DIR/agents/openai.yaml" 2>/dev/null || true
   chmod +x "$SKILL_DIR/scripts/"*.sh
@@ -310,27 +313,21 @@ SKILL_DIR="$AGENTS_DIR/skills/$CMD_NAME"
 
 # --- Install skill ---
 echo "  Installing to ~/.agents/skills/$CMD_NAME/ ..."
-mkdir -p "$SKILL_DIR"/{scripts,templates,types,db,agents}
+mkdir -p "$SKILL_DIR"/{scripts,types,db,agents}
 
-# SKILL.md is generated from the agent-specific command template.
-SKILL_TEMPLATE="cmd.codex.md"
-if [ "$AGENT_TYPE" = "gemini" ]; then
-  SKILL_TEMPLATE="cmd.gemini.md"
-elif [ "$AGENT_TYPE" = "antigravity" ]; then
-  SKILL_TEMPLATE="cmd.antigravity.md"
-elif [ "$AGENT_TYPE" = "opencode" ]; then
-  SKILL_TEMPLATE="cmd.opencode.md"
-fi
-sed "s/__SKILL_NAME__/$CMD_NAME/g" "$SCRIPT_DIR/templates/$SKILL_TEMPLATE" > "$SKILL_DIR/SKILL.md"
+# SKILL.md is generated from the agent-specific command template, resolved from
+# the type manifest (types/<type>/template.md). The shared SKILL.md uses the
+# codex template by default; gemini/antigravity/opencode get their own.
+TPL_TYPE="codex"
+case "$AGENT_TYPE" in
+  gemini|antigravity|opencode) TPL_TYPE="$AGENT_TYPE" ;;
+esac
+sed "s/__SKILL_NAME__/$CMD_NAME/g" "$(agmsg_type_template_path "$TPL_TYPE")" > "$SKILL_DIR/SKILL.md"
 # Recursive copy so nested helper dirs (scripts/lib/) ship without enumerating files.
 cp -R "$SCRIPT_DIR/scripts/." "$SKILL_DIR/scripts/"
-# Ship the agent-type manifests so the type registry resolves types post-install.
+# Ship the agent-type manifests (and their co-located SKILL templates) so the
+# type registry resolves types post-install.
 cp -R "$SCRIPT_DIR/types/." "$SKILL_DIR/types/"
-
-# Replace placeholder in templates with actual skill name
-for tmpl in "$SCRIPT_DIR/templates/"cmd.*.md; do
-  sed "s/__SKILL_NAME__/$CMD_NAME/g" "$tmpl" > "$SKILL_DIR/templates/$(basename "$tmpl")"
-done
 
 cp "$SCRIPT_DIR/openai.yaml" "$SKILL_DIR/agents/openai.yaml" 2>/dev/null || true
 chmod +x "$SKILL_DIR/scripts/"*.sh
@@ -359,7 +356,7 @@ fi
 CC_COMMANDS_DIR="$HOME/.claude/commands"
 if [ -d "$HOME/.claude" ]; then
   mkdir -p "$CC_COMMANDS_DIR"
-  sed "s/__SKILL_NAME__/$CMD_NAME/g" "$SCRIPT_DIR/templates/cmd.claude-code.md" > "$CC_COMMANDS_DIR/$CMD_NAME.md"
+  sed "s/__SKILL_NAME__/$CMD_NAME/g" "$(agmsg_type_template_path claude-code)" > "$CC_COMMANDS_DIR/$CMD_NAME.md"
   echo "  + installed /$CMD_NAME command to ~/.claude/commands/"
 fi
 
@@ -370,7 +367,7 @@ fi
 COPILOT_SKILL_DIR="$HOME/.copilot/skills/$CMD_NAME"
 if [ -d "$HOME/.copilot" ]; then
   mkdir -p "$COPILOT_SKILL_DIR"
-  sed "s/__SKILL_NAME__/$CMD_NAME/g" "$SCRIPT_DIR/templates/cmd.copilot.md" > "$COPILOT_SKILL_DIR/SKILL.md"
+  sed "s/__SKILL_NAME__/$CMD_NAME/g" "$(agmsg_type_template_path copilot)" > "$COPILOT_SKILL_DIR/SKILL.md"
   echo "  + installed /$CMD_NAME skill to ~/.copilot/skills/"
 fi
 
@@ -382,7 +379,7 @@ fi
 OPENCODE_SKILL_DIR="$HOME/.config/opencode/skills/$CMD_NAME"
 if [ -d "$HOME/.config/opencode" ]; then
   mkdir -p "$OPENCODE_SKILL_DIR"
-  sed "s/__SKILL_NAME__/$CMD_NAME/g" "$SCRIPT_DIR/templates/cmd.opencode.md" > "$OPENCODE_SKILL_DIR/SKILL.md"
+  sed "s/__SKILL_NAME__/$CMD_NAME/g" "$(agmsg_type_template_path opencode)" > "$OPENCODE_SKILL_DIR/SKILL.md"
   echo "  + installed \$$CMD_NAME skill to ~/.config/opencode/skills/"
 fi
 

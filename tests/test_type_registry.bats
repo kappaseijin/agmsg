@@ -45,13 +45,23 @@ write_node_launcher_fixtures() {
 
 @test "type-registry: type_get reads keys and returns a default for a missing one" {
   run env -i PATH="$PATH" bash -c "source '$SCRIPTS/lib/type-registry.sh'; agmsg_type_get codex template"
-  [ "$status" -eq 0 ]; [ "$output" = "cmd.codex.md" ]
+  [ "$status" -eq 0 ]; [ "$output" = "template.md" ]
   run env -i PATH="$PATH" bash -c "source '$SCRIPTS/lib/type-registry.sh'; agmsg_type_get codex hooks_file"
   [ "$output" = ".codex/hooks.json" ]
   run env -i PATH="$PATH" bash -c "source '$SCRIPTS/lib/type-registry.sh'; agmsg_type_get codex cli"
   [ "$output" = "codex" ]
   run env -i PATH="$PATH" bash -c "source '$SCRIPTS/lib/type-registry.sh'; agmsg_type_get gemini missingkey FALLBACK"
   [ "$output" = "FALLBACK" ]
+}
+
+@test "type-registry: template_path resolves to the type dir's template.md" {
+  run env -i PATH="$PATH" bash -c "source '$SCRIPTS/lib/type-registry.sh'; agmsg_type_template_path codex"
+  [ "$status" -eq 0 ]
+  [ "${output##*/types/}" = "codex/template.md" ]
+  [ -f "$output" ]
+  # Unknown type → non-zero, no path.
+  run env -i PATH="$PATH" bash -c "source '$SCRIPTS/lib/type-registry.sh'; agmsg_type_template_path bogus-type"
+  [ "$status" -ne 0 ]
 }
 
 @test "type-registry: spawnable set is exactly claude-code and codex" {
