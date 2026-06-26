@@ -444,12 +444,15 @@ place_and_launch() {
 # receiving. Block until that appears so the leader doesn't send a job into the
 # cold-start window (before the watcher attaches) and lose it.
 #
-# Types without a Monitor (manifest `monitor=no`) never touch the readiness
-# sentinel, so skip the wait for them (their receive is poll-based anyway).
+# Types with `monitor=no` do not produce a spawn-awaitable readiness sentinel, so
+# skip the wait. That covers types with no Monitor at all (codex) AND types whose
+# watcher attaches via the agent's own launch rather than a spawn-time sentinel
+# (grok-build, whose monitor mode is real but not awaitable here) — receive there
+# is poll-based or agent-launched anyway.
 READY_PATH="$(agmsg_ready_path "$TEAM" "$NAME")"
 if [ "$(agmsg_type_get "$AGENT_TYPE" monitor)" = "no" ] && [ "$WAIT_READY" = "1" ]; then
   WAIT_READY=0
-  echo "spawn: '$AGENT_TYPE' has no Monitor — skipping readiness wait (--no-wait implied)" >&2
+  echo "spawn: '$AGENT_TYPE' has no spawn readiness handshake — skipping readiness wait (--no-wait implied)" >&2
 fi
 
 # Clear any stale sentinel before launching so we only observe THIS spawn's

@@ -312,3 +312,18 @@ teardown() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"skipping readiness wait"* ]]
 }
+
+@test "spawn: grok-build skips the readiness wait even without --no-wait (monitor=no)" {
+  # Regression guard: grok-build's monitor watcher attaches via the agent's
+  # actas/rule launch (no SessionStart hook) and only in monitor mode, so there
+  # is no ready sentinel for spawn to await. With monitor=no, spawn must skip the
+  # wait and return immediately instead of hanging a default turn/off-mode spawn
+  # until --ready-timeout. (Without this, monitor=yes made the wait fire.)
+  bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
+  run env -u TMUX bash "$SCRIPTS/spawn.sh" grok-build alice --project "$PROJ" \
+    --terminal "true # {cmd}"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"skipping readiness wait"* ]]
+  [[ "$output" != *"status=timeout"* ]]
+  [[ "$output" != *"status=ready"* ]]
+}

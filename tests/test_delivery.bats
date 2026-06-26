@@ -1608,11 +1608,38 @@ JSON
   [ ! -f "$TEST_PROJECT/.grok/rules/agmsg.md" ]
 }
 
-@test "delivery set monitor (grok-build): rejected; no rule file written" {
-  run bash "$SCRIPTS/delivery.sh" set monitor grok-build "$TEST_PROJECT"
-  [ "$status" -ne 0 ]
-  [[ "$output" =~ "not supported" ]]
-  [ ! -f "$TEST_PROJECT/.grok/rules/agmsg.md" ]
+@test "delivery set monitor (grok-build): writes a monitor rule and emits the launch directive" {
+  GROK_SESSION_ID="grok-sess-1" run bash "$SCRIPTS/delivery.sh" set monitor grok-build "$TEST_PROJECT"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "Delivery mode set to 'monitor'" ]]
+  # Emits an in-session directive to launch watch.sh via the monitor tool, with
+  # GROK_SESSION_ID baked into the command (not CLAUDE_CODE_SESSION_ID).
+  [[ "$output" == *"AGMSG-DIRECTIVE"* ]]
+  [[ "$output" == *"watch.sh"* ]]
+  [[ "$output" == *"grok-sess-1"* ]]
+  [[ "$output" == *"grok-build"* ]]
+  # The rule carries the monitor marker and points at the monitor tool.
+  local rule_file="$TEST_PROJECT/.grok/rules/agmsg.md"
+  [ -f "$rule_file" ]
+  run cat "$rule_file"
+  [[ "$output" == *"agmsg-delivery-mode: monitor"* ]]
+  [[ "$output" == *"monitor"* ]]
+  [[ "$output" == *"watch.sh"* ]]
+}
+
+@test "delivery status (grok-build): reports monitor when the monitor rule is present" {
+  GROK_SESSION_ID="grok-sess-2" bash "$SCRIPTS/delivery.sh" set monitor grok-build "$TEST_PROJECT" >/dev/null
+  run bash "$SCRIPTS/delivery.sh" status grok-build "$TEST_PROJECT"
+  [[ "$output" =~ "mode: monitor" ]]
+}
+
+@test "delivery set turn then monitor (grok-build): rewrites the rule from turn to monitor" {
+  bash "$SCRIPTS/delivery.sh" set turn grok-build "$TEST_PROJECT" >/dev/null
+  run bash "$SCRIPTS/delivery.sh" status grok-build "$TEST_PROJECT"
+  [[ "$output" =~ "mode: turn" ]]
+  GROK_SESSION_ID="grok-sess-3" bash "$SCRIPTS/delivery.sh" set monitor grok-build "$TEST_PROJECT" >/dev/null
+  run bash "$SCRIPTS/delivery.sh" status grok-build "$TEST_PROJECT"
+  [[ "$output" =~ "mode: monitor" ]]
 }
 
 @test "delivery set both (grok-build): rejected; does NOT delete an existing turn rule" {

@@ -154,6 +154,7 @@ agmsg_delivery_apply_default() {
 #   agmsg_delivery_apply      — write the hook file for a mode (default: JSON event-hooks)
 #   agmsg_delivery_on_enable  — side effects when enabling monitor/both (default: none)
 #   agmsg_delivery_on_disable — side effects when turning delivery off  (default: none)
+#   agmsg_delivery_stop_directive — in-session watcher-stop directive (default: Claude TaskStop)
 # A plug that wants the default apply can delegate to agmsg_delivery_apply_default.
 agmsg_delivery_apply() { agmsg_delivery_apply_default "$@"; }
 agmsg_delivery_on_enable() { :; }
@@ -162,6 +163,10 @@ agmsg_delivery_on_enable() { :; }
 # <project>. Passing the type scopes the kill so disabling one type's delivery
 # never tears down another type's watcher in the same project.
 agmsg_delivery_on_disable() { kill_all_watchers "$2" "$1" >/dev/null 2>&1 || true; }
+# Default in-session stop directive: tell a running Claude Code session to find
+# and TaskStop its watcher. Types whose runtime launches the watcher a different
+# way (e.g. grok-build's `monitor` tool) override this with their own wording.
+agmsg_delivery_stop_directive() { emit_stop_directive; }
 
 # Default delivery status (json-hooks types: claude-code, codex). Derives the mode
 # from the settings hooks file's agmsg-owned SessionStart/Stop entries, then prints
@@ -395,7 +400,7 @@ do_set() {
       # watcher in the project — so any type's `set turn` tore down the
       # project's claude-code monitor, the only type that runs one.)
       kill_all_watchers "$PROJECT" "$TYPE" >/dev/null 2>&1 || true
-      emit_stop_directive
+      agmsg_delivery_stop_directive
       ;;
     off)
       echo "Future sessions: no automatic delivery."
@@ -408,7 +413,7 @@ do_set() {
       # directive would be noise — and a stray TaskStop could disturb an
       # unrelated agent's watcher. Data-driven, so no per-type branch here.
       case " $SUPPORTED_MODES " in
-        *" monitor "*|*" turn "*|*" both "*) emit_stop_directive ;;
+        *" monitor "*|*" turn "*|*" both "*) agmsg_delivery_stop_directive ;;
       esac
       ;;
   esac
