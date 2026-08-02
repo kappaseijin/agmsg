@@ -54,6 +54,9 @@ set -euo pipefail
 #                      resume (manifest `resume_arg=`) is brought back into its
 #                      last session's context when that transcript still exists
 #                      (#339); with it, spawn always boots fresh.
+#   --role <role>      select an optional type-role spawn-options section.
+#                      Overrides the role derived from <name>; does not change
+#                      the actas identity, team registration, or session name.
 #
 # Spawn options: extra CLI args to always pass a given type's launched
 # binary (e.g. a default permission mode or sandbox policy), configured
@@ -141,6 +144,8 @@ WAIT_READY=1         # block until the spawned agent's watcher attaches
 READY_TIMEOUT=90     # seconds to wait for readiness before giving up
 MODEL_ID=""          # --model: pass-through model id for the launched CLI
 FRESH=0              # --fresh: force a fresh session even if the role is resumable
+ROLE=""              # --role, or a safe role derived from NAME
+ROLE_EXPLICIT=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -158,12 +163,38 @@ while [ $# -gt 0 ]; do
     --ready-timeout) READY_TIMEOUT="${2:?--ready-timeout needs seconds}"; shift 2 ;;
     --model) MODEL_ID="${2:?--model needs a model id}"; shift 2 ;;
     --fresh) FRESH=1; shift ;;
+    --role)
+      [ "$#" -ge 2 ] || die "--role needs a role"
+      ROLE="$2"
+      ROLE_EXPLICIT=1
+      shift 2
+      ;;
     *) die "unknown option: $1" ;;
   esac
 done
 
 case "$SPLIT" in h|v) ;; *) die "--split must be 'h' or 'v'" ;; esac
 case "$READY_TIMEOUT" in ''|*[!0-9]*) die "--ready-timeout must be a whole number of seconds" ;; esac
+
+is_safe_spawn_role() {
+  [[ "$1" =~ ^[A-Za-z0-9_-]+$ ]]
+}
+
+derive_spawn_role() {
+  local candidate
+  local -a name_parts
+  IFS=_ read -r -a name_parts <<< "$NAME"
+  [ "${#name_parts[@]}" -ge 3 ] || return 0
+  candidate="${name_parts[${#name_parts[@]} - 2]}"
+  is_safe_spawn_role "$candidate" || return 0
+  printf '%s' "$candidate"
+}
+
+if [ "$ROLE_EXPLICIT" -eq 1 ]; then
+  is_safe_spawn_role "$ROLE" || die "--role must contain only letters, digits, '_' or '-'"
+else
+  ROLE="$(derive_spawn_role)"
+fi
 
 # Resolve the terminal override for the non-tmux path:
 #   --terminal  >  $AGMSG_TERMINAL  >  config spawn.terminal
@@ -265,7 +296,7 @@ SPAWN_UNSET_VARS="$(agmsg_type_get "$AGENT_TYPE" spawn_unset_env)"
 SPAWN_OPT_TOKENS=()
 while IFS= read -r _spawn_opt_tok; do
   SPAWN_OPT_TOKENS+=("$_spawn_opt_tok")
-done < <(agmsg_spawn_options_tokens "$AGENT_TYPE")
+done < <(agmsg_spawn_options_tokens "$AGENT_TYPE" "$ROLE")
 
 # Resolve the node launcher path from the manifest (not hardcoded), if any.
 SPAWN_AGENT=""

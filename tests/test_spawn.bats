@@ -503,6 +503,88 @@ YAML
   [[ "$output" == *"actas"* ]]
 }
 
+@test "spawn: derives a role from the agent name and appends its spawn-options" {
+  bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
+  local opts="$TEST_SKILL_DIR/spawn_options.yaml"
+  cat > "$opts" <<'YAML'
+codex:
+  --sandbox: workspace-write
+codex@architect:
+  -p: architect
+  -c: model_reasoning_effort=xhigh
+YAML
+  run env AGMSG_SPAWN_OPTIONS_FILE="$opts" \
+    bash "$SCRIPTS/spawn.sh" codex herdr-agent-monitor_architect_codex --project "$PROJ" --no-wait
+  [ "$status" -eq 0 ]
+  boot="$(cat "$CAPTURE")"
+  run cat "$boot"
+  [[ "$output" == *"codex --sandbox workspace-write -p architect -c model_reasoning_effort=xhigh"* ]]
+}
+
+@test "spawn: explicit --role overrides the role derived from the agent name" {
+  bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
+  local opts="$TEST_SKILL_DIR/spawn_options.yaml"
+  cat > "$opts" <<'YAML'
+codex@architect:
+  -p: architect
+codex@programmer:
+  -p: programmer
+YAML
+  run env AGMSG_SPAWN_OPTIONS_FILE="$opts" \
+    bash "$SCRIPTS/spawn.sh" codex herdr-agent-monitor_architect_codex --role programmer --project "$PROJ" --no-wait
+  [ "$status" -eq 0 ]
+  boot="$(cat "$CAPTURE")"
+  run cat "$boot"
+  [[ "$output" == *"codex -p programmer"* ]]
+  [[ "$output" != *"-p architect"* ]]
+}
+
+@test "spawn: rejects an unsafe explicit --role before pre-joining the agent" {
+  bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
+  local name="herdr-agent-monitor_programmer_codex"
+
+  run bash "$SCRIPTS/spawn.sh" codex "$name" --role 'bad/role' --project "$PROJ" --no-wait
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"--role must contain only"* ]]
+  [ ! -e "$CAPTURE" ]
+  run grep -R -F "$name" "$TEST_SKILL_DIR/teams"
+  [ "$status" -ne 0 ]
+}
+
+@test "spawn: missing role section degrades to the base spawn-options" {
+  bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
+  local opts="$TEST_SKILL_DIR/spawn_options.yaml"
+  cat > "$opts" <<'YAML'
+codex:
+  --sandbox: workspace-write
+YAML
+  run env AGMSG_SPAWN_OPTIONS_FILE="$opts" \
+    bash "$SCRIPTS/spawn.sh" codex herdr-agent-monitor_architect_codex --project "$PROJ" --no-wait
+  [ "$status" -eq 0 ]
+  boot="$(cat "$CAPTURE")"
+  run cat "$boot"
+  [[ "$output" == *"codex --sandbox workspace-write"* ]]
+  [[ "$output" != *"-p architect"* ]]
+}
+
+@test "spawn: short agent names use only base spawn-options" {
+  bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
+  local opts="$TEST_SKILL_DIR/spawn_options.yaml"
+  cat > "$opts" <<'YAML'
+codex:
+  --sandbox: workspace-write
+codex@reviewer:
+  -p: reviewer
+YAML
+  run env AGMSG_SPAWN_OPTIONS_FILE="$opts" \
+    bash "$SCRIPTS/spawn.sh" codex reviewer --project "$PROJ" --no-wait
+  [ "$status" -eq 0 ]
+  boot="$(cat "$CAPTURE")"
+  run cat "$boot"
+  [[ "$output" == *"codex --sandbox workspace-write"* ]]
+  [[ "$output" != *"-p reviewer"* ]]
+}
+
 @test "spawn: spawn-options flags land after --model, before the actas prompt" {
   bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
   local opts="$TEST_SKILL_DIR/spawn_options.yaml"
@@ -516,6 +598,23 @@ YAML
   boot="$(cat "$CAPTURE")"
   run cat "$boot"
   [[ "$output" == *"claude --model claude-opus-4-8 --permission-mode acceptEdits"* ]]
+}
+
+@test "spawn: role spawn-options land after --model and before the session name" {
+  bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
+  local opts="$TEST_SKILL_DIR/spawn_options.yaml"
+  cat > "$opts" <<'YAML'
+codex:
+  --sandbox: workspace-write
+codex@architect:
+  -p: architect
+YAML
+  run env AGMSG_SPAWN_OPTIONS_FILE="$opts" \
+    bash "$SCRIPTS/spawn.sh" codex herdr-agent-monitor_architect_codex --project "$PROJ" --model gpt-5 --no-wait
+  [ "$status" -eq 0 ]
+  boot="$(cat "$CAPTURE")"
+  run cat "$boot"
+  [[ "$output" == *"codex -m gpt-5 --sandbox workspace-write -p architect"* ]]
 }
 
 @test "spawn: a false spawn-options value suppresses that flag" {

@@ -142,3 +142,107 @@ YAML
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
+
+@test "spawn_options_tokens: type-only golden output remains byte-identical with a role" {
+  export AGMSG_SPAWN_OPTIONS_FILE="$BATS_TEST_DIRNAME/fixtures/spawn_options_legacy.yaml"
+  local actual="$BATS_TEST_TMPDIR/codex.tokens"
+
+  agmsg_spawn_options_tokens codex architect > "$actual"
+  cmp "$BATS_TEST_DIRNAME/fixtures/spawn_options_legacy_codex.tokens" "$actual"
+}
+
+@test "spawn_options_tokens: role overlay overrides matching base keys" {
+  local file="$TEST_SKILL_DIR/spawn_options.yaml"
+  cat > "$file" <<'YAML'
+codex:
+  --sandbox: workspace-write
+  -p: base
+codex@architect:
+  --sandbox: danger-full-access
+  -p: architect
+  -c: model_reasoning_effort=xhigh
+codex@programmer:
+  -p: programmer
+YAML
+  export AGMSG_SPAWN_OPTIONS_FILE="$file"
+
+  run agmsg_spawn_options_tokens codex architect
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "--sandbox" ]
+  [ "${lines[1]}" = "danger-full-access" ]
+  [ "${lines[2]}" = "-p" ]
+  [ "${lines[3]}" = "architect" ]
+  [ "${lines[4]}" = "-c" ]
+  [ "${lines[5]}" = "model_reasoning_effort=xhigh" ]
+  [ "${#lines[@]}" -eq 6 ]
+}
+
+@test "spawn_options_tokens: role false suppresses the matching base key" {
+  local file="$TEST_SKILL_DIR/spawn_options.yaml"
+  cat > "$file" <<'YAML'
+codex:
+  --sandbox: workspace-write
+codex@architect:
+  --sandbox: false
+  -p: architect
+YAML
+  export AGMSG_SPAWN_OPTIONS_FILE="$file"
+
+  run agmsg_spawn_options_tokens codex architect
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "-p" ]
+  [ "${lines[1]}" = "architect" ]
+  [ "${#lines[@]}" -eq 2 ]
+}
+
+@test "spawn_options_tokens: role-only keys follow unsuppressed base keys" {
+  local file="$TEST_SKILL_DIR/spawn_options.yaml"
+  cat > "$file" <<'YAML'
+codex:
+  --sandbox: workspace-write
+codex@architect:
+  -p: architect
+YAML
+  export AGMSG_SPAWN_OPTIONS_FILE="$file"
+
+  run agmsg_spawn_options_tokens codex architect
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "--sandbox" ]
+  [ "${lines[1]}" = "workspace-write" ]
+  [ "${lines[2]}" = "-p" ]
+  [ "${lines[3]}" = "architect" ]
+  [ "${#lines[@]}" -eq 4 ]
+}
+
+@test "spawn_options_tokens: type lookup never reads a similarly named role section" {
+  local file="$TEST_SKILL_DIR/spawn_options.yaml"
+  cat > "$file" <<'YAML'
+codex@architect:
+  -p: architect
+YAML
+  export AGMSG_SPAWN_OPTIONS_FILE="$file"
+
+  run agmsg_spawn_options_tokens codex
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "spawn_options_tokens: legacy header whitespace and comments preserve base tokens" {
+  export AGMSG_SPAWN_OPTIONS_FILE="$BATS_TEST_DIRNAME/fixtures/spawn_options_header_compat.yaml"
+  local actual="$BATS_TEST_TMPDIR/codex.tokens"
+
+  agmsg_spawn_options_tokens codex > "$actual"
+  cmp "$BATS_TEST_DIRNAME/fixtures/spawn_options_header_compat_codex.tokens" "$actual"
+}
+
+@test "spawn_options_tokens: role overlay accepts trailing header whitespace" {
+  export AGMSG_SPAWN_OPTIONS_FILE="$BATS_TEST_DIRNAME/fixtures/spawn_options_header_compat.yaml"
+
+  run agmsg_spawn_options_tokens codex architect
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "--sandbox" ]
+  [ "${lines[1]}" = "workspace-write" ]
+  [ "${lines[2]}" = "-p" ]
+  [ "${lines[3]}" = "architect" ]
+  [ "${#lines[@]}" -eq 4 ]
+}

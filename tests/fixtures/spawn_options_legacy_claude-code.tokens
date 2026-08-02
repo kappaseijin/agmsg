@@ -1,0 +1,5 @@
+--permission-mode
+acceptEdits
+--dangerously-skip-permissions
+--append-system-prompt
+preserve spaces exactly

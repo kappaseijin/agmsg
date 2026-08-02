@@ -1,0 +1,4 @@
+codex:   # base options
+  --sandbox: workspace-write
+codex@architect:    
+  -p: architect
