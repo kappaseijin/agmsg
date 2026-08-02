@@ -197,7 +197,7 @@ By default `spawn` **blocks until the new agent is actually listening** — its 
 
 Options: `--boot-prompt <text>` (initial task; see above), `--project <path>` (default: current project), `--team <team>` (auto-resolved when the project has a single team), and `--terminal <tmpl>` / `$AGMSG_TERMINAL` / config `spawn.terminal` to override the terminal command on the non-tmux path (a `{cmd}` placeholder is replaced with the path to the generated boot script). On macOS the default opens whichever terminal you're currently in (iTerm or Terminal, via `$TERM_PROGRAM`) using `open -a` — a plain app launch, so it does **not** trigger the Automation/AppleScript permission prompts that scripting the terminal directly would.
 
-To always pass a given agent type extra CLI flags on spawn (e.g. a default permission mode or sandbox policy), set them in a YAML **spawn options** file — one section per type, a flat `--flag: value` map underneath. Path: `$AGMSG_SPAWN_OPTIONS_FILE`, else `~/.agmsg/config/spawn_options.yaml`; a missing file or section is a no-op.
+To always pass a given agent type extra CLI flags on spawn (e.g. a default permission mode or sandbox policy), set them in a YAML **spawn options** file — one section per type, a flat `--flag: value` map underneath. Path: `$AGMSG_SPAWN_OPTIONS_FILE`, else `~/.agmsg/config/spawn_options.yaml`; a missing file or section is a no-op. An optional `<type>@<role>` section appends its tokens after the base `<type>` tokens. `spawn` resolves the role from `--role <role>` first, then from the second-to-last `_`-separated component of a three-or-more-component agent name; if neither applies, it uses only the base section.
 
 ```yaml
 claude-code:
@@ -207,7 +207,17 @@ claude-code:
 codex:
   --sandbox: workspace-write
   --dangerously-skip-permissions: false  # a `false` value suppresses the flag entirely
+
+codex@architect:
+  -p: architect
+  -c: model_reasoning_effort=xhigh
+
+codex@programmer:
+  -p: programmer
+  -c: model_reasoning_effort=medium
 ```
+
+For example, `spawn codex project_architect_codex` appends the `codex@architect` tokens. Role overlay tokens are concatenated as written; agmsg does not resolve duplicate flags. An explicit role must contain only letters, digits, `_`, or `-`; an unsafe value is rejected before spawn creates or joins anything.
 
 Eight of the nine agent types are spawnable — `claude-code`, `codex`, `grok-build`, `cursor`, `gemini`, `antigravity`, `copilot`, `opencode`. `hermes` is not: its CLI has no mode that starts an interactive session pre-seeded with an initial prompt (#279). macOS is the primary target; Linux and Windows are best-effort (please open an issue/PR if your terminal isn't handled). Headless environments — no tmux **and** no usable terminal — error out, since the agent CLIs need an interactive terminal.
 

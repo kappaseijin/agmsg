@@ -196,7 +196,7 @@ $agmsg              # Codex, Gemini CLI, Antigravity
 
 オプション: `--boot-prompt <text>`（初期タスク、上記参照）、`--project <path>`（デフォルト: 現在のプロジェクト）、`--team <team>`（プロジェクトにチームが1つだけなら自動解決）、`--terminal <tmpl>` / `$AGMSG_TERMINAL` / 設定 `spawn.terminal`（非tmux経路でターミナルコマンドを上書き。`{cmd}` プレースホルダーは生成されたブートスクリプトへのパスに置換される）。macOSでは、デフォルトで現在使っているターミナル（iTermまたはTerminal、`$TERM_PROGRAM` 経由で判定）を `open -a` で開く — これは単なるアプリ起動であり、ターミナルを直接スクリプト操作する場合に発生するAutomation/AppleScriptの権限プロンプトは**発生しない**。
 
-特定のエージェントタイプにspawn時に常に追加のCLIフラグを渡したい場合（例えばデフォルトの権限モードやサンドボックスポリシー）、YAMLの**spawnオプション**ファイルに設定する — タイプごとに1セクション、その下にフラットな `--flag: value` マップを置く。パス: `$AGMSG_SPAWN_OPTIONS_FILE`、なければ `~/.agmsg/config/spawn_options.yaml`。ファイルやセクションがなければ何もしない。
+特定のエージェントタイプにspawn時に常に追加のCLIフラグを渡したい場合（例えばデフォルトの権限モードやサンドボックスポリシー）、YAMLの**spawnオプション**ファイルに設定する — タイプごとに1セクション、その下にフラットな `--flag: value` マップを置く。パス: `$AGMSG_SPAWN_OPTIONS_FILE`、なければ `~/.agmsg/config/spawn_options.yaml`。ファイルやセクションがなければ何もしない。任意の `<type>@<role>` セクションは、基底の `<type>` token の後にtokenを追加する。`spawn` はまず `--role <role>` を使い、なければ `_` 区切りで3要素以上あるエージェント名の末尾から2番目をroleとして使う。どちらもなければ基底セクションだけを使う。
 
 ```yaml
 claude-code:
@@ -206,7 +206,17 @@ claude-code:
 codex:
   --sandbox: workspace-write
   --dangerously-skip-permissions: false  # `false`の値はフラグ自体を出力しない
+
+codex@architect:
+  -p: architect
+  -c: model_reasoning_effort=xhigh
+
+codex@programmer:
+  -p: programmer
+  -c: model_reasoning_effort=medium
 ```
+
+例えば `spawn codex project_architect_codex` は `codex@architect` のtokenを追加する。role overlayのtokenは記述順に単純連結され、agmsgは重複するフラグを解決しない。明示roleに使えるのは英数字・`_`・`-` だけで、不正な値はspawnが作成・参加操作を行う前に拒否される。
 
 9種類のエージェントタイプのうち8つがspawn可能 — `claude-code`、`codex`、`grok-build`、`cursor`、`gemini`、`antigravity`、`copilot`、`opencode`。`hermes` は不可 — そのCLIには初期プロンプトを事前に仕込んだインタラクティブセッションを開始するモードがない（#279）。macOSが主なターゲットで、LinuxとWindowsはベストエフォート（ターミナルが未対応の場合はissueまたはPRを歓迎）。ヘッドレス環境 — tmuxもなく使えるターミナルもない — はエージェントCLIがインタラクティブなターミナルを必要とするためエラーになる。
 

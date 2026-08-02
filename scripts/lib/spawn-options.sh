@@ -27,16 +27,21 @@ agmsg_spawn_options_file() {
   printf '%s' "${AGMSG_SPAWN_OPTIONS_FILE:-$HOME/.agmsg/config/spawn_options.yaml}"
 }
 
-# Emit one shell token per output line for <type>'s section. Each line is a
+# Emit one shell token per output line for a single section. Each line is a
 # complete argv token — the caller must read line-by-line (never word-split
 # the output), so a value containing spaces stays a single token.
-agmsg_spawn_options_tokens() {
-  local type="$1" file
+agmsg_spawn_options_section_tokens() {
+  local section="$1" file
   file="$(agmsg_spawn_options_file)"
   [ -f "$file" ] || return 0
 
-  awk -v section="$type" '
-    /^[^ #]/ { in_section = ($0 ~ "^" section ":") }
+  awk -v section="$section" '
+    /^[^ #]/ {
+      header = $0
+      sub(/[ \t]+#.*$/, "", header)
+      sub(/[ \t]+$/, "", header)
+      in_section = (header == section ":")
+    }
     in_section && /^  [^ ]/ {
       line = $0
       sub(/^  /, "", line)
@@ -52,4 +57,13 @@ agmsg_spawn_options_tokens() {
       if (val != "" && val != "true") print val
     }
   ' "$file"
+}
+
+# Emit the type section, followed by its optional role overlay. The two token
+# streams are deliberately concatenated without resolving duplicate flags:
+# their meaning remains the launched CLI's responsibility.
+agmsg_spawn_options_tokens() {
+  local type="$1" role="${2:-}"
+  agmsg_spawn_options_section_tokens "$type"
+  [ -z "$role" ] || agmsg_spawn_options_section_tokens "${type}@${role}"
 }

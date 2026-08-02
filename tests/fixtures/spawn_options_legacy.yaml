@@ -1,0 +1,9 @@
+claude-code:
+  --permission-mode: acceptEdits
+  --dangerously-skip-permissions: true
+  --append-system-prompt: preserve spaces exactly
+  --disabled: false
+codex:
+  --sandbox: workspace-write
+  --ask-for-approval: never
+  --disabled: false
