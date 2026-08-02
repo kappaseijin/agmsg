@@ -151,12 +151,14 @@ YAML
   cmp "$BATS_TEST_DIRNAME/fixtures/spawn_options_legacy_codex.tokens" "$actual"
 }
 
-@test "spawn_options_tokens: appends only the matching role overlay after base tokens" {
+@test "spawn_options_tokens: role overlay overrides matching base keys" {
   local file="$TEST_SKILL_DIR/spawn_options.yaml"
   cat > "$file" <<'YAML'
 codex:
   --sandbox: workspace-write
+  -p: base
 codex@architect:
+  --sandbox: danger-full-access
   -p: architect
   -c: model_reasoning_effort=xhigh
 codex@programmer:
@@ -167,7 +169,7 @@ YAML
   run agmsg_spawn_options_tokens codex architect
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "--sandbox" ]
-  [ "${lines[1]}" = "workspace-write" ]
+  [ "${lines[1]}" = "danger-full-access" ]
   [ "${lines[2]}" = "-p" ]
   [ "${lines[3]}" = "architect" ]
   [ "${lines[4]}" = "-c" ]
@@ -175,13 +177,30 @@ YAML
   [ "${#lines[@]}" -eq 6 ]
 }
 
-@test "spawn_options_tokens: role false does not suppress the same base flag" {
+@test "spawn_options_tokens: role false suppresses the matching base key" {
   local file="$TEST_SKILL_DIR/spawn_options.yaml"
   cat > "$file" <<'YAML'
 codex:
   --sandbox: workspace-write
 codex@architect:
   --sandbox: false
+  -p: architect
+YAML
+  export AGMSG_SPAWN_OPTIONS_FILE="$file"
+
+  run agmsg_spawn_options_tokens codex architect
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "-p" ]
+  [ "${lines[1]}" = "architect" ]
+  [ "${#lines[@]}" -eq 2 ]
+}
+
+@test "spawn_options_tokens: role-only keys follow unsuppressed base keys" {
+  local file="$TEST_SKILL_DIR/spawn_options.yaml"
+  cat > "$file" <<'YAML'
+codex:
+  --sandbox: workspace-write
+codex@architect:
   -p: architect
 YAML
   export AGMSG_SPAWN_OPTIONS_FILE="$file"

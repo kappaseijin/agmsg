@@ -216,7 +216,7 @@ codex@programmer:
   -c: model_reasoning_effort=medium
 ```
 
-例えば `spawn codex project_architect_codex` は `codex@architect` のtokenを追加する。role overlayのtokenは記述順に単純連結され、agmsgは重複するフラグを解決しない。明示roleに使えるのは英数字・`_`・`-` だけで、不正な値はspawnが作成・参加操作を行う前に拒否される。
+例えば `spawn codex project_architect_codex` は `codex@architect` のoverlayを適用する。overlay側に同じkeyがあればbase側を置き換え、overlay値が`false`ならそのkeyを完全に抑止する。明示roleに使えるのは英数字・`_`・`-` だけで、不正な値はspawnが作成・参加操作を行う前に拒否される。
 
 9種類のエージェントタイプのうち8つがspawn可能 — `claude-code`、`codex`、`grok-build`、`cursor`、`gemini`、`antigravity`、`copilot`、`opencode`。`hermes` は不可 — そのCLIには初期プロンプトを事前に仕込んだインタラクティブセッションを開始するモードがない（#279）。macOSが主なターゲットで、LinuxとWindowsはベストエフォート（ターミナルが未対応の場合はissueまたはPRを歓迎）。ヘッドレス環境 — tmuxもなく使えるターミナルもない — はエージェントCLIがインタラクティブなターミナルを必要とするためエラーになる。
 

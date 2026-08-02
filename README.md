@@ -217,7 +217,7 @@ codex@programmer:
   -c: model_reasoning_effort=medium
 ```
 
-For example, `spawn codex project_architect_codex` appends the `codex@architect` tokens. Role overlay tokens are concatenated as written; agmsg does not resolve duplicate flags. An explicit role must contain only letters, digits, `_`, or `-`; an unsafe value is rejected before spawn creates or joins anything.
+For example, `spawn codex project_architect_codex` applies the `codex@architect` overlay. An overlay key replaces the same key from the base section; an overlay value of `false` suppresses that key entirely. An explicit role must contain only letters, digits, `_`, or `-`; an unsafe value is rejected before spawn creates or joins anything.
 
 Eight of the nine agent types are spawnable — `claude-code`, `codex`, `grok-build`, `cursor`, `gemini`, `antigravity`, `copilot`, `opencode`. `hermes` is not: its CLI has no mode that starts an interactive session pre-seeded with an initial prompt (#279). macOS is the primary target; Linux and Windows are best-effort (please open an issue/PR if your terminal isn't handled). Headless environments — no tmux **and** no usable terminal — error out, since the agent CLIs need an interactive terminal.
 
