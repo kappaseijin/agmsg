@@ -363,6 +363,76 @@ JSON
   [[ "$output" =~ "carol" ]]
 }
 
+# --- reset.sh vs identities.sh asymmetry (#63): reset.sh resolves an explicit
+# project path through the SAME marker precedence as a $(pwd)-based caller,
+# so an unrelated live agent process's own SessionStart marker can silently
+# override an exact, already-known project path passed to reset.sh — even
+# though identities.sh (no resolution at all) finds the very same registration
+# by that exact path. --no-resolve opts a caller who already has the literal
+# stored path (e.g. removing an orphaned registration whose directory no
+# longer exists, so it can't be reached by cd'ing there) out of that override.
+
+@test "reset: identities.sh finds an exact-path registration that plain reset.sh cannot always reach (#63 asymmetry, no marker)" {
+  reg T orphan "$ROOT/sub"
+  run bash "$SKILL_DIR/scripts/identities.sh" "$ROOT/sub" claude-code
+  [[ "$output" =~ "orphan" ]]
+  run bash "$SKILL_DIR/scripts/reset.sh" "$ROOT/sub" claude-code orphan
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "removed 1 registration" ]]
+}
+
+@test "reset: negative control — a live agent's own SessionStart marker hijacks an explicit reset.sh target (#63)" {
+  skip_on_windows "process argv faking via exec -a (#349)"
+  reg T orphan "$ROOT/sub" codex
+
+  # A real live process whose comm/argv0 passes agmsg_pid_is_agent for codex —
+  # standing in for some OTHER agent session that happens to be running
+  # reset.sh, unrelated to the orphan we are trying to remove.
+  bash -c 'exec -a codex sleep 5' 3>&- &
+  local agent_pid=$!
+  sleep 0.3
+  local decoy; decoy="$(mktemp -d)"
+  agmsg_write_project_marker "$agent_pid" "$decoy"
+
+  # identities.sh is unaffected (no resolution at all): it still finds the
+  # exact-path registration.
+  run bash "$SKILL_DIR/scripts/identities.sh" "$ROOT/sub" codex
+  [[ "$output" =~ "orphan" ]]
+
+  # reset.sh, given the SAME exact path, is hijacked by the unrelated agent's
+  # marker and reports nothing removed — reproducing the #63 asymmetry.
+  run env AGMSG_AGENT_PID="$agent_pid" bash "$SKILL_DIR/scripts/reset.sh" "$ROOT/sub" codex orphan
+  kill "$agent_pid" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "No registrations removed" ]]
+  # AC-N2: the mismatch between what was searched and what was asked for is
+  # surfaced in the same output, not silent.
+  [[ "$output" == *"searched project: $decoy"* ]]
+  [[ "$output" == *"argument was:     $ROOT/sub"* ]]
+  [[ "$output" == *"--no-resolve"* ]]
+  rm -rf "$decoy"
+}
+
+@test "reset: --no-resolve removes the exact-path registration despite a hijacking marker (#63 fix)" {
+  skip_on_windows "process argv faking via exec -a (#349)"
+  reg T orphan "$ROOT/sub" codex
+
+  bash -c 'exec -a codex sleep 5' 3>&- &
+  local agent_pid=$!
+  sleep 0.3
+  local decoy; decoy="$(mktemp -d)"
+  agmsg_write_project_marker "$agent_pid" "$decoy"
+
+  run env AGMSG_AGENT_PID="$agent_pid" bash "$SKILL_DIR/scripts/reset.sh" --no-resolve "$ROOT/sub" codex orphan
+  kill "$agent_pid" 2>/dev/null || true
+  rm -rf "$decoy"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "removed 1 registration" ]]
+
+  run bash "$SKILL_DIR/scripts/identities.sh" "$ROOT/sub" codex
+  [[ ! "$output" =~ "orphan" ]]
+}
+
 # --- watch.sh: actas/drop watcher must not die from a subdir (the High bug) ---
 
 @test "watch: actas watcher from a subdir does not exit with no-registration" {

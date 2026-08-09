@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: reset.sh <project_path> <type> [agent_id] [session_id]
+# Usage: reset.sh [--no-resolve] <project_path> <type> [agent_id] [session_id]
 #
 # Removes registrations for the given project/type across all teams.
 # If agent_id is omitted, it is resolved from whoami.sh for the current project/type.
@@ -9,11 +9,34 @@ set -euo pipefail
 # for the touched (team, agent_id) pairs are released too — this is how `drop`
 # returns the role to the pool so peer sessions can pick it up immediately
 # without waiting for stale-lock GC.
+#
+# --no-resolve: treat <project_path> as the exact, already-known registered
+# path — skip agmsg_resolve_project entirely (sets AGMSG_RESOLVE_PROJECT=0
+# for this call only). Without this flag, resolution runs unconditionally,
+# including its SessionStart-marker step (resolve-project.sh #1), which keys
+# off the CALLING process's own ancestor pid and can silently override an
+# explicit <project_path> with the caller's own registered project — even
+# when <project_path> is already the exact stored path. identities.sh has no
+# such step, so the two scripts can disagree on the same input (#63): a
+# lookup finds a registration that a same-path reset/drop then reports zero
+# matches for. --no-resolve gives callers that already have the literal
+# stored path (e.g. cleaning up an orphaned registration whose directory no
+# longer exists, so it can't be reached by cd'ing there and passing "$(pwd)")
+# a way to bypass that override. The default stays unchanged for drop.sh's
+# existing "$(pwd)"-based call, which relies on resolution to find the
+# registered ancestor from a subdirectory/worktree.
 
-PROJECT_PATH="${1:?Usage: reset.sh <project_path> <type> [agent_id] [session_id]}"
-AGENT_TYPE="${2:?Usage: reset.sh <project_path> <type> [agent_id] [session_id]}"
+RESOLVE=1
+if [ "${1:-}" = "--no-resolve" ]; then
+  RESOLVE=0
+  shift
+fi
+
+PROJECT_PATH="${1:?Usage: reset.sh [--no-resolve] <project_path> <type> [agent_id] [session_id]}"
+AGENT_TYPE="${2:?Usage: reset.sh [--no-resolve] <project_path> <type> [agent_id] [session_id]}"
 TARGET_AGENT="${3:-}"
 SESSION_ID="${4:-}"
+ARGUMENT_PATH="$PROJECT_PATH"  # kept for the "No registrations removed" diagnostic below (#63)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -38,7 +61,12 @@ _agmsg_sqlesc() { printf %s "$1" | sed "s/'/''/g"; }
 
 # Resolve the session's real project root (see #92) so a drop issued from a
 # subdir/worktree clears the registration on the project the session lives in.
-PROJECT_PATH="$(agmsg_resolve_project "$PROJECT_PATH" "$AGENT_TYPE")"
+# Skipped under --no-resolve (see usage comment above; #63).
+if [ "$RESOLVE" -eq 1 ]; then
+  PROJECT_PATH="$(agmsg_resolve_project "$PROJECT_PATH" "$AGENT_TYPE")"
+else
+  PROJECT_PATH="$(AGMSG_RESOLVE_PROJECT=0 agmsg_resolve_project "$PROJECT_PATH" "$AGENT_TYPE")"
+fi
 # Equivalent path spellings (#268) — a drop must remove a registration stored
 # in any Windows/MSYS form, not just the exact resolved string.
 PROJECT_SQL_IN=$(agmsg_project_sql_in_list "$PROJECT_PATH")
@@ -189,6 +217,16 @@ done
 
 if [ "$REMOVED" -eq 0 ]; then
   echo "No registrations removed."
+  # #63 (AC-N2): the resolved path and the raw argument frequently differ —
+  # under default resolution, the SessionStart marker of whichever process
+  # happens to be running reset.sh silently wins over the path you passed
+  # (see the usage comment above). Surfacing both turns a silent, easy-to-miss
+  # mismatch into something visible in the very output the caller is reading.
+  if [ "$PROJECT_PATH" != "$ARGUMENT_PATH" ]; then
+    echo "  (searched project: $PROJECT_PATH)"
+    echo "  (argument was:     $ARGUMENT_PATH)"
+    echo "  Hint: pass --no-resolve to match the argument verbatim instead of the resolved project."
+  fi
 else
   echo "Reset complete: removed $REMOVED registration(s) across $TOUCHED_TEAMS team(s)"
 fi
