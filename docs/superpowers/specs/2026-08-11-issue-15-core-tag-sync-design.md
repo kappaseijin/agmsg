@@ -7,7 +7,7 @@ tags:
   - app
   - ci
   - issue-15
-timestamp: "2026-08-11T18:41:45+09:00"
+timestamp: "2026-08-11T18:56:40+09:00"
 ---
 
 # Issue #15: agmsg-core タグ同期忘れの診断
@@ -51,6 +51,10 @@ flowchart TD
 新しい Bats テストは、タグを持たないローカル bare repository を `origin` として実行する。
 期待する失敗診断に「origin に固定タグが無い」と「`git push origin <REF>`」が含まれることを検査する。
 この fixture が、受け入れ条件の「在ると分かっているタグを取り除いた状態」を再現する負のコントロールになる。
+
+加えて、存在しない remote URL は tag 不在と誤診せず、同期の push 操作を出さないことを検査する。
+これは `exit 2` を任意の非 0 に変える変異を殺す。fixture に有効な core tag を公開した場合は
+bundle が完走することも検査し、tag が存在しても常に拒否する変異を殺す。
 
 ## 利用者向け文書
 

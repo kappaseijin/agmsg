@@ -7,7 +7,7 @@ tags:
   - app
   - ci
   - issue-15
-timestamp: "2026-08-11T18:43:16+09:00"
+timestamp: "2026-08-11T18:56:40+09:00"
 ---
 
 # Issue #15 Core Tag Sync Diagnostic Implementation Plan
@@ -71,11 +71,34 @@ setup() {
 }
 ```
 
+併せて、fixture 内で有効な tag と必須ファイルを bare `origin` へ公開する
+`publish_pinned_core` helper を置き、次の 2 test を追加する。
+
+```bash
+@test "bundle-core: does not call a broken origin a missing tag" {
+  git -C "$BUNDLE_ROOT" remote set-url origin "$BATS_TEST_TMPDIR/nonexistent.git"
+  run bash "$BUNDLE"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"origin is missing pinned tag"* ]]
+  [[ "$output" != *"git push origin"* ]]
+}
+
+@test "bundle-core: bundles a pinned tag present in origin" {
+  publish_pinned_core
+  run bash "$BUNDLE"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"origin is missing pinned tag"* ]]
+  [ -f "$BUNDLE_ROOT/app/src-tauri/resources/agmsg-core/scripts/api.sh" ]
+}
+```
+
 - [ ] **Step 3: RED を確認する**
 
 Run: `bats --print-output-on-failure tests/test_bundle_core.bats`
 
-Expected: FAIL。既存 script は `git fetch` の `fatal: couldn't find remote ref` を返し、同期忘れと push 操作を示す assertion を満たさない。
+Expected: 初回の tagless test は FAIL。既存 script は `git fetch` の `fatal: couldn't find remote ref` を返し、同期忘れと push 操作を示す assertion を満たさない。追加 2 test は現行実装で PASS し、後続の変異試験で有効性を確認する。
 
 - [ ] **Step 4: テストをコミットする**
 
@@ -127,7 +150,7 @@ Expected: PASS。tagless local `origin` で exit 1 になり、tag 名・`AGMSG_
 
 Run: `bats --print-output-on-failure tests/test_bundle_core.bats`
 
-Expected: FAIL（`fatal: couldn't find remote ref` だけで、同期診断 assertion を満たさない）。block を復元して同じ command を再実行し、PASS を確認する。前者を `KILLED`、後者を正常対照として記録する。
+Expected: FAIL（`fatal: couldn't find remote ref` だけで、同期診断 assertion を満たさない）。block を復元して同じ command を再実行し、PASS を確認する。さらに `[ "$git_status" -eq 2 ]` を `-ne 0` へ変えると壊れた origin の test が FAIL し、tag があっても診断する変異では positive test が FAIL する。各変異を `KILLED` として記録する。
 
 - [ ] **Step 4: shell 構文と対象テストを確認する**
 
