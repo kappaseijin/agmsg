@@ -114,21 +114,33 @@ role_overlay_profile_suffix=.config.toml
 ```
 
 generic validator は key が全て揃う type だけ、この契約を有効にする。
+profile 契約の検査は token 合成後の argv ではなく、base と overlay の raw YAML key / value を別々に走査する。
+これにより `-p: profile` と `-p=profile: true` のどちらも一つの profile 指定として扱い、base に隠れた `--profile=base: true` を token 順序に依存せず拒否できる。
 `CODEX_HOME` が非空ならそれを設定ディレクトリとし、そうでなければ `$HOME/.codex` を使う。
 これは Codex の documented profile 解決規則を manifest の data として表すだけで、モデルカタログを agmsg に導入しない。
+
+validator は解決した config directory を、boot script で `CODEX_HOME` として export する。
+そのため検証した profile と、tmux / herdr / terminal 経由で起動する Codex が読む profile directory は同一になる。
+この export は policy 有効かつ profile 契約を持つ type にだけ行う。
 
 Codex で policy が有効なときの追加条件は以下とする。
 
 1. `<type>@<role>` section 自身に、`role_overlay_profile_args` のいずれかをちょうど一つ置く。
-   base `<type>` section の profile flag は許可しない。role 固有でない profile を再利用して role の検査を通す曖昧さを防ぐ。
-2. profile 値は空・boolean・重複を許さず、ファイル名として安全な alias（先頭英数字、以降は英数字・`.`・`_`・`-`）だけを受け入れる。
+   許可する表記は `<flag>: <profile>`、または `<flag>=<profile>: true`（`true` の代わりに空も可）だけである。
+2. base `<type>` section の profile flag は許可しない。
+   `<flag>` と `<flag>=<value>` の両形を検出し、短い flag の連結形（例: `-parchitect`）や長い flag の未知の前方一致も fail-closed で拒否する。
+   role 固有でない profile を再利用して role の検査を通す曖昧さを防ぐ。
+3. profile 値は空・boolean・重複を許さず、ファイル名として安全な alias（先頭英数字、以降は英数字・`.`・`_`・`-`）だけを受け入れる。
    `/`、`\\`、`..` 単独、絶対パスは拒否する。
-3. 解決先 `<config-dir>/<profile><suffix>` が通常ファイルかつ読み取り可能であることを確認する。
+4. 解決先 `<config-dir>/<profile><suffix>` が通常ファイルかつ読み取り可能であることを確認する。
    存在しない・読めない場合は profile 名と期待した設定ファイルを診断して拒否する。
 
-同じ type section に `-p` と `--profile` を併記したり、overlay と base の両方に profile flag を置いたりする構成は、policy 有効時には拒否する。
+同じ type section に `-p`、`--profile`、それらの `=` 形を併記したり、overlay と base の両方に profile flag を置いたりする構成は、policy 有効時には拒否する。
 CLI の「後勝ち」など未文書の優先順へ安全性を委ねないためである。
 policy が無効な従来の設定は一切拒否しない。
+
+policy 有効時に role を導出できなければ、validator は `--role <role>` を明示するか、`<project>_<role>_<vendor>` の名前にするよう診断する。
+短い agent 名を既定の no-op 設定で使う既存利用者を壊さないため、この要件は policy 有効時に限定する。
 
 Claude Code は現時点で profile-file manifest key を持たないため、policy 有効時の要件は role と overlay section の存在だけである。
 将来同様のローカル role 設定を検証したい type は、同じ manifest 契約を追加すればよい。
@@ -159,12 +171,12 @@ Claude Code は現時点で profile-file manifest key を持たないため、po
 | ROR-07 | `true`、Claude Code の空 overlay | spawn 成功。header 存在だけを要件とすることを確認 |
 | ROR-08 | metadata section が存在 | 生成 boot argv に `agmsg.require-role-overlay` もその値も現れない |
 | ROR-09 | `codex: true`、overlay に有効な `-p` と test profile | spawn 成功、期待した argv |
-| ROR-10 | `codex: true`、overlay はあるが profile flag が無い / 空 / boolean / 重複 | join 前に拒否 |
-| ROR-11 | `codex: true`、base section に profile flag がある | join 前に拒否 |
+| ROR-10 | `codex: true`、overlay はあるが profile flag が無い / 空 / boolean / 重複、または未知の連結短縮形 | join 前に拒否 |
+| ROR-11 | `codex: true`、base section に `-p` / `--profile` または `-p=<value>` / `--profile=<value>` がある | join 前に拒否 |
 | ROR-12 | Codex profile が存在する対照と、存在しない対照 | 前者のみ成功、後者は join 前に拒否 |
-| ROR-13 | `CODEX_HOME` を設定した test fixture | 既定 `~/.codex` でなく override 側を検証する |
-| ROR-14 | `--profile` alias と alias 混在 | 一つだけの正しい overlay 指定のみ成功、曖昧な混在は拒否 |
-| ROR-15 | 全失敗系 | CAPTURE / team registration が作られず、既存 agent を変更しない |
+| ROR-13 | `CODEX_HOME` を設定した test fixture | override 側を検証し、生成 boot script と CLI spy が同じ `CODEX_HOME` を受け取る |
+| ROR-14 | `--profile` alias と `=` 形 | `-p: profile` と `--profile=profile: true` は各々単独で成功、相互の混在は拒否 |
+| ROR-15 | 全失敗系 | CAPTURE / team registration / pane / window / terminal process が作られず、既存 agent を変更しない |
 | ROR-16 | 既存 spawn-options / BSD awk regression suite | byte-identical token 出力と既存の全 test が通る |
 
 実装完了時は Bats 全体、README の設定例に対する argv assertion、さらに Claude 系 reviewer による cross review を必須とする。
@@ -174,7 +186,8 @@ Claude Code は現時点で profile-file manifest key を持たないため、po
 - configuration file の不在、metadata key の不在、`false` はすべて現行互換の no-op である。
 - 既存の `<type>@<role>` 合成規則、key 上書き、`false` による base flag 抑止は変更しない。
 - fail-closed は管理者が `true` を明示した type だけに限る。
-- profile 不在を修復するには、該当 role overlay の `-p` / `--profile` と、対応する `$CODEX_HOME/<profile>.config.toml`（既定 `~/.codex/`）を揃える。
+- profile 不在を修復するには、該当 role overlay の `-p` / `--profile`（`=` 形を含む）と、対応する `$CODEX_HOME/<profile>.config.toml`（既定 `~/.codex/`）を揃える。
+- policy を `true` にした type は role を必須にする。`--role <role>` を渡すか、agent 名を `<project>_<role>_<vendor>` にする。
 - README は実装と同じ PR で上記を利用者向けに記載する。設計判断・Issue の訂正経緯はこの decision record に残し、README に持ち込まない。
 
 ## 却下した案
