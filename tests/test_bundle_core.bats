@@ -14,10 +14,45 @@ setup() {
   BUNDLE="$BUNDLE_ROOT/app/scripts/bundle-core.sh"
 }
 
+publish_pinned_core() {
+  local source="$BATS_TEST_TMPDIR/core-source"
+
+  git init -q "$source"
+  git -C "$source" config user.email test@example.com
+  git -C "$source" config user.name test
+  mkdir -p "$source/scripts/drivers/types/agmsg-app"
+  touch "$source/scripts/api.sh" "$source/scripts/drivers/types/agmsg-app/type.conf"
+  touch "$source/install.sh" "$source/uninstall.sh"
+  printf '1.0.0\n' > "$source/VERSION"
+  git -C "$source" add scripts install.sh uninstall.sh VERSION
+  git -C "$source" commit -qm "add core files"
+  git -C "$source" tag "$BUNDLE_REF"
+  git -C "$source" remote add origin "$BUNDLE_ORIGIN"
+  git -C "$source" push -q origin "refs/tags/$BUNDLE_REF"
+}
+
 @test "bundle-core: says how to synchronize a pinned tag absent from origin" {
   run bash "$BUNDLE"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"origin is missing pinned tag '$BUNDLE_REF' required by app/AGMSG_CORE_REF"* ]]
   [[ "$output" == *"git push origin $BUNDLE_REF"* ]]
+}
+
+@test "bundle-core: does not call a broken origin a missing tag" {
+  git -C "$BUNDLE_ROOT" remote set-url origin "$BATS_TEST_TMPDIR/nonexistent.git"
+  run bash "$BUNDLE"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"origin is missing pinned tag"* ]]
+  [[ "$output" != *"git push origin"* ]]
+}
+
+@test "bundle-core: bundles a pinned tag present in origin" {
+  publish_pinned_core
+  run bash "$BUNDLE"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"origin is missing pinned tag"* ]]
+  [ -f "$BUNDLE_ROOT/app/src-tauri/resources/agmsg-core/scripts/api.sh" ]
 }
