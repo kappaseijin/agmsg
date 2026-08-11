@@ -25,6 +25,19 @@ if [ -z "$REF" ]; then
 fi
 
 cd "$ROOT_DIR"
+if git ls-remote --exit-code --refs origin "refs/tags/$REF" > /dev/null; then
+  :
+else
+  git_status=$?
+  if [ "$git_status" -eq 2 ]; then
+    echo "bundle-core: origin is missing pinned tag '$REF' required by app/AGMSG_CORE_REF." >&2
+    echo "bundle-core: synchronize it to this fork, then retry:" >&2
+    echo "  git push origin $REF" >&2
+    exit 1
+  fi
+  exit "$git_status"
+fi
+
 echo "bundle-core: fetching tag $REF..."
 # No --depth here — this runs against the same checkout a developer is
 # working in (build-notarize.sh calls this directly), and a shallow fetch
