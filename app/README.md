@@ -84,6 +84,19 @@ DB and team config from there). `claude` must be on `PATH` to spawn Claude Code 
 
 ## Releasing
 
+### Updating the bundled agmsg-core pin
+
+The app bundles the exact tag in `app/AGMSG_CORE_REF`; CI intentionally reads
+that tag from this fork's `origin`, never at build time from another repository.
+Before committing a new pin, synchronize its released tag to `origin`:
+
+```sh
+tag=vX.Y.Z
+git fetch https://github.com/fujibee/agmsg.git tag "$tag" --no-tags
+git push origin "$tag"  # origin must be your fork, never fujibee/agmsg
+printf '%s\n' "$tag" > app/AGMSG_CORE_REF
+```
+
 `.github/workflows/app-release.yml` builds, signs, and (macOS) notarizes both
 platforms on a push of an `app-vX.Y.Z` tag (or by hand via `workflow_dispatch`).
 macOS goes through codesign → notarize → staple end to end in CI. Windows builds
