@@ -26,14 +26,14 @@ readonly -a ALLOWED_OWNERS=(kappaseijin kappaseijinjp)
 
 未知の remote、URL の構文解析失敗、owner の抽出失敗、許可外 owner、許可外ホスト、複数 push URL のうち一つでも不許可のものは、ネットワーク接続の前に失敗させる（fail-closed）。
 
-この決定の直接の対象は **gh を通らない `git push`** に限定する。ただし Issue #3 全体は git shim だけでは完了しない。実際に起きた書込みは `gh issue create` による Issue 作成であり、gh write は agmsg 所有の別 Issue として未完了を追跡する。Issue #91 は参考・突合せ対象であって、agmsg の責任や完了判断を移す先ではない。
+この決定の直接の対象は **gh を通らない `git push`** に限定する。ただし Issue #3 全体は git shim だけでは完了しない。実際に起きた書込みは `gh issue create` による Issue 作成であり、gh write は agmsg 所有の [Issue #10](https://github.com/kappaseijin/agmsg/issues/10) として未完了を追跡する。Issue #91 は参考・突合せ対象であって、agmsg の責任や完了判断を移す先ではない。
 
 | 経路 | 完了責任 | 本書との関係 |
 | --- | --- | --- |
 | `git push` | agmsg Issue #3 | 本書が設計する。GPG-01〜09 で検証する |
-| `gh issue create` / `issue comment` / `pr create` / `pr comment` / `pr review` | agmsg 所有の別 Issue | 本書は実装を重複させないが、owner allowlist と fail-closed の同じ不変条件を満たす追跡先を agmsg に残す。Issue #91 と設計が重複する場合だけ、agmsg PM が統合または取り下げを判断する |
+| `gh issue create` / `issue comment` / `pr create` / `pr comment` / `pr review` | agmsg [Issue #10](https://github.com/kappaseijin/agmsg/issues/10) | 本書は実装を重複させないが、owner allowlist と fail-closed の同じ不変条件を満たす追跡先を agmsg に残す。Issue #91 と設計が重複する場合だけ、agmsg PM が統合または取り下げを判断する |
 
-すなわち `git push` 経路が通っても、gh write を未追跡のまま Issue #3 を完了扱いにしない。別 Issue の作成後は、git と gh の各 owner が自分の受け入れ試験を完了まで追跡する。
+すなわち `git push` 経路が通っても、Issue #10 を未完了のまま Issue #3 を完了扱いにしない。git と gh の各 owner が自分の受け入れ試験を完了まで追跡する。
 
 ## 要求と非交渉条件
 
@@ -141,12 +141,13 @@ GPG-01 は本件の必須負のコントロールである。`thirdparty` とい
 
 ## 実装開始の前提
 
-- gh write の agmsg 所有 Issue を作成し、Issue #91 と重複する場合は agmsg PM 同士が統合または取り下げを判断する。外部チームの完了は、本 Issue の未完了を移す根拠にしない。
+- gh write の agmsg 所有 [Issue #10](https://github.com/kappaseijin/agmsg/issues/10) を追跡し、Issue #91 と重複する場合は agmsg PM 同士が統合または取り下げを判断する。外部チームの完了は、本 Issue の未完了を移す根拠にしない。
 - 本書の提案は他チームの実装を待たずに固定できる。git shim の allowlist、判定対象、負のコントロールはいずれも gh shim の内部実装に依存しない。
 - 実装 PR では、本書の GPG-01〜09 を Bats 試験として追加し、README の利用者向け導入手順まで含める。
 
 ## 参照
 
 - [Issue #3](https://github.com/kappaseijin/agmsg/issues/3)
+- [Issue #10](https://github.com/kappaseijin/agmsg/issues/10)
 - Issue #3 の追加制約コメント（2026-08-09）
 - Issue #3 の宛先 owner 判定に関する実測コメント（2026-08-10）
