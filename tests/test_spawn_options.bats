@@ -227,6 +227,30 @@ YAML
   [ -z "$output" ]
 }
 
+@test "spawn_options_tokens: BSD awk handles multiline suppression keys with spaces and metacharacters" {
+  local file="$TEST_SKILL_DIR/spawn_options.yaml"
+  cat > "$file" <<'YAML'
+codex:
+  --keep: value with spaces ; $HOME * [meta]
+  --omit flag: base
+  --also$omit: base
+codex@architect:
+  --omit flag: false
+  --also$omit: false
+YAML
+  export AGMSG_SPAWN_OPTIONS_FILE="$file"
+
+  local original_path="$PATH"
+  PATH="/usr/bin:$PATH"
+  run agmsg_spawn_options_tokens codex architect
+  PATH="$original_path"
+
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "--keep" ]
+  [ "${lines[1]}" = 'value with spaces ; $HOME * [meta]' ]
+  [ "${#lines[@]}" -eq 2 ]
+}
+
 @test "spawn_options_tokens: legacy header whitespace and comments preserve base tokens" {
   export AGMSG_SPAWN_OPTIONS_FILE="$BATS_TEST_DIRNAME/fixtures/spawn_options_header_compat.yaml"
   local actual="$BATS_TEST_TMPDIR/codex.tokens"

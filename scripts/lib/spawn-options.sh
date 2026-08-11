@@ -35,12 +35,11 @@ agmsg_spawn_options_section_tokens() {
   file="$(agmsg_spawn_options_file)"
   [ -f "$file" ] || return 0
 
-  awk -v section="$section" -v suppressed_keys="$suppressed_keys" '
-    BEGIN {
-      key_count = split(suppressed_keys, keys, "\n")
-      for (i = 1; i <= key_count; i++) {
-        if (keys[i] != "") suppressed[keys[i]] = 1
-      }
+  printf '%s\n' "$suppressed_keys" |
+    awk -v section="$section" '
+    NR == FNR {
+      if ($0 != "") suppressed[$0] = 1
+      next
     }
     /^[^ #]/ {
       header = $0
@@ -63,7 +62,7 @@ agmsg_spawn_options_section_tokens() {
       print key
       if (val != "" && val != "true") print val
     }
-  ' "$file"
+  ' - "$file"
 }
 
 # Emit the keys defined by a single section, including keys whose values are
