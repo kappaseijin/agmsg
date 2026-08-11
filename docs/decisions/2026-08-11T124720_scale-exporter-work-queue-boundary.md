@@ -32,8 +32,9 @@ role lock は「二つの session が同一 role を保持しない」ための�
 ## 要件ごとの担当境界
 
 Issue 本文は G1 / G2 / G3 の番号と詳細要件との正式な対応表を含まない。
-以下は本文に明記された能力からの暫定対応であり、scale_exporter manager が PR #134 の該当 matrix を manager 間で転送した時点で番号を照合する。
-番号が異なっても、担当境界の結論は変わらない。
+番号に依存しない結論は「agmsg は work queue の正本を持たない」である。
+以下の行単位の担当は本文に明記された能力からの暫定対応であり、scale_exporter manager が PR #134 の該当 matrix を manager 間で転送した時点で照合して見直す。
+たとえば G が message の到達保証・順序保証・再配信を含むなら、agmsg adapter の担当は追加され得るが、queue の正本にはならない。
 
 | 能力群 | 正本の担当 | agmsg の担当 | 根拠 |
 | --- | --- | --- | --- |
@@ -119,7 +120,10 @@ pilot の GitHub fixture と queue state は test 用の temporary store を使�
 
 1. scale_exporter manager から PR #134 の G1 / G2 / G3 対応表を manager 間で受け取り、この record の暫定 matrix と照合する。
 2. work-queue component の owner、保存先、GitHub 認証、append-only schema を独立 Issue として起票する。
-3. scale_exporter pilot の測定結果で、agmsg adapter が本当に必要かを判断する。
+3. scale_exporter pilot では assignment ごとに、agent type、開始時に新規 spawn か既存 session か、work reference の配送経路、ACK の有無・時刻、再配信回数と理由を記録する。
+   全 assignment が既存の `spawn --boot-prompt` または work-queue client だけで明示 ACK に達し、既存 Codex session への再配信要求が無ければ adapter は不要と判断する。
+   adapter を提案できるのは、既存経路で満たせない delivery / re-delivery 要件を pilot record で再現し、その原因が queue の状態不備・agent の未 ACK・設定ミスではないと切り分けた場合だけとする。
 4. adapter が必要と判明した時だけ、agmsg 側に opaque work reference の受渡しを設計する。queue の正本を agmsg へ移さない。
+   その agmsg integration test には、message delivered・spawn 成功・role lock 取得のどれも work-queue ACK writer を呼ばず、明示 `ack <work-id> <revision>` だけが queue state を進める負の対照を一件置く。
 
 この評価は担当切り分けであり、G1 / G2 / G3 の実装開始を承認するものではない。
