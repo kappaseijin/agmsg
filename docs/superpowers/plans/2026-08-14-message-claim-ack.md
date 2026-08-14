@@ -205,7 +205,7 @@ Expected: existing watermark / readiness tests と追加 receipt tests が PASS�
 - Consumes: `claim.sh next|ack|release` と existing `turn/start` request。
 - Produces: `--inline-inbox` の message body handoff receipt。
 
-- [ ] **Step 1: inline inbox receipt の failing integration test を書く**
+- [x] **Step 1: inline inbox receipt の failing integration test を書く**
 
 既存 fake app-server test に message を事前投入し、`turn/start` が inline body を含むことと、成功後 `message_receipts` が 1 row になることを追加する。
 
@@ -215,17 +215,17 @@ run node "$TYPES/codex/codex-bridge.js" ... --inline-inbox
 [ "$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" 'SELECT COUNT(*) FROM message_receipts;')" -eq 1 ]
 ```
 
-- [ ] **Step 2: failing test を実行する**
+- [x] **Step 2: failing test を実行する**
 
 Run: `bats tests/test_codex_bridge.bats --filter 'inline-inbox'`
 
 Expected: FAIL because bridge currently calls `inbox.sh` and has no receipt protocol.
 
-- [ ] **Step 3: claim / ack / release flow を実装する**
+- [x] **Step 3: claim / ack / release flow を実装する**
 
 `readInboxForPrompt` を `{ text, claims }` return に変え、`turn/start` success の後だけ全 claim を ack する。`turn/start` rejection、eligible lookup failure、空 prompt は acquired claim を release する。inline ではない wake prompt は claim/ack を行わない。
 
-- [ ] **Step 4: Node syntax と focused test を green にする**
+- [x] **Step 4: Node syntax と focused test を green にする**
 
 Run:
 

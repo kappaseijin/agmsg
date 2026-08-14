@@ -1195,16 +1195,26 @@ class CodexBridge {
 
   async tryStartTurn() {
     if (!this.pendingWake || this.turnActive || !this.threadIdle) return;
+    let inlineClaims = [];
     if (this.opts.inlineInbox) {
-      this.inlineInboxText = this.readInboxForPrompt();
+      const inlineInbox = this.readInboxForPrompt();
+      this.inlineInboxText = inlineInbox.text;
+      inlineClaims = inlineInbox.claims;
       if (!this.inlineInboxText.trim()) {
+        this.releaseInlineClaims(inlineClaims);
         console.error("codex-bridge: pending wake had no inbox output; re-arming");
         this.pendingWake = false;
         await this.armWatch();
         return;
       }
     }
-    const prompt = this.buildPrompt();
+    let prompt;
+    try {
+      prompt = this.buildPrompt();
+    } catch (error) {
+      this.releaseInlineClaims(inlineClaims);
+      throw error;
+    }
     this.turnActive = true;
     this.threadIdle = false;
     try {
@@ -1214,6 +1224,7 @@ class CodexBridge {
         cwd: this.opts.project,
         runtimeWorkspaceRoots: this.opts.workspaceRoots,
       });
+      this.ackInlineClaims(inlineClaims);
       console.error(`codex-bridge: started turn on thread ${this.threadId}`);
       this.pendingWake = false;
       // Bound how long we treat the turn as active. The real app-server may
@@ -1221,6 +1232,8 @@ class CodexBridge {
       // onTurnEnded so detection re-arms instead of sleeping forever. See #41.
       this.startTurnWatchdog();
     } catch (error) {
+      this.releaseInlineClaims(inlineClaims);
+      this.inlineInboxText = "";
       this.turnActive = false;
       this.threadIdle = true;
       this.clearTurnWatchdog();
@@ -1326,17 +1339,69 @@ class CodexBridge {
       ...this.identities.flatMap((pair) => ["--pair", `${pair.team}\t${pair.name}`])], { cwd: this.opts.project, encoding: "utf8" });
     if (eligible.error || eligible.status !== 0) {
       console.error("codex-bridge: could not resolve eligible identities before reading inbox");
-      return "";
+      return { text: "", claims: [] };
     }
     const allowed = new Set((eligible.stdout || "").split(/\r?\n/).filter(Boolean));
     const sections = [];
+    const claims = [];
+    const ownerPrefix = `codex-inline:${process.pid}:${Date.now()}`;
+    let sequence = 0;
     for (const pair of this.identities) {
       if (!allowed.has(`${pair.team}\t${pair.name}`)) continue;
-      const result = spawnSync(BASH_BIN, [path.join(SCRIPTS_DIR, "inbox.sh"), pair.team, pair.name], { cwd: this.opts.project, encoding: "utf8" });
-      if (result.error || result.status !== 0) { console.error(`codex-bridge: inbox.sh failed for ${pair.team}/${pair.name}`); continue; }
-      if ((result.stdout || "").trim()) sections.push(result.stdout.trim());
+      const lines = [];
+      while (true) {
+        const owner = `${ownerPrefix}:${sequence}`;
+        sequence += 1;
+        const result = spawnSync(BASH_BIN, [path.join(SCRIPTS_DIR, "claim.sh"), "next", pair.team, pair.name, owner, "30"], {
+          cwd: this.opts.project,
+          encoding: "utf8",
+        });
+        if (result.error || result.status !== 0) {
+          console.error(`codex-bridge: claim.sh failed for ${pair.team}/${pair.name}`);
+          this.releaseInlineClaims(claims);
+          return { text: "", claims: [] };
+        }
+        const record = (result.stdout || "").trim();
+        if (!record) break;
+        const [id, from, body, ts, extra] = record.split("\x1f");
+        if (!/^\d+$/.test(id || "") || !from || !ts || extra !== undefined) {
+          console.error(`codex-bridge: malformed claim for ${pair.team}/${pair.name}`);
+          if (/^\d+$/.test(id || "")) this.releaseInlineClaims([{ id, owner }]);
+          this.releaseInlineClaims(claims);
+          return { text: "", claims: [] };
+        }
+        claims.push({ id, owner });
+        lines.push(`  [${ts}] ${from}: ${body}`);
+      }
+      if (lines.length) {
+        sections.push(`${lines.length} new message(s) in ${pair.team}:\n\n${lines.join("\n")}`);
+      }
     }
-    return sections.join("\n\n");
+    return { text: sections.join("\n\n"), claims };
+  }
+
+  releaseInlineClaims(claims) {
+    for (const claim of claims) {
+      const result = spawnSync(BASH_BIN, [path.join(SCRIPTS_DIR, "claim.sh"), "release", String(claim.id), claim.owner], {
+        cwd: this.opts.project,
+        encoding: "utf8",
+      });
+      if (result.error || result.status !== 0) {
+        console.error(`codex-bridge: could not release claim ${claim.id}`);
+      }
+    }
+  }
+
+  ackInlineClaims(claims) {
+    for (const claim of claims) {
+      const result = spawnSync(BASH_BIN, [path.join(SCRIPTS_DIR, "claim.sh"), "ack", String(claim.id), claim.owner, "codex_inline_turn_start"], {
+        cwd: this.opts.project,
+        encoding: "utf8",
+      });
+      if (result.error || result.status !== 0) {
+        console.error(`codex-bridge: could not acknowledge claim ${claim.id}; it will reappear after its lease expires`);
+      }
+    }
   }
 
   async shutdown() {

@@ -871,6 +871,7 @@ EOF
 
   local fake="$TEST_SKILL_DIR/fake-app-server-inline.js"
   cat >"$fake" <<'EOF'
+const { spawnSync } = require("child_process");
 const readline = require("readline");
 const rl = readline.createInterface({ input: process.stdin });
 
@@ -907,6 +908,14 @@ rl.on("line", (line) => {
       send({ jsonrpc: "2.0", id: message.id, error: { message: "missing inline inbox body" } });
       return;
     }
+    const receipt = spawnSync("sqlite3", [
+      `${process.env.TEST_SKILL_DIR}/db/messages.db`,
+      "SELECT COUNT(*) FROM message_receipts;",
+    ], { encoding: "utf8" });
+    if (receipt.error || receipt.status !== 0 || receipt.stdout.trim() !== "0") {
+      send({ jsonrpc: "2.0", id: message.id, error: { message: "receipt written before turn/start succeeded" } });
+      return;
+    }
     const expectedRoots = [
       process.env.PROJ,
       `${process.env.TEST_SKILL_DIR}/custom-store`,
@@ -941,6 +950,60 @@ EOF
 
   [ "$status" -eq 0 ]
   [[ "$output" =~ "started turn" ]]
+  [ "$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT COUNT(*) FROM message_receipts;")" -eq 1 ]
+  [ "$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT evidence FROM message_receipts;")" = "codex_inline_turn_start" ]
+}
+
+@test "codex-bridge: inline-inbox releases its claim when turn start is rejected" {
+  run node -e 'const r = require("child_process").spawnSync("/bin/sh", ["-c", "true"]); if (r.error) { console.error(r.error.message); process.exit(1); }'
+  if [ "$status" -ne 0 ]; then
+    skip "node child_process.spawn is not available in this sandbox"
+  fi
+
+  bash "$SCRIPTS/send.sh" team bob alice "inline rejected turn" >/dev/null
+  local fake="$TEST_SKILL_DIR/fake-app-server-inline-reject.js"
+  cat >"$fake" <<'EOF'
+const readline = require("readline");
+const rl = readline.createInterface({ input: process.stdin });
+
+function send(value) {
+  process.stdout.write(`${JSON.stringify(value)}\n`);
+}
+
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    send({ jsonrpc: "2.0", id: message.id, result: {} });
+  } else if (message.method === "thread/start") {
+    send({ jsonrpc: "2.0", id: message.id, result: { thread: { id: "thread-1", status: { type: "idle" } } } });
+  } else if (message.method === "process/spawn") {
+    send({ jsonrpc: "2.0", id: message.id, result: {} });
+    setTimeout(() => {
+      send({
+        jsonrpc: "2.0",
+        method: "process/exited",
+        params: { processHandle: message.params.processHandle, exitCode: 0, stdout: "status=pending count=1 max_id=1\n", stderr: "" },
+      });
+    }, 10);
+  } else if (message.method === "turn/start") {
+    if (!message.params.input[0].text.includes("inline rejected turn")) {
+      send({ jsonrpc: "2.0", id: message.id, error: { message: "missing inline inbox body" } });
+      return;
+    }
+    send({ jsonrpc: "2.0", id: message.id, error: { message: "turn rejected" } });
+  } else if (message.method === "process/kill") {
+    send({ jsonrpc: "2.0", id: message.id, result: {} });
+  }
+});
+EOF
+
+  AGMSG_CODEX_APP_SERVER_CMD="node $fake" run node "$TYPES/codex/codex-bridge.js" \
+    --project "$PROJ" --team team --name alice --timeout 1 --interval 1 --max-wakes 1 --inline-inbox
+
+  [ "$status" -ne 0 ]
+  [ "$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT COUNT(*) FROM message_receipts;")" -eq 0 ]
+  [ "$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT COUNT(*) FROM message_claims;")" -eq 0 ]
+  [ "$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT read_at IS NULL FROM messages WHERE body='inline rejected turn';")" -eq 1 ]
 }
 
 @test "codex-bridge: stops instead of looping on the same unread max_id" {
