@@ -241,7 +241,7 @@ git diff --check
 
 Expected: all commands exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add README.md docs/superpowers/plans/2026-08-15-team-work-reconciler-dispatch.md tests/test_team_work_reconciler.bats
