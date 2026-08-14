@@ -273,11 +273,17 @@ Expected: whitespace error なし、test count と PASS count が一致、Node s
 - `node --check scripts/drivers/types/codex/codex-bridge.js`: PASS
 - focused Bats: `test_claims.bats`、`test_messaging.bats`、`test_inbox.bats`、`test_watch.bats`、Codex bridge の inline-inbox / default wake case: PASS
 
-- [ ] **Step 3: implementation notes を実測値で更新する**
+- [x] **Step 3: implementation notes を実測値で更新する**
 
 本計画書に test count、focused tests、full suite、PR head SHA を追記する。spec に実装と異なる API 名や state があれば実装に合わせて更新する。
 
-- [ ] **Step 4: #37 だけを closes する PR を作成する**
+実績:
+
+- PR 作成時 head: `ba610bacfa46ac2f3f27ba4523fd020a85d5a0bf`
+- PR: [#44](https://github.com/kappaseijin/agmsg/pull/44)
+- spec は実装に合わせ、実在しない receipt API、status format、legacy `read_at`、ACK persistence failure、Codex rejection path を修正済み。
+
+- [x] **Step 4: #37 だけを closes する PR を作成する**
 
 Run:
 
@@ -287,3 +293,5 @@ gh pr create --base main --head issue/37-message-claim-ack --title 'feat: add me
 ```
 
 Expected: PR 本文は #37 だけを closes し、#18 は #37 merge 後に別操作で close する。
+
+実績: [PR #44](https://github.com/kappaseijin/agmsg/pull/44) を `main` 向けに作成し、本文の closing reference は `Closes #37` のみ。#18 は open のまま維持する。
