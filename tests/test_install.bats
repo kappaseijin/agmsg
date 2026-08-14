@@ -66,18 +66,56 @@ teardown() {
   grep -Fq 'printf user-owned' "$guard"
 }
 
-@test "uninstall: removes only the installed gh owner guard" {
-  local real_bin="$FAKE_HOME/real-bin" guard="$FAKE_HOME/.agents/bin/gh"
+@test "install: git push owner guard fixes the inner script and real git to absolute paths" {
+  local real_bin="$FAKE_HOME/real-bin" guard="$FAKE_HOME/.agents/bin/git"
+  local real_git
+  real_git="$(command -v git)"
+  mkdir -p "$real_bin"
+  ln -s "$real_git" "$real_bin/git"
+
+  run env HOME="$FAKE_HOME" PATH="$real_bin:/usr/bin:/bin" \
+    bash "$REPO_ROOT/install.sh" --cmd agmsg
+  [ "$status" -eq 0 ]
+  [ -x "$guard" ]
+  grep -Fq '# agmsg git push owner guard launcher' "$guard"
+  grep -Fq "$FAKE_HOME/.agents/skills/agmsg/scripts/guards/git-push-owner-guard.sh" "$guard"
+  grep -Fq "$real_bin/git" "$guard"
+  ! grep -q '__AGMSG_.*__' "$guard"
+  [ "$(env HOME="$FAKE_HOME" PATH="$FAKE_HOME/.agents/bin:$real_bin:/usr/bin:/bin" command -v git)" = "$guard" ]
+}
+
+@test "install: git push owner guard refuses to overwrite a non-agmsg git" {
+  local real_bin="$FAKE_HOME/real-bin" guard="$FAKE_HOME/.agents/bin/git"
+  local real_git
+  real_git="$(command -v git)"
+  mkdir -p "$real_bin" "${guard%/*}"
+  printf '#!/bin/sh\nprintf user-owned\n' > "$guard"
+  chmod +x "$guard"
+  ln -s "$real_git" "$real_bin/git"
+
+  run env HOME="$FAKE_HOME" PATH="$real_bin:/usr/bin:/bin" \
+    bash "$REPO_ROOT/install.sh" --cmd agmsg
+  [ "$status" -ne 0 ]
+  grep -Fq 'printf user-owned' "$guard"
+}
+
+@test "uninstall: removes only the installed Git and gh owner guards" {
+  local real_bin="$FAKE_HOME/real-bin" gh_guard="$FAKE_HOME/.agents/bin/gh" git_guard="$FAKE_HOME/.agents/bin/git"
+  local real_git
+  real_git="$(command -v git)"
   mkdir -p "$real_bin"
   printf '#!/bin/sh\nexit 0\n' > "$real_bin/gh"
   chmod +x "$real_bin/gh"
+  ln -s "$real_git" "$real_bin/git"
   env HOME="$FAKE_HOME" PATH="$real_bin:/usr/bin:/bin" \
     bash "$REPO_ROOT/install.sh" --cmd agmsg >/dev/null
-  [ -x "$guard" ]
+  [ -x "$gh_guard" ]
+  [ -x "$git_guard" ]
 
   run env HOME="$FAKE_HOME" bash "$REPO_ROOT/uninstall.sh" --yes
   [ "$status" -eq 0 ]
-  [ ! -e "$guard" ]
+  [ ! -e "$gh_guard" ]
+  [ ! -e "$git_guard" ]
 }
 
 @test "install: Codex skill documents safe Git Bash quoting for Windows PowerShell" {

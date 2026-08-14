@@ -144,6 +144,32 @@ PATHで `~/.agents/bin` を実体のGitHub CLIより前に置くこと。ラン�
 `./install.sh --update` を再実行すること。`uninstall.sh` が削除するのはagmsgが
 生成したガードだけである。
 
+### Git pushの宛先ガード
+
+Gitがインストール済みの場合、`install.sh` は `~/.agents/bin/git` も配置する。
+すべてのエージェントのPATHで `~/.agents/bin` を実体のGitより前に置き、次で
+実効コマンドを確認する:
+
+```bash
+PATH="$HOME/.agents/bin:$PATH" command -v git
+```
+
+ホームディレクトリを展開した `~/.agents/bin/git` が表示されなければならない。
+ランチャーはインストール時にガードと実Gitの絶対パスを固定する。`git push` は
+`remote.*.pushurl` の全エントリと `url.*.insteadOf` / `url.*.pushInsteadOf` の
+書換えを含む、すべての実効push URLを検査する。書き込みが許可されるのは
+`github.com` 上の所有者 `kappaseijin` または `kappaseijinjp` だけである。
+形式不正なURL、ローカルパス、未知のホスト、第三者所有者、解決不能な宛先は
+transport開始前にfail-closedで拒否する。直接URLは一時的なsynthetic remoteで
+解決し、同じ書換え後のURLを検査する。Git alias と `git send-pack` は拒否し、
+読み取り専用コマンドと `git clone` は実Gitへ渡す。
+
+インストーラーはagmsg製でない `~/.agents/bin/git` を上書きしない。Gitが未導入
+の場合はガードを配置せずメッセージを表示するため、Git導入後に
+`./install.sh --update` を再実行すること。`uninstall.sh` が削除するのはagmsgが
+生成したGitガードだけである。これはユーザー空間のPATHガードであり、絶対パスでの
+Git実行、PATH変更、shim差替え、別ユーザーでの実行は保証範囲外である。
+
 ### Windows: Git Bash と Codex
 
 agmsgの実装は `scripts/` 配下のBashスクリプト群であるため、Windowsでは
