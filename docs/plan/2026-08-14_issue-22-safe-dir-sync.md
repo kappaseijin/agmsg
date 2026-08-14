@@ -38,7 +38,7 @@ timestamp: "2026-08-14T11:06:08+09:00"
 3. `safe_dir_sync` の仕様・異常系・実行中プロセス保護を確認し、必要な実装・テスト・README を更新する。
 4. shellcheck、対象 bats、全テスト、実 install/update の隔離実測を行う。
 5. Codex アカウントで Issue #22 と対応する PR を作成する。CI とセルフチェックの証拠を本文へ記録する。
-6. ユーザー指定の一時運用制約により formal cross-vendor reviewer が利用できない場合は、レビュー不能を記録してマージせず、PR と Issue の状態を報告する。
+6. ユーザー指定の一時運用制約により別 LLM reviewer は起動せず、`codex_product_owner` 派生席のセルフチェック、関連テスト、required CI で完了判定する。
 
 ## 実態の流れ
 
@@ -65,6 +65,10 @@ flowchart LR
 
 変異は一時コピーだけに適用し、リポジトリの実装は復元済みである。
 
+## 運用方針の更新
+
+2026-08-14T12:30:03+09:00、ユーザーが一時的に「対向 LLM は不要」「別 LLM のレビューは不要」「他のエージェントを起動しない」と指定した。起動済みだった `agmsg_reviewer_claude` はレビュー開始前に停止し、以後は `agmsg_owner_codex` 単独で検証する。課金上限の変更や別 reviewer への代替は行わない。
+
 ## 完了条件
 
-Issue #22 の実装・文書・テスト・CI・PR 状態を current state で再確認し、未解決の review gate が無い場合だけ merge する。レビュー不能または required CI 未完了の場合は、解決済みと扱わない。
+Issue #22 の実装・文書・テスト・CI・PR 状態を current state で再確認し、ユーザーが指定した Codex 単独セルフチェックと required CI が完了している場合に merge する。1 Issue / 1 PR の対応関係を維持し、旧 PR #2 は replacement PR #24 の merge 後に整理する。
