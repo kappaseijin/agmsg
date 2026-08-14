@@ -7,7 +7,7 @@ tags:
   - security
   - git
   - implementation
-status: in_progress
+status: completed
 timestamp: "2026-08-14T18:31:25+09:00"
 ---
 
