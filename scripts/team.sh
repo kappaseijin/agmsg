@@ -1,10 +1,38 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: team.sh <team>
+# Usage: team.sh <team> [--format json]
 # Shows team members.
 
-TEAM="${1:?Usage: team.sh <team>}"
+if [ "$#" -lt 1 ]; then
+  echo "Usage: team.sh <team> [--format json]" >&2
+  exit 1
+fi
+
+TEAM="$1"
+shift
+FORMAT="human"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --format)
+      [ "$#" -ge 2 ] || { echo "Error: --format requires a value" >&2; exit 1; }
+      FORMAT="$2"
+      shift
+      ;;
+    *)
+      echo "Error: unknown team option: $1" >&2
+      exit 1
+      ;;
+  esac
+  shift
+done
+case "$FORMAT" in
+  human|json) ;;
+  *)
+    echo "Error: unsupported format: $FORMAT" >&2
+    exit 1
+    ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -18,6 +46,15 @@ CONFIG="$SCRIPT_DIR/../teams/$TEAM/config.json"
 if [ ! -f "$CONFIG" ]; then
   echo "Team not found: $TEAM"
   exit 1
+fi
+
+if [ "$FORMAT" = "json" ]; then
+  # shellcheck disable=SC1091
+  source "$SCRIPT_DIR/lib/storage.sh"
+  # shellcheck disable=SC1091
+  source "$SCRIPT_DIR/lib/roster-contract.sh"
+  agmsg_roster_contract_team_json "$CONFIG" "$TEAM"
+  exit $?
 fi
 
 echo "Team: $TEAM"

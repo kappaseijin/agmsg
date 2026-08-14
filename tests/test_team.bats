@@ -89,6 +89,36 @@ EOF
   [ -f "$TEST_SKILL_DIR/teams/newteam/config.json" ]
 }
 
+@test "join: writes explicit default roster metadata without inferring the agent name" {
+  bash "$SCRIPTS/join.sh" demo project_programmer_codex codex /tmp/first
+  bash "$SCRIPTS/join.sh" demo project_programmer_codex codex /tmp/second
+
+  run bash "$SCRIPTS/team.sh" demo --format json
+  [ "$status" -eq 0 ]
+  local roster="$output"
+  local roster_sql
+  roster_sql=$(printf '%s' "$roster" | sed "s/'/''/g")
+
+  run sqlite_mem "SELECT json_extract('$roster_sql', '\$.members[0].kind');"
+  [ "$status" -eq 0 ]
+  [ "$output" = "seat" ]
+
+  run sqlite_mem "SELECT json_extract('$roster_sql', '\$.members[0].role');"
+  [ "$status" -eq 0 ]
+  [ "$output" = "unassigned" ]
+
+  run sqlite_mem "SELECT json_array_length(json_extract('$roster_sql', '\$.members[0].registrations'));"
+  [ "$status" -eq 0 ]
+  [ "$output" = "2" ]
+}
+
+@test "join: rejects a roster kind outside the explicit contract" {
+  run bash "$SCRIPTS/join.sh" demo alice codex /tmp/proj --kind robot
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"--kind must be one of"* ]]
+  [ ! -e "$TEST_SKILL_DIR/teams/demo/config.json" ]
+}
+
 @test "join: adds multiple agents to same team" {
   bash "$SCRIPTS/join.sh" myteam alice claude-code /tmp/proj-a
   bash "$SCRIPTS/join.sh" myteam bob codex /tmp/proj-b
@@ -200,6 +230,64 @@ EOF
   [ "$(echo "$output" | grep -c "$agent")" -eq 1 ]
 }
 
+@test "team json: emits explicit member metadata in stable order" {
+  bash "$SCRIPTS/join.sh" demo zed codex /tmp/zed --role reviewer --kind seat
+  bash "$SCRIPTS/join.sh" demo amy claude-code /tmp/amy --role architect --kind human
+
+  run bash "$SCRIPTS/team.sh" demo --format json
+  [ "$status" -eq 0 ]
+  local roster="$output"
+  local roster_sql
+  roster_sql=$(printf '%s' "$roster" | sed "s/'/''/g")
+
+  run sqlite_mem "SELECT json_extract('$roster_sql', '\$.members[0].name');"
+  [ "$status" -eq 0 ]
+  [ "$output" = "amy" ]
+
+  run sqlite_mem "SELECT json_extract('$roster_sql', '\$.members[0].kind');"
+  [ "$status" -eq 0 ]
+  [ "$output" = "human" ]
+
+  run sqlite_mem "SELECT json_extract('$roster_sql', '\$.members[1].role');"
+  [ "$status" -eq 0 ]
+  [ "$output" = "reviewer" ]
+
+  run sqlite_mem "SELECT json_extract('$roster_sql', '\$.members[1].registrations[0].type');"
+  [ "$status" -eq 0 ]
+  [ "$output" = "codex" ]
+}
+
+@test "team json: rejects a legacy config while human output remains compatible" {
+  local config_dir="$TEST_SKILL_DIR/teams/legacy"
+  local errlog="$TEST_SKILL_DIR/team-json.stderr"
+  mkdir -p "$config_dir"
+  printf '%s' '{"name":"legacy","agents":{"alice":{"type":"codex","project":"/tmp/legacy"}}}' > "$config_dir/config.json"
+
+  local stdout rc=0
+  stdout="$(bash "$SCRIPTS/team.sh" legacy --format json 2>"$errlog")" || rc=$?
+  [ "$rc" -eq 2 ]
+  [ -z "$stdout" ]
+  grep -q '^schema error:' "$errlog"
+
+  run bash "$SCRIPTS/team.sh" legacy
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"alice"* ]]
+  [[ "$output" == *"codex"* ]]
+}
+
+@test "team json: rejects a schema v1 member without an explicit role" {
+  local config_dir="$TEST_SKILL_DIR/teams/incomplete"
+  local errlog="$TEST_SKILL_DIR/incomplete-json.stderr"
+  mkdir -p "$config_dir"
+  printf '%s' '{"schemaVersion":1,"name":"incomplete","agents":{"alice":{"kind":"seat","registrations":[{"type":"codex","project":"/tmp/incomplete"}]}}}' > "$config_dir/config.json"
+
+  local stdout rc=0
+  stdout="$(bash "$SCRIPTS/team.sh" incomplete --format json 2>"$errlog")" || rc=$?
+  [ "$rc" -eq 2 ]
+  [ -z "$stdout" ]
+  grep -q '^schema error: member role' "$errlog"
+}
+
 # --- whoami.sh ---
 
 @test "whoami: returns agent identity" {
@@ -208,6 +296,69 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" =~ "agent=alice" ]]
   [[ "$output" =~ "teams=myteam" ]]
+}
+
+@test "whoami json: returns the explicit registration without name inference" {
+  bash "$SCRIPTS/join.sh" demo arbitrary-name codex /tmp/identity --role architect --kind seat
+
+  run bash "$SCRIPTS/whoami.sh" /tmp/identity codex --format json
+  [ "$status" -eq 0 ]
+  local identity="$output"
+  local identity_sql
+  identity_sql=$(printf '%s' "$identity" | sed "s/'/''/g")
+
+  run sqlite_mem "SELECT json_extract('$identity_sql', '\$.runtime');"
+  [ "$status" -eq 0 ]
+  [ "$output" = "codex" ]
+
+  run sqlite_mem "SELECT json_extract('$identity_sql', '\$.session.project');"
+  [ "$status" -eq 0 ]
+  [ "$output" = "/tmp/identity" ]
+
+  run sqlite_mem "SELECT json_extract('$identity_sql', '\$.registrations[0].name');"
+  [ "$status" -eq 0 ]
+  [ "$output" = "arbitrary-name" ]
+
+  run sqlite_mem "SELECT json_extract('$identity_sql', '\$.registrations[0].role');"
+  [ "$status" -eq 0 ]
+  [ "$output" = "architect" ]
+}
+
+@test "whoami json: returns an empty registration array when not joined" {
+  run bash "$SCRIPTS/whoami.sh" /tmp/not-joined codex --format json
+  [ "$status" -eq 0 ]
+  local identity="$output"
+  local identity_sql
+  identity_sql=$(printf '%s' "$identity" | sed "s/'/''/g")
+
+  run sqlite_mem "SELECT json_array_length(json_extract('$identity_sql', '\$.registrations'));"
+  [ "$status" -eq 0 ]
+  [ "$output" = "0" ]
+}
+
+@test "whoami json: fails closed for a matching legacy registration" {
+  local config_dir="$TEST_SKILL_DIR/teams/legacy"
+  local errlog="$TEST_SKILL_DIR/whoami-json.stderr"
+  mkdir -p "$config_dir"
+  printf '%s' '{"name":"legacy","agents":{"alice":{"type":"codex","project":"/tmp/legacy-identity"}}}' > "$config_dir/config.json"
+
+  local stdout rc=0
+  stdout="$(bash "$SCRIPTS/whoami.sh" /tmp/legacy-identity codex --format json 2>"$errlog")" || rc=$?
+  [ "$rc" -eq 2 ]
+  [ -z "$stdout" ]
+  grep -q '^schema error:' "$errlog"
+}
+
+@test "whoami json: ignores unrelated legacy configs" {
+  local config_dir="$TEST_SKILL_DIR/teams/legacy"
+  mkdir -p "$config_dir"
+  printf '%s' '{"name":"legacy","agents":{"alice":{"type":"codex","project":"/tmp/unrelated"}}}' > "$config_dir/config.json"
+  bash "$SCRIPTS/join.sh" current current-agent codex /tmp/current --role programmer --kind seat
+
+  run bash "$SCRIPTS/whoami.sh" /tmp/current codex --format json
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"team":"current"'* ]]
+  [[ "$output" == *'"role":"programmer"'* ]]
 }
 
 @test "whoami: resolves project paths containing single quotes" {

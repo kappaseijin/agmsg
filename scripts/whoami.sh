@@ -7,7 +7,7 @@ set -euo pipefail
 # Suggestions:     suggest=true agents=<n1,n2,...> teams=<t1,t2,...> type=<type> project=<path> available_teams=<...>
 # Not joined:      not_joined=true available_teams=<t1,t2,...> (or "none")
 #
-# Usage: whoami.sh <project_path> [type]
+# Usage: whoami.sh <project_path> [type] [--format json]
 #   type: claude-code, codex, gemini, antigravity, copilot, opencode
 #   If type is omitted, auto-detect from env vars and process tree.
 
@@ -83,8 +83,41 @@ EOF
   echo "claude-code"
 }
 
-PROJECT_PATH="${1:?Usage: whoami.sh <project_path> [type]}"
-AGENT_TYPE="${2:-$(detect_cli_type)}"
+if [ "$#" -lt 1 ]; then
+  echo "Usage: whoami.sh <project_path> [type] [--format json]" >&2
+  exit 1
+fi
+
+PROJECT_PATH="$1"
+shift
+AGENT_TYPE=""
+FORMAT="human"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --format)
+      [ "$#" -ge 2 ] || { echo "Error: --format requires a value" >&2; exit 1; }
+      FORMAT="$2"
+      shift
+      ;;
+    *)
+      if [ -z "$AGENT_TYPE" ]; then
+        AGENT_TYPE="$1"
+      else
+        echo "Error: unexpected whoami argument: $1" >&2
+        exit 1
+      fi
+      ;;
+  esac
+  shift
+done
+case "$FORMAT" in
+  human|json) ;;
+  *)
+    echo "Error: unsupported format: $FORMAT" >&2
+    exit 1
+    ;;
+esac
+[ -n "$AGENT_TYPE" ] || AGENT_TYPE="$(detect_cli_type)"
 
 # SCRIPT_DIR is already resolved above (before sourcing the type registry).
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -98,6 +131,43 @@ source "$SCRIPT_DIR/lib/resolve-project.sh"
 source "$SCRIPT_DIR/lib/storage.sh"
 PROJECT_PATH="$(agmsg_resolve_project "$PROJECT_PATH" "$AGENT_TYPE")"
 AGENT_TYPE_SQL=$(printf '%s' "$AGENT_TYPE" | sed "s/'/''/g")
+
+if [ "$FORMAT" = "json" ]; then
+  # shellcheck disable=SC1091
+  source "$SCRIPT_DIR/lib/roster-contract.sh"
+
+  MATCHES="["
+  MATCH_SEPARATOR=""
+  for config_file in "$TEAMS_DIR"/*/config.json; do
+    [ -f "$config_file" ] || continue
+    agmsg_roster_contract_has_registration "$config_file" "$PROJECT_PATH" "$AGENT_TYPE" || continue
+
+    CONFIG_MATCHES=""
+    if ! CONFIG_MATCHES="$(agmsg_roster_contract_matching_json "$config_file" "$PROJECT_PATH" "$AGENT_TYPE")"; then
+      exit 2
+    fi
+    while IFS= read -r match_json; do
+      [ -n "$match_json" ] || continue
+      MATCHES="${MATCHES}${MATCH_SEPARATOR}${match_json}"
+      MATCH_SEPARATOR=","
+    done <<EOF
+$CONFIG_MATCHES
+EOF
+  done
+  MATCHES="${MATCHES}]"
+
+  PROJECT_PATH_SQL=$(printf '%s' "$PROJECT_PATH" | sed "s/'/''/g")
+  MATCHES_SQL=$(printf '%s' "$MATCHES" | sed "s/'/''/g")
+  agmsg_sqlite_mem "
+    SELECT json_object(
+      'schemaVersion', 1,
+      'runtime', '$AGENT_TYPE_SQL',
+      'session', json_object('project', '$PROJECT_PATH_SQL'),
+      'registrations', json('$MATCHES_SQL')
+    );
+  "
+  exit $?
+fi
 
 if [ ! -d "$TEAMS_DIR" ]; then
   echo "not_joined=true available_teams=none"
