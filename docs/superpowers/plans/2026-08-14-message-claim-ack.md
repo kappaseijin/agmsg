@@ -165,7 +165,7 @@ Expected: queue wording、JSON counts、legacy marker、既存 messaging behavio
 - Consumes: Task 1 の Shell library。
 - Produces: successful stdout の後だけ receipt を作る receiver behavior。
 
-- [ ] **Step 1: inbox handoff receipt の failing test を書く**
+- [x] **Step 1: inbox handoff receipt の failing test を書く**
 
 `inbox.sh` 実行後に、対象 message の `message_receipts` が 1 row で `read_at` も非 null になる test を追加する。
 
@@ -175,21 +175,21 @@ run bash "$SCRIPTS/inbox.sh" testteam alice
 [ "$(sqlite3 "$DBPATH" 'SELECT COUNT(*) FROM message_receipts;')" -eq 1 ]
 ```
 
-- [ ] **Step 2: failing test を実行する**
+- [x] **Step 2: failing test を実行する**
 
 Run: `bats tests/test_inbox.bats`
 
 Expected: FAIL because existing receiver updates only `read_at`.
 
-- [ ] **Step 3: inbox と check-inbox を実装する**
+- [x] **Step 3: inbox と check-inbox を実装する**
 
 各 row を claim してから output buffer に追加し、output の successful write 後に `agmsg_ack_claim` を呼ぶ。buffer / write error は `agmsg_release_claim` を呼び、未読 row を残す。
 
-- [ ] **Step 4: watch の delivery path を実装する**
+- [x] **Step 4: watch の delivery path を実装する**
 
 `watch.sh` の normal row と `ctrl:despawn` row は、列挙済み id を `agmsg_claim_id` で claim してから ack する。stdout `printf` が失敗した場合は release して watermark を更新せず exit する。broad/exclusive ready guard はそのまま維持する。
 
-- [ ] **Step 5: focused tests を green にする**
+- [x] **Step 5: focused tests を green にする**
 
 Run: `bats tests/test_inbox.bats tests/test_watch.bats`
 

@@ -603,6 +603,13 @@ _read_at_for_body() {
       "SELECT read_at FROM messages WHERE body='$1' ORDER BY id DESC LIMIT 1;" )
 }
 
+_receipt_evidence_for_body() {
+  ( # shellcheck disable=SC1090
+    source "$SCRIPTS/lib/storage.sh"
+    agmsg_sqlite "$(agmsg_db_path)" \
+      "SELECT r.evidence FROM messages AS m JOIN message_receipts AS r ON r.message_id=m.id WHERE m.body='$1' ORDER BY m.id DESC LIMIT 1;" )
+}
+
 
 @test "watch: marks a delivered message's read_at so a later inbox.sh does not re-surface it" {
   skip_on_windows "watcher background launch under Git Bash (#182)"
@@ -622,18 +629,20 @@ _read_at_for_body() {
   # Delivered live...
   wait_for_file_contains "$out" "M-readat-check" \
     || { kill "$w" 2>/dev/null || true; false; }
-  # ...and read_at follows shortly after delivery — poll instead of a fixed
-  # sleep for the same flakiness reason.
-  local i got=""
+  # ...and both read_at and a durable handoff receipt follow shortly after
+  # delivery — poll instead of a fixed sleep for the same flakiness reason.
+  local i got="" receipt=""
   for i in $(seq 1 50); do
     got="$(_read_at_for_body "M-readat-check")"
-    [ -n "$got" ] && break
+    receipt="$(_receipt_evidence_for_body "M-readat-check")"
+    [ -n "$got" ] && [ -n "$receipt" ] && break
     sleep 0.1
   done
   kill "$w" 2>/dev/null || true
   wait "$w" 2>/dev/null || true
 
   [ -n "$got" ]
+  [ "$receipt" = "watch_stdout" ]
   # A subsequent inbox.sh call must not report it as a new/unread message.
   ! bash "$SCRIPTS/inbox.sh" team alice | grep -q "M-readat-check"
 }

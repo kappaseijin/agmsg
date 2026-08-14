@@ -62,6 +62,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/storage.sh"
 # shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/claims.sh"
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/actas-lock.sh"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/resolve-project.sh"
@@ -312,39 +314,28 @@ done <<< "$PAIRS"
 WATERMARK_FILE="$RUN_DIR/watch.$SESSION_ID.watermark"
 persist_watermark() { printf '%s\n' "$LAST" > "$WATERMARK_FILE" 2>/dev/null || true; }
 
-# Mark a row's read_at so a later inbox.sh call does not re-surface it as
-# unread — the watermark only stops THIS watcher from re-streaming a row, it
-# never touches read_at (see the call sites below for the full rationale).
-# Shared by both the normal delivery path and the ctrl:despawn control-row
-# path so the two do not drift (#review finding, 2026-07-19). $1 is trusted
-# to be a DB-sourced id everywhere this is called, but it is guarded anyway
-# (matches inbox.sh's own defensive stance) since it is interpolated into SQL.
-#
-# $2/$3 (team, to) scope this to the DEFINITIVE receiver for that role:
-#   - an exclusive watcher (ACTIVE_NAME set) only marks its own role's rows.
-#   - a broad watcher (ACTIVE_NAME empty) subscribes to every registered role
-#     in the project (see PAIRS above), so without this guard it would also
-#     mark read_at for a role that has its OWN exclusive watcher — e.g. a
-#     leader's default SessionStart watcher racing/clobbering the read state
-#     an actas'd member's exclusive watcher is responsible for. Skip when an
-#     exclusive ready sentinel for (team, to) exists; that role's own watcher
-#     owns the read state (review finding, 2026-07-19).
-#
-# Note: this is a best-effort mark on local write success, not a delivery ack
-# — there is no protocol to confirm the downstream Monitor reader actually
-# consumed the line (a pipe write can succeed into a kernel buffer even if the
-# reader is about to exit). A stronger guarantee needs the claim/ack redesign
-# tracked in #373; out of scope for this fix (review finding, 2026-07-19).
-mark_read() {
+# Claim a row before it reaches the monitor stdout stream. Return 2 when a
+# broad watcher must defer to a ready exclusive watcher; return 1 for a held or
+# unavailable claim, which leaves the watermark unchanged so the row retries.
+claim_for_handoff() {
   local mid="$1" team="$2" to="$3"
   case "$mid" in
-    ''|*[!0-9]*) return 0 ;;
+    ''|*[!0-9]*) return 1 ;;
   esac
   if [ -z "$ACTIVE_NAME" ] && [ -n "$team" ] && [ -n "$to" ]; then
-    [ -e "$(agmsg_ready_path "$team" "$to")" ] && return 0
+    [ -e "$(agmsg_ready_path "$team" "$to")" ] && return 2
   fi
-  agmsg_sqlite "$DB" "UPDATE messages SET read_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=$mid AND read_at IS NULL;" 2>/dev/null \
-    || echo "agmsg watch: could not mark message $mid read (db busy/unavailable); a later inbox.sh call will re-surface it" >&2
+  agmsg_claim_id "$mid" "watch:$SESSION_ID:$mid" 30
+}
+
+ack_handoff() {
+  local mid="$1" evidence="$2"
+  agmsg_ack_claim "$mid" "watch:$SESSION_ID:$mid" "$evidence"
+}
+
+release_handoff() {
+  local mid="$1"
+  agmsg_release_claim "$mid" "watch:$SESSION_ID:$mid" >/dev/null 2>&1 || true
 }
 
 LAST=""
@@ -412,7 +403,7 @@ while true; do
       SELECT id, created_at, team, from_agent, to_agent,
              replace(replace(body, char(13), ''), char(10), '\\n')
       FROM messages
-      WHERE id > $LAST AND ($WHERE_PAIRS)
+      WHERE id > $LAST AND read_at IS NULL AND ($WHERE_PAIRS)
       ORDER BY id;
     " 2>/dev/null || true)"
 
@@ -425,7 +416,19 @@ while true; do
         # which also ends the agent CLI sharing it. Deterministic teardown, no
         # dependence on the agent LLM noticing the message. See #109.
         if [ "$body" = "ctrl:despawn" ]; then
-          mark_read "$id" "$team" "$to"
+          if claim_for_handoff "$id" "$team" "$to"; then
+            :
+          else
+            claim_status=$?
+            if [ "$claim_status" -eq 2 ]; then
+              LAST="$id"; persist_watermark
+              continue
+            fi
+            break
+          fi
+          if ! ack_handoff "$id" watch_ctrl_despawn; then
+            break
+          fi
           LAST="$id"; persist_watermark
           # Only an EXCLUSIVE watcher dedicated to exactly this role tears
           # itself down. A broad-subscription watcher (e.g. a leader whose
@@ -466,16 +469,25 @@ while true; do
           fi
           exit 0
         fi
+        if claim_for_handoff "$id" "$team" "$to"; then
+          :
+        else
+          claim_status=$?
+          if [ "$claim_status" -eq 2 ]; then
+            LAST="$id"; persist_watermark
+            continue
+          fi
+          break
+        fi
         if ! printf '%s | %s | %s → %s | %s\n' "$ts" "$team" "$from" "$to" "$body"; then
-          cleanup
+          release_handoff "$id"
           exit 0
         fi
-        # Mark delivered so a later inbox.sh call (e.g. a respawned/resumed
-        # session's actas re-registration) does not re-surface this message as
-        # unread. Without this, every message ever streamed live stays
-        # read_at IS NULL forever, and a single inbox.sh call replays the
-        # entire history as "new".
-        mark_read "$id" "$team" "$to"
+        # Receipt after successful stdout handoff makes later inbox checks skip
+        # this row. It does not claim the downstream LLM completed any work.
+        if ! ack_handoff "$id" watch_stdout; then
+          break
+        fi
         LAST="$id"
         persist_watermark
       done <<< "$ROWS"

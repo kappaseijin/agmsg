@@ -13,6 +13,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/storage.sh"
 # shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/claims.sh"
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/actas-lock.sh"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/resolve-project.sh"  # agmsg_agent_pid, for instance-id derivation
@@ -129,21 +131,30 @@ fi
 mkdir -p "$SKILL_DIR/run"
 touch "$MARKER"
 
-# Check for unread messages and mark as read
+# Check unread candidates. A candidate is claimed before it enters the hook
+# payload and is acknowledged only after that payload writes successfully.
 DB="$(agmsg_db_path)"
 if [ ! -f "$DB" ]; then exit 0; fi
+
+CLAIM_IDS=()
+CLAIM_OWNERS=()
+release_claims() {
+  local i
+  for ((i = 0; i < ${#CLAIM_IDS[@]}; i++)); do
+    agmsg_release_claim "${CLAIM_IDS[$i]}" "${CLAIM_OWNERS[$i]}" >/dev/null 2>&1 || true
+  done
+}
+trap release_claims EXIT
 
 _agmsg_sqlesc() { printf %s "$1" | sed "s/'/''/g"; }
 AGENT_SQL="$(_agmsg_sqlesc "$AGENT")"
 
 OUTPUT=""
-# Messages are marked read per team INSIDE this loop, but emitted only AFTER
-# it. Under errexit, a failure while processing a later team (either command
-# substitution below) would abort between those two points: earlier teams'
-# messages end up read_at-stamped yet never delivered, and never re-offered
-# (#637). So loop failures stop the loop instead of the script — whatever was
-# already accumulated still reaches an emit point, teams after the failing one
-# stay untouched (unread), and the failure status is re-raised on exit.
+# Candidates are claimed per team but emitted only AFTER the loop. A failure
+# while reading a later team therefore leaves earlier messages leased (not
+# acknowledged) until the final hook payload succeeds; rows after the failed
+# team stay unread. This preserves #637's no-loss behavior without marking a
+# message read before the host can receive it.
 CLAIM_RC=0
 CLAIM_FAILED_TEAM=""
 IFS=',' read -ra TEAM_LIST <<< "$TEAMS"
@@ -171,32 +182,34 @@ for team in "${TEAM_LIST[@]}"; do
     ORDER BY created_at ASC;
   ") || { CLAIM_RC=$?; CLAIM_FAILED_TEAM="$team"; break; }
   if [ -n "$RESULT" ]; then
-    COUNT=$(echo "$RESULT" | wc -l | tr -d ' ')
-    OUTPUT+="$COUNT new message(s) in $team:"$'\n'
-    IDS=""
+    COUNT=0
+    TEAM_OUTPUT=""
     while IFS=$'\x1f' read -r id from body ts; do
-      OUTPUT+="  [$ts] $from: $body"$'\n'
       case "$id" in
-        ''|*[!0-9]*) ;; # defensive: never splice a non-numeric value into SQL
-        *) IDS="${IDS:+$IDS,}$id" ;;
+        ''|*[!0-9]*) continue ;; # defensive: never claim an untrusted id
       esac
+      OWNER="check-inbox:$$:$team:$id"
+      if agmsg_claim_id "$id" "$OWNER" 30; then
+        CLAIM_IDS+=("$id")
+        CLAIM_OWNERS+=("$OWNER")
+        COUNT=$((COUNT + 1))
+        TEAM_OUTPUT+="  [$ts] $from: $body"$'\n'
+      fi
     done <<< "$RESULT"
-    OUTPUT+=$'\n'
-    # Test seam: a two-file barrier that lets the race regression test land a
-    # message deterministically between display and mark. No-op unless set.
-    if [ -n "${AGMSG_TEST_MARK_BARRIER:-}" ]; then
-      : > "$AGMSG_TEST_MARK_BARRIER.reached"
-      _agmsg_barrier_waited=0
-      while [ ! -e "$AGMSG_TEST_MARK_BARRIER.release" ]; do
-        sleep 0.05
-        _agmsg_barrier_waited=$((_agmsg_barrier_waited + 1))
-        [ "$_agmsg_barrier_waited" -ge 200 ] && break # 10s safety cap
-      done
-    fi
-    # Mark as read — only the ids captured above, so a message that arrives
-    # between the SELECT and this UPDATE is not marked read unseen.
-    if [ -n "$IDS" ]; then
-      agmsg_sqlite "$DB" "UPDATE messages SET read_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id IN ($IDS);" 2>/dev/null || true
+    if [ "$COUNT" -gt 0 ]; then
+      OUTPUT+="$COUNT new message(s) in $team:"$'\n'
+      OUTPUT+="$TEAM_OUTPUT"$'\n'
+      # Test seam: pause after claim/buffer creation and before final JSON
+      # handoff. A message arriving here stays unclaimed and unread.
+      if [ -n "${AGMSG_TEST_MARK_BARRIER:-}" ]; then
+        : > "$AGMSG_TEST_MARK_BARRIER.reached"
+        _agmsg_barrier_waited=0
+        while [ ! -e "$AGMSG_TEST_MARK_BARRIER.release" ]; do
+          sleep 0.05
+          _agmsg_barrier_waited=$((_agmsg_barrier_waited + 1))
+          [ "$_agmsg_barrier_waited" -ge 200 ] && break # 10s safety cap
+        done
+      fi
     fi
   fi
 done
@@ -220,28 +233,10 @@ fi
 
 # New messages found.
 #
-# This is the delivering path, and the rows above were marked read INSIDE the
-# loop before we got here. The documented hook contract is that stdout is read
-# as control JSON only on exit 0. Measured (Claude Code 2.1.226, one-shot
-# `claude -p`, a synthetic probe hook -- not this script, not an interactive
-# session): the stdout control JSON was processed on exit 0, 1, 2, and 3 alike.
-# So this codebase currently depends on an area where the documented contract
-# and the observed implementation disagree -- see
-# https://github.com/fujibee/agmsg/issues/658 for the measurement.
-#
-# This fix is correct either way, which is why it doesn't bet on which
-# behavior is real: if a runtime DOES discard stdout on non-zero exit (as
-# documented), leaving the old `exit "$CLAIM_RC"` here would throw away the
-# payload that already cost these rows their unread state -- consumed and
-# never shown, worse than the failure this status was meant to protect
-# against. If a runtime does NOT discard it (as measured here), the old
-# non-zero exit was not needed to preserve the delivery or report the
-# partial failure, because the payload already carries both.
-# Exiting 0 unconditionally on this path is safe under both, so delivery and
-# the report are separated: the messages go out with exit 0, and the partial
-# failure is stated inside the payload the operator actually reads. Nothing
-# upstream mistakes a partial poll for a complete one, because the text says
-# which team stopped it and that the rest are still unread.
+# The delivering path keeps its leases until the JSON payload has been written.
+# The hook contract consumes stdout only on exit 0, so retain exit 0 here and
+# carry a partial-read diagnostic inside the payload. ACK means only that the
+# receiver successfully handed this payload to its host, never task completion.
 if [ -n "$OUTPUT" ]; then
   if [ "$CLAIM_RC" -ne 0 ]; then
     OUTPUT+="agmsg: this poll stopped early — team '$CLAIM_FAILED_TEAM' could not be read (status $CLAIM_RC)."$'\n'
@@ -249,11 +244,17 @@ if [ -n "$OUTPUT" ]; then
   fi
   # Escape for JSON: backslash, double-quote, newlines, tabs (macOS/Linux compatible)
   ESCAPED=$(printf '%s' "$OUTPUT" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g' | awk '{if(NR>1) printf "\\n"; printf "%s",$0}')
-  cat <<ENDJSON
-{
-  "decision": "block",
-  "reason": "$ESCAPED"
-}
-ENDJSON
+  PAYLOAD=$(printf '{\n  "decision": "block",\n  "reason": "%s"\n}\n' "$ESCAPED")
+  if ! printf '%s' "$PAYLOAD"; then
+    release_claims
+    trap - EXIT
+    printf '%s\n' "agmsg check-inbox: stdout handoff failed; released claimed messages." >&2 || true
+    exit 1
+  fi
+  for ((i = 0; i < ${#CLAIM_IDS[@]}; i++)); do
+    if ! agmsg_ack_claim "${CLAIM_IDS[$i]}" "${CLAIM_OWNERS[$i]}" check_inbox_stdout; then
+      printf 'agmsg check-inbox: could not acknowledge message %s; it will reappear after its lease expires.\n' "${CLAIM_IDS[$i]}" >&2
+    fi
+  done
   exit 0
 fi
