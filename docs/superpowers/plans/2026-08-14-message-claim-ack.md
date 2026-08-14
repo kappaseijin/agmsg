@@ -44,7 +44,7 @@ timestamp: "2026-08-14T23:37:57+09:00"
 - Consumes: `messages(id, team, from_agent, to_agent, body, created_at, read_at)`。
 - Produces: `message_claims`、`message_receipts`、`agmsg_claim_next`、`agmsg_claim_id`、`agmsg_ack_claim`、`agmsg_release_claim`。
 
-- [ ] **Step 1: claim exclusion の failing test を書く**
+- [x] **Step 1: claim exclusion の failing test を書く**
 
 `tests/test_claims.bats` に、同一 message を daemon-a が claim した後 daemon-b が空 output を受ける test を追加する。
 
@@ -56,13 +56,13 @@ run agmsg_claim_next team alice daemon-b 60
 [ -z "$output" ]
 ```
 
-- [ ] **Step 2: failing test を実行する**
+- [x] **Step 2: failing test を実行する**
 
 Run: `bats tests/test_claims.bats`
 
 Expected: FAIL because `scripts/lib/claims.sh` does not exist.
 
-- [ ] **Step 3: idempotent schema と claim API を実装する**
+- [x] **Step 3: idempotent schema と claim API を実装する**
 
 `init-db.sh` に次を追加し、`claims.sh` では `BEGIN IMMEDIATE` 内で expired claim を削除してから `INSERT OR IGNORE` する。
 
@@ -81,13 +81,13 @@ CREATE TABLE IF NOT EXISTS message_receipts (
 );
 ```
 
-- [ ] **Step 4: release、wrong-owner ACK、TTL reclaim の tests を追加して green にする**
+- [x] **Step 4: release、wrong-owner ACK、TTL reclaim の tests を追加して green にする**
 
 Run: `bats tests/test_claims.bats`
 
 Expected: claim exclusion、release/reclaim、wrong owner rejection、TTL reclaim、escaped body の全 case が PASS。
 
-- [ ] **Step 5: thin CLI を追加する**
+- [x] **Step 5: thin CLI を追加する**
 
 `claim.sh` は `next`、`claim`、`ack`、`release` を library に 1 対 1 で委譲する。
 
