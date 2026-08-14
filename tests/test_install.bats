@@ -81,7 +81,7 @@ teardown() {
   grep -Fq "$FAKE_HOME/.agents/skills/agmsg/scripts/guards/git-push-owner-guard.sh" "$guard"
   grep -Fq "$real_bin/git" "$guard"
   ! grep -q '__AGMSG_.*__' "$guard"
-  [ "$(env HOME="$FAKE_HOME" PATH="$FAKE_HOME/.agents/bin:$real_bin:/usr/bin:/bin" command -v git)" = "$guard" ]
+  [ "$(env HOME="$FAKE_HOME" PATH="$FAKE_HOME/.agents/bin:$real_bin:/usr/bin:/bin" bash -c 'command -v git')" = "$guard" ]
 }
 
 @test "install: git push owner guard refuses to overwrite a non-agmsg git" {
