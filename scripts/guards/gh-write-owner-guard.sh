@@ -35,6 +35,10 @@ PARSED_REPO=''
 API_METHOD=''
 API_HAS_PARAMS=0
 API_PARSE_ERROR=0
+API_ENDPOINT=''
+API_GRAPHQL_QUERY=''
+API_GRAPHQL_QUERY_COUNT=0
+API_HAS_INPUT=0
 
 die() {
   echo "error: gh-write-owner-guard: $*" >&2
@@ -298,11 +302,26 @@ collect_destination_flags() {
   REQUEST_HOST="$(ascii_lower "$REQUEST_HOST")"
 }
 
+record_api_field() {
+  local field="$1"
+  API_HAS_PARAMS=1
+  case "$field" in
+    query=*)
+      API_GRAPHQL_QUERY_COUNT=$((API_GRAPHQL_QUERY_COUNT + 1))
+      [ "$API_GRAPHQL_QUERY_COUNT" -eq 1 ] && API_GRAPHQL_QUERY="${field#query=}"
+      ;;
+  esac
+}
+
 parse_api_args() {
   local tok skip_next=0 skip_kind='' after_double_dash=0 seen_api=0
   API_METHOD=''
   API_HAS_PARAMS=0
   API_PARSE_ERROR=0
+  API_ENDPOINT=''
+  API_GRAPHQL_QUERY=''
+  API_GRAPHQL_QUERY_COUNT=0
+  API_HAS_INPUT=0
   for tok in "$@"; do
     if [ "$seen_api" -eq 0 ]; then
       [ "$tok" = api ] && seen_api=1
@@ -310,9 +329,11 @@ parse_api_args() {
     fi
     [ "$after_double_dash" -eq 1 ] && continue
     if [ "$skip_next" -eq 1 ]; then
-      if [ "$skip_kind" = method ]; then
-        API_METHOD="$tok"
-      fi
+      case "$skip_kind" in
+        method) API_METHOD="$tok" ;;
+        field) record_api_field "$tok" ;;
+        input) API_HAS_PARAMS=1; API_HAS_INPUT=1 ;;
+      esac
       skip_next=0
       skip_kind=''
       continue
@@ -327,16 +348,52 @@ parse_api_args() {
         ;;
       --method=*) API_METHOD="${tok#*=}" ;;
       -X?*) API_METHOD="${tok#-X}"; API_METHOD="${API_METHOD#=}" ;;
-      --field|-f|--raw-field|-F|--input)
-        API_HAS_PARAMS=1
+      --field|-f|--raw-field|-F)
         skip_next=1
-        skip_kind=param
+        skip_kind=field
         ;;
-      --field=*|-f?*|--raw-field=*|-F?*|--input=*) API_HAS_PARAMS=1 ;;
-      *) ;;
+      --input)
+        API_HAS_PARAMS=1
+        API_HAS_INPUT=1
+        skip_next=1
+        skip_kind=input
+        ;;
+      --field=*) record_api_field "${tok#*=}" ;;
+      --raw-field=*) record_api_field "${tok#*=}" ;;
+      -f?*) record_api_field "${tok#-f}" ;;
+      -F?*) record_api_field "${tok#-F}" ;;
+      --input=*)
+        API_HAS_PARAMS=1
+        API_HAS_INPUT=1
+        ;;
+      --header|-H|--hostname|--cache|--jq|--template|--config-dir)
+        skip_next=1
+        skip_kind=option
+        ;;
+      --header=*|--hostname=*|--cache=*|--jq=*|--template=*|--config-dir=*) ;;
+      -*) ;;
+      *)
+        if [ -z "$API_ENDPOINT" ]; then
+          API_ENDPOINT="$tok"
+        else
+          API_PARSE_ERROR=1
+        fi
+        ;;
     esac
   done
-  [ "$skip_kind" = method ] && API_PARSE_ERROR=1
+  [ -z "$skip_kind" ] || API_PARSE_ERROR=1
+}
+
+is_safe_graphql_query() {
+  [ "$API_ENDPOINT" = graphql ] || return 1
+  [ -z "$API_METHOD" ] || return 1
+  [ "$API_HAS_INPUT" -eq 0 ] || return 1
+  [ "$API_GRAPHQL_QUERY_COUNT" -eq 1 ] || return 1
+  printf '%s' "$API_GRAPHQL_QUERY" | LC_ALL=C grep -Eq '^[[:space:]]*query[[:space:]]' || return 1
+  if printf '%s' "$API_GRAPHQL_QUERY" | LC_ALL=C grep -Eq '(^|[^A-Za-z0-9_])(mutation|subscription)([^A-Za-z0-9_]|$)'; then
+    return 1
+  fi
+  return 0
 }
 
 is_read_only_operation() {
@@ -347,6 +404,10 @@ is_read_only_operation() {
     api)
       parse_api_args "$@"
       [ "$API_PARSE_ERROR" -eq 0 ] || return 1
+      is_safe_graphql_query && return 0
+      if [ "$API_ENDPOINT" = graphql ] && [ "$API_HAS_PARAMS" -eq 1 ]; then
+        return 1
+      fi
       local method
       method="$(ascii_lower "$API_METHOD")"
       if [ -n "$method" ]; then

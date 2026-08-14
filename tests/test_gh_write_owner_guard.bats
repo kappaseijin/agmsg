@@ -241,6 +241,7 @@ assert_rejected() {
   [ ! -s "$FAKE_READ_LOG" ]
 
   assert_rejected api graphql -X POST -f 'query=query TeamWorkAudit { viewer { login } }'
+  assert_rejected api graphql -X GET -f 'query=query TeamWorkAudit { viewer { login } }'
 }
 
 @test "GHG-16: launcher neutralizes BASH_ENV before the guard starts" {
