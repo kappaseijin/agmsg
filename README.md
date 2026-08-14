@@ -417,14 +417,43 @@ See [docs/opencode.md](docs/opencode.md) for full setup instructions.
 ~/.agents/skills/<cmd>/scripts/inbox.sh <team> <agent_id>
 ~/.agents/skills/<cmd>/scripts/message-status.sh <team> <agent_id> [--format human|json]
 ~/.agents/skills/<cmd>/scripts/history.sh <team> [agent_id] [limit]
-~/.agents/skills/<cmd>/scripts/team.sh <team>
-~/.agents/skills/<cmd>/scripts/whoami.sh <project_path> <type>
+~/.agents/skills/<cmd>/scripts/join.sh <team> <agent_id> <type> <project_path> [--role <role>] [--kind <seat|human|service>] [--force]
+~/.agents/skills/<cmd>/scripts/team.sh <team> [--format human|json]
+~/.agents/skills/<cmd>/scripts/whoami.sh <project_path> [type] [--format human|json]
 ~/.agents/skills/<cmd>/scripts/delivery.sh set <mode> <type> <project_path>
 ~/.agents/skills/<cmd>/scripts/delivery.sh status [<type> <project_path>]
 ~/.agents/skills/<cmd>/scripts/reset.sh [--no-resolve] <project_path> <type> [agent_id] [session_id]
 ```
 
 `send.sh` takes four positional arguments — `<team> <from> <to> "<message>"` — plus an optional `--force`. The flag may appear before, between, or after the positional arguments. Unknown options and extra arguments fail with a diagnostic; use `--` before a positional value that intentionally starts with `-`. Quote the message so the shell sees it as one argument; an unquoted message with spaces will be misparsed. Both `from` and `to` must already be registered in `<team>`; an unregistered name errors out (listing the currently registered names) instead of silently storing an undeliverable message. Pass `--force` to bypass this check for an intentional pre-registration send.
+
+### Machine-readable team roster
+
+New teams created by `join.sh` have a versioned roster contract. Give a
+member's role and kind explicitly when registering it:
+
+```bash
+~/.agents/skills/<cmd>/scripts/join.sh demo architect codex "$(pwd)" \
+  --role architect --kind seat
+~/.agents/skills/<cmd>/scripts/team.sh demo --format json
+~/.agents/skills/<cmd>/scripts/whoami.sh "$(pwd)" codex --format json
+```
+
+`--kind` is one of `seat`, `human`, or `service`. If omitted, `join.sh`
+records the explicit defaults `kind: seat` and `role: unassigned`; it never
+derives either field from the agent name or runtime. A later `join.sh` with
+`--role` or `--kind` updates that member's metadata.
+
+The JSON commands return `schemaVersion: 1`, stable member records
+(`name`, `kind`, `role`, and `registrations`), and for `whoami.sh` the lookup
+`runtime`, resolved `session.project`, and exact matching registrations.
+`whoami.sh` returns an empty `registrations` array when no member matches.
+They report roster structure only: use `message-status.sh` or
+`delivery.sh status` for delivery/liveness information.
+
+Existing team configs remain usable through the human default output. JSON
+mode does not guess missing fields: a legacy or incomplete matching config
+returns exit code 2 with `schema error:` on stderr and no JSON on stdout.
 
 ### Message delivery state
 

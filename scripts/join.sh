@@ -1,18 +1,62 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: join.sh <team> <agent_id> <type> <project_path> [--force]
+# Usage: join.sh <team> <agent_id> <type> <project_path> [--role <role>] [--kind <seat|human|service>] [--force]
 #
 # Adds an agent to a team. Creates the team if it doesn't exist.
 
-TEAM="${1:?Usage: join.sh <team> <agent_id> <type> <project_path> [--force]}"
-AGENT_ID="${2:?Missing agent_id}"
-AGENT_TYPE="${3:?Missing type (a registered type under scripts/drivers/types/<name>/)}"
-PROJECT_PATH="${4:?Missing project_path}"
-FORCE=0
-if [ "${5:-}" = "--force" ]; then
-  FORCE=1
+if [ "$#" -lt 4 ]; then
+  echo "Usage: join.sh <team> <agent_id> <type> <project_path> [--role <role>] [--kind <seat|human|service>] [--force]" >&2
+  exit 1
 fi
+
+TEAM="$1"
+AGENT_ID="$2"
+AGENT_TYPE="$3"
+PROJECT_PATH="$4"
+shift 4
+
+FORCE=0
+MEMBER_ROLE="unassigned"
+MEMBER_KIND="seat"
+ROLE_SET=0
+KIND_SET=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --force)
+      FORCE=1
+      ;;
+    --role)
+      [ "$#" -ge 2 ] || { echo "Error: --role requires a value" >&2; exit 1; }
+      MEMBER_ROLE="$2"
+      ROLE_SET=1
+      shift
+      ;;
+    --kind)
+      [ "$#" -ge 2 ] || { echo "Error: --kind requires a value" >&2; exit 1; }
+      MEMBER_KIND="$2"
+      KIND_SET=1
+      shift
+      ;;
+    *)
+      echo "Error: unknown join option: $1" >&2
+      exit 1
+      ;;
+  esac
+  shift
+done
+
+if [ -z "$MEMBER_ROLE" ]; then
+  echo "Error: --role must not be empty" >&2
+  exit 1
+fi
+case "$MEMBER_KIND" in
+  seat|human|service) ;;
+  *)
+    echo "Error: --kind must be one of: seat, human, service" >&2
+    exit 1
+    ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck disable=SC1091
@@ -67,8 +111,9 @@ agmsg_lock_acquire "$TEAMS_DIR/$TEAM" || exit 1
 
 # --- Ensure team config exists ---
 if [ ! -f "$TEAM_CONFIG" ]; then
-  INITIAL_CONFIG=$(printf '{\n  "name": "%s",\n  "agents": {},\n  "created_at": "%s"\n}' \
-    "$TEAM" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")
+  TEAM_SQL=$(printf '%s' "$TEAM" | sed "s/'/''/g")
+  INITIAL_CONFIG=$(sqlite3 :memory: \
+    "SELECT json_object('schemaVersion', 1, 'name', '$TEAM_SQL', 'agents', json('{}'), 'created_at', '$(date -u +%Y-%m-%dT%H:%M:%SZ)');")
   agmsg_write_atomic "$TEAM_CONFIG" "$INITIAL_CONFIG"
   echo "Created team: $TEAM"
 fi
@@ -106,6 +151,8 @@ fi
 CONFIG_SQL=$(agmsg_sql_readfile_path "$TEAM_CONFIG")
 AGENT_TYPE_SQL=$(printf '%s' "$AGENT_TYPE" | sed "s/'/''/g")
 PROJECT_SQL=$(printf '%s' "$PROJECT_PATH" | sed "s/'/''/g")
+MEMBER_ROLE_SQL=$(printf '%s' "$MEMBER_ROLE" | sed "s/'/''/g")
+MEMBER_KIND_SQL=$(printf '%s' "$MEMBER_KIND" | sed "s/'/''/g")
 PROJECT_SQL_IN=$(agmsg_project_sql_in_list "$PROJECT_PATH")
 REGISTRATION=$(sqlite3 :memory: "SELECT json_object('type', '$AGENT_TYPE_SQL', 'project', '$PROJECT_SQL');")
 REGISTRATION_ESCAPED=$(printf '%s' "$REGISTRATION" | sed "s/'/''/g")
@@ -118,7 +165,8 @@ EXISTING=$(agmsg_sqlite_mem "
 ")
 
 if [ -z "$EXISTING" ] || [ "$EXISTING" = "null" ]; then
-  AGENT_OBJ=$(sqlite3 :memory: "SELECT json_object('registrations', json_array(json('$REGISTRATION_ESCAPED')));")
+  AGENT_OBJ=$(sqlite3 :memory: \
+    "SELECT json_object('kind', '$MEMBER_KIND_SQL', 'role', '$MEMBER_ROLE_SQL', 'registrations', json_array(json('$REGISTRATION_ESCAPED')));")
 else
   EXISTING_ESCAPED=$(printf '%s' "$EXISTING" | sed "s/'/''/g")
   NORMALIZED=$(agmsg_sqlite_mem "
@@ -156,6 +204,15 @@ else
         json('$REGISTRATION_ESCAPED')
       );
     ")
+  fi
+
+  if [ "$ROLE_SET" -eq 1 ]; then
+    AGENT_OBJ_ESCAPED=$(printf '%s' "$AGENT_OBJ" | sed "s/'/''/g")
+    AGENT_OBJ=$(agmsg_sqlite_mem "SELECT json_set('$AGENT_OBJ_ESCAPED', '\$.role', '$MEMBER_ROLE_SQL');")
+  fi
+  if [ "$KIND_SET" -eq 1 ]; then
+    AGENT_OBJ_ESCAPED=$(printf '%s' "$AGENT_OBJ" | sed "s/'/''/g")
+    AGENT_OBJ=$(agmsg_sqlite_mem "SELECT json_set('$AGENT_OBJ_ESCAPED', '\$.kind', '$MEMBER_KIND_SQL');")
   fi
 fi
 
