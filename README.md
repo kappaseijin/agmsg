@@ -421,7 +421,7 @@ See [docs/opencode.md](docs/opencode.md) for full setup instructions.
 ~/.agents/skills/<cmd>/scripts/team.sh <team> [--format human|json]
 ~/.agents/skills/<cmd>/scripts/whoami.sh <project_path> [type] [--format human|json]
 ~/.agents/skills/<cmd>/scripts/delivery.sh set <mode> <type> <project_path>
-~/.agents/skills/<cmd>/scripts/delivery.sh status [<type> <project_path>]
+~/.agents/skills/<cmd>/scripts/delivery.sh status [<type> <project_path>] [--format human|json]
 ~/.agents/skills/<cmd>/scripts/reset.sh [--no-resolve] <project_path> <type> [agent_id] [session_id]
 ```
 
@@ -454,6 +454,35 @@ They report roster structure only: use `message-status.sh` or
 Existing team configs remain usable through the human default output. JSON
 mode does not guess missing fields: a legacy or incomplete matching config
 returns exit code 2 with `schema error:` on stderr and no JSON on stdout.
+
+### Delivery capability JSON
+
+Use the JSON status command before automatically assigning work to a seat:
+
+```bash
+~/.agents/skills/<cmd>/scripts/delivery.sh status codex "$(pwd)" --format json
+~/.agents/skills/<cmd>/scripts/delivery.sh status claude-code "$(pwd)" --format json
+```
+
+The result has `schemaVersion: 1`, the requested `type` and `project`, an
+aggregate `runtime`, `liveness`, `sessionId`, `deliverable`, receipt counts,
+evidence, and one record per registered role in `seats`. A consumer may
+dispatch to a role only when its `deliverable` is the JSON boolean `true`.
+
+- `true` means agmsg observed a live, role-bound receiver.
+- `false` means delivery is off, missing, or stale with a concrete reason.
+- `"unknown"` means the runtime cannot prove a current receiver; treat it as
+  non-dispatchable until it becomes `true`.
+
+For Claude Code, `true` requires a live exclusive `watch.sh` watcher for that
+role, not merely a SessionStart hook. For Codex, it requires a live bridge with
+matching metadata and the role's recorded Codex session. Other runtimes report
+`"unknown"` when agmsg has no type-specific liveness probe; configuration alone
+never makes them dispatchable.
+
+The nested `receipt` records queued, claimed, handed-off, and legacy-unknown
+messages. `handedOff` acknowledges delivery to the receiver only. It does not
+mean the role finished the task, closed an Issue, or merged a PR.
 
 ### Message delivery state
 

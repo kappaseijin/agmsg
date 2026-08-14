@@ -5,7 +5,7 @@ set -euo pipefail
 #
 # Usage:
 #   delivery.sh set <mode> <type> <project_path>
-#   delivery.sh status [<type> <project_path>]
+#   delivery.sh status [<type> <project_path>] [--format human|json]
 #   delivery.sh stop
 #   delivery.sh restart [<project_path> <type>]
 #
@@ -273,6 +273,13 @@ agmsg_delivery_load_plug() {
     . "$tdir/_delivery.sh"
   fi
 }
+
+# Machine-readable delivery capability is intentionally loaded after the
+# default status/plugin functions above: it calls resolve_hooks_file and shares
+# the same project/type helpers, while the no-flag human branch below remains
+# byte-for-byte on the existing status path.
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/lib/delivery-capability.sh"
 
 apply_settings() {
   local type="$1" project="$2" mode="$3"
@@ -574,8 +581,54 @@ do_set() {
 }
 
 do_status() {
-  local TYPE="${1:-}"
-  local PROJECT="${2:-}"
+  local FORMAT="human"
+  local POSITIONAL=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --format)
+        [ "$#" -ge 2 ] || { echo "delivery.sh status: --format needs a value." >&2; return 2; }
+        FORMAT="$2"
+        shift 2
+        ;;
+      --format=*)
+        FORMAT="${1#--format=}"
+        shift
+        ;;
+      --help|-h)
+        echo "Usage: delivery.sh status [<type> <project_path>] [--format human|json]"
+        return 0
+        ;;
+      --*)
+        echo "delivery.sh status: unknown option '$1'." >&2
+        return 2
+        ;;
+      *)
+        POSITIONAL+=("$1")
+        shift
+        ;;
+    esac
+  done
+  case "$FORMAT" in human|json) ;; *)
+    echo "delivery.sh status: --format must be human or json." >&2
+    return 2
+    ;;
+  esac
+  [ "${#POSITIONAL[@]}" -le 2 ] || {
+    echo "Usage: delivery.sh status [<type> <project_path>] [--format human|json]" >&2
+    return 2
+  }
+
+  local TYPE="${POSITIONAL[0]:-}"
+  local PROJECT="${POSITIONAL[1]:-}"
+
+  if [ "$FORMAT" = "json" ]; then
+    if [ -z "$TYPE" ] || [ -z "$PROJECT" ]; then
+      echo "Usage: delivery.sh status <type> <project_path> --format json" >&2
+      return 2
+    fi
+    agmsg_delivery_capability_json "$TYPE" "$PROJECT"
+    return $?
+  fi
 
   # Mode is derived from the project's settings.local.json — there's no
   # global mode value. When called without <type> <project>, we can't infer
