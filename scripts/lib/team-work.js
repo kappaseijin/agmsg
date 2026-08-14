@@ -2,6 +2,7 @@
 "use strict";
 
 const crypto = require("crypto");
+const childProcess = require("child_process");
 const fs = require("fs");
 
 const WORK_KINDS = new Set([
@@ -13,6 +14,19 @@ const WORK_KINDS = new Set([
 ]);
 const REFERENCE_KINDS = new Set(["issue", "pull_request", "commit", "evidence"]);
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
+const READ_ONLY_COMMANDS = new Set(["validate", "self-check"]);
+const MUTATION_COMMANDS = new Set([
+  "claim",
+  "ack",
+  "renew",
+  "release",
+  "set-state",
+  "link-pr",
+  "writeback",
+]);
+const MUTABLE_STATES = new Set(["acknowledged", "in_progress", "blocked", "completed"]);
+const NON_NEGATIVE_INTEGER = /^(0|[1-9][0-9]*)$/;
+const POSITIVE_INTEGER = /^[1-9][0-9]*$/;
 
 class SchemaError extends Error {}
 
@@ -176,6 +190,7 @@ function validateContractPack(pack, roster, requestedTeam) {
   const seats = rosterSeats(roster, requestedTeam);
   const ids = new Set();
   pack.workItems.forEach((item) => validateWorkItem(item, seats, ids));
+  return seats;
 }
 
 function emit(value) {
@@ -190,9 +205,346 @@ function parseJson(text, message) {
   }
 }
 
+function requireArgumentCount(command, args, counts) {
+  if (!counts.includes(args.length)) {
+    schemaError(`invalid arguments for ${command}`);
+  }
+}
+
+function requireCliString(value, name) {
+  if (!isNonEmptyString(value)) schemaError(`${name} must be a non-empty string`);
+  return value;
+}
+
+function parseNonNegativeInteger(value, name, defaultValue) {
+  const raw = value === undefined ? String(defaultValue) : value;
+  if (typeof raw !== "string" || !NON_NEGATIVE_INTEGER.test(raw)) {
+    schemaError(`${name} must be a non-negative integer`);
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed > 2147483647) {
+    schemaError(`${name} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
+function parsePositiveIntegerArgument(value, name) {
+  if (typeof value !== "string" || !POSITIVE_INTEGER.test(value)) {
+    schemaError(`${name} must be a positive integer`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed > 2147483647) {
+    schemaError(`${name} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function parseMutationArguments(command, args) {
+  switch (command) {
+    case "claim":
+    case "renew": {
+      requireArgumentCount(command, args, [2, 3]);
+      return {
+        workItemId: requireCliString(args[0], "work-item-id"),
+        actor: requireCliString(args[1], "actor-seat"),
+        ttlSeconds: parseNonNegativeInteger(args[2], "ttl-seconds", 300),
+      };
+    }
+    case "ack":
+      requireArgumentCount(command, args, [2, 3]);
+      return {
+        workItemId: requireCliString(args[0], "work-item-id"),
+        actor: requireCliString(args[1], "actor-seat"),
+        evidence: args[2] === undefined ? "owner_ack" : requireCliString(args[2], "evidence"),
+      };
+    case "release":
+      requireArgumentCount(command, args, [2]);
+      return {
+        workItemId: requireCliString(args[0], "work-item-id"),
+        actor: requireCliString(args[1], "actor-seat"),
+      };
+    case "set-state": {
+      requireArgumentCount(command, args, [3]);
+      const state = requireCliString(args[2], "state");
+      if (!MUTABLE_STATES.has(state)) schemaError(`unsupported state: ${state}`);
+      return {
+        workItemId: requireCliString(args[0], "work-item-id"),
+        actor: requireCliString(args[1], "actor-seat"),
+        state,
+      };
+    }
+    case "link-pr": {
+      requireArgumentCount(command, args, [5]);
+      const relation = requireCliString(args[4], "relation");
+      if (relation !== "contributes" && relation !== "closes") {
+        schemaError("relation must be contributes or closes");
+      }
+      return {
+        workItemId: requireCliString(args[0], "work-item-id"),
+        actor: requireCliString(args[1], "actor-seat"),
+        repository: requireCliString(args[2], "repository"),
+        number: parsePositiveIntegerArgument(args[3], "PR number"),
+        relation,
+      };
+    }
+    case "writeback":
+      requireArgumentCount(command, args, [3]);
+      return {
+        workItemId: requireCliString(args[0], "work-item-id"),
+        actor: requireCliString(args[1], "actor-seat"),
+        evidence: requireCliString(args[2], "evidence"),
+      };
+    default:
+      throw new Error(`unsupported mutation command: ${command}`);
+  }
+}
+
+function findWorkItem(pack, workItemId) {
+  const item = pack.workItems.find((candidate) => candidate.workItem.id === workItemId);
+  if (!item) schemaError(`work item does not exist: ${workItemId}`);
+  return item;
+}
+
+function requireSeatActor(seats, actor) {
+  const member = seats.get(actor);
+  if (!member) schemaError(`actor seat does not exist: ${actor}`);
+  if (member.kind !== "seat") schemaError(`actor must be a seat: ${actor}`);
+  return {
+    member,
+    isManager: member.role === "manager",
+  };
+}
+
+function requireClaimAuthority(input, item, actorInfo) {
+  if (input.actor !== item.ownerSeat && !actorInfo.isManager) {
+    schemaError(`actor is not the declared owner or manager: ${input.actor}`);
+  }
+}
+
+function requireStateAuthority(input, item, actorInfo) {
+  if (input.actor !== item.ownerSeat && !actorInfo.isManager) {
+    schemaError(`actor is not the declared owner or manager: ${input.actor}`);
+  }
+}
+
+function sqlLiteral(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function currentResultSql(team, workItemId) {
+  return `
+SELECT json_object(
+  'schemaVersion', 1,
+  'team', team,
+  'workItemId', work_item_id,
+  'revision', revision,
+  'state', state,
+  'leaseOwner', lease_owner,
+  'leaseExpiresAt', lease_expires_at,
+  'envelopeDigest', envelope_digest,
+  'lastAction', last_action
+)
+FROM team_work_current
+WHERE team = ${sqlLiteral(team)} AND work_item_id = ${sqlLiteral(workItemId)};
+`;
+}
+
+function runSqliteMutation(dbPath, mutationSql, resultSql) {
+  const script = [
+    ".bail on",
+    ".timeout 5000",
+    "BEGIN IMMEDIATE;",
+    mutationSql,
+    "SELECT changes();",
+    resultSql,
+    "COMMIT;",
+  ].join("\n");
+  const result = childProcess.spawnSync("sqlite3", [dbPath], {
+    encoding: "utf8",
+    input: script,
+    maxBuffer: 1024 * 1024,
+  });
+  if (result.error) {
+    if (result.error.code === "ENOENT") throw new Error("team-work requires sqlite3 on PATH");
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    const detail = String(result.stderr || "").trim() || "sqlite3 mutation failed";
+    throw new Error(detail);
+  }
+
+  const lines = String(result.stdout || "")
+    .replace(/\r/g, "")
+    .trim()
+    .split("\n")
+    .filter((line) => line.length > 0);
+  const changes = Number(lines[0]);
+  if (changes !== 1) schemaError("mutation rejected");
+  if (lines.length < 2) throw new Error("sqlite3 mutation did not return current state");
+  return parseJson(lines[1], "sqlite3 mutation returned invalid JSON");
+}
+
+function buildMutationSql(context, input) {
+  const now = "CAST(strftime('%s', 'now') AS INTEGER)";
+  const team = sqlLiteral(context.team);
+  const workItemId = sqlLiteral(input.workItemId);
+  const actor = sqlLiteral(input.actor);
+  const contractDigest = sqlLiteral(context.contractDigest);
+  const itemDigest = sqlLiteral(context.itemDigest);
+  const activeHolder = `lease_owner = ${actor} AND lease_expires_at > ${now}`;
+  const stateAuthority = context.isManager ? "1 = 1" : activeHolder;
+  const currentMatch = `
+team = ${team}
+  AND work_item_id = ${workItemId}
+  AND contract_digest = ${contractDigest}
+  AND envelope_digest = ${itemDigest}`;
+
+  switch (context.command) {
+    case "claim": {
+      const source = context.item.workItem.source;
+      const leaseExpiresAt = `(${now} + ${input.ttlSeconds})`;
+      return `
+INSERT INTO team_work_current(
+  team, work_item_id, contract_digest, envelope_digest, owner_seat,
+  source_repository, source_number, revision, state, lease_owner,
+  lease_expires_at, ack_evidence, pr_links_json, writebacks_json,
+  last_action, last_actor, created_at, updated_at
+) VALUES (
+  ${team}, ${workItemId}, ${contractDigest}, ${itemDigest}, ${sqlLiteral(context.item.ownerSeat)},
+  ${sqlLiteral(source.repository)}, ${source.number}, ${context.item.revision}, 'claimed', ${actor},
+  ${leaseExpiresAt}, NULL, '[]', '[]', 'claim', ${actor}, ${now}, ${now}
+)
+ON CONFLICT(team, work_item_id) DO UPDATE SET
+  revision = revision + 1,
+  state = 'claimed',
+  lease_owner = ${actor},
+  lease_expires_at = ${leaseExpiresAt},
+  ack_evidence = NULL,
+  last_action = 'claim',
+  last_actor = ${actor},
+  updated_at = ${now}
+WHERE contract_digest = ${contractDigest}
+  AND envelope_digest = ${itemDigest}
+  AND (lease_expires_at IS NULL OR lease_expires_at <= ${now});
+`;
+    }
+    case "ack":
+      return `
+UPDATE team_work_current SET
+  revision = revision + 1,
+  state = 'acknowledged',
+  ack_evidence = ${sqlLiteral(input.evidence)},
+  last_action = 'ack',
+  last_actor = ${actor},
+  updated_at = ${now}
+WHERE ${currentMatch}
+  AND ${activeHolder};
+`;
+    case "renew":
+      return `
+UPDATE team_work_current SET
+  revision = revision + 1,
+  lease_expires_at = (${now} + ${input.ttlSeconds}),
+  last_action = 'renew',
+  last_actor = ${actor},
+  updated_at = ${now}
+WHERE ${currentMatch}
+  AND ${activeHolder};
+`;
+    case "release":
+      return `
+UPDATE team_work_current SET
+  revision = revision + 1,
+  lease_owner = NULL,
+  lease_expires_at = NULL,
+  last_action = 'release',
+  last_actor = ${actor},
+  updated_at = ${now}
+WHERE ${currentMatch}
+  AND ${activeHolder};
+`;
+    case "set-state":
+      return `
+UPDATE team_work_current SET
+  revision = revision + 1,
+  state = ${sqlLiteral(input.state)},
+  last_action = 'set-state',
+  last_actor = ${actor},
+  updated_at = ${now}
+WHERE ${currentMatch}
+  AND (${stateAuthority});
+`;
+    case "link-pr":
+      return `
+UPDATE team_work_current SET
+  revision = revision + 1,
+  pr_links_json = json_insert(
+    pr_links_json,
+    '$[#]',
+    json_object('repository', ${sqlLiteral(input.repository)}, 'number', ${input.number}, 'relation', ${sqlLiteral(input.relation)})
+  ),
+  last_action = 'link-pr',
+  last_actor = ${actor},
+  updated_at = ${now}
+WHERE ${currentMatch}
+  AND (${stateAuthority})
+  AND NOT EXISTS (
+    SELECT 1 FROM json_each(pr_links_json) AS link
+    WHERE json_extract(link.value, '$.repository') = ${sqlLiteral(input.repository)}
+      AND json_extract(link.value, '$.number') = ${input.number}
+      AND json_extract(link.value, '$.relation') = ${sqlLiteral(input.relation)}
+  );
+`;
+    case "writeback":
+      return `
+UPDATE team_work_current SET
+  revision = revision + 1,
+  writebacks_json = json_insert(
+    writebacks_json,
+    '$[#]',
+    json_object('evidence', ${sqlLiteral(input.evidence)}, 'recordedAt', ${now})
+  ),
+  last_action = 'writeback',
+  last_actor = ${actor},
+  updated_at = ${now}
+WHERE ${currentMatch}
+  AND (${stateAuthority});
+`;
+    default:
+      throw new Error(`unsupported mutation command: ${context.command}`);
+  }
+}
+
+function executeMutation(command, team, pack, seats, args) {
+  const input = parseMutationArguments(command, args);
+  const item = findWorkItem(pack, input.workItemId);
+  const actorInfo = requireSeatActor(seats, input.actor);
+
+  if (command === "claim") requireClaimAuthority(input, item, actorInfo);
+  if (command === "set-state" || command === "link-pr" || command === "writeback") {
+    requireStateAuthority(input, item, actorInfo);
+  }
+  if (command === "link-pr" && input.relation === "closes" && input.repository !== item.workItem.source.repository) {
+    schemaError("closes relation repository must match workItem.source");
+  }
+
+  const dbPath = process.env.AGMSG_TEAM_WORK_DB;
+  if (!isNonEmptyString(dbPath)) throw new Error("team-work mutation database is unavailable");
+  const context = {
+    command,
+    team,
+    item,
+    itemDigest: envelopeDigest(item),
+    contractDigest: sha256Digest(pack),
+    isManager: actorInfo.isManager,
+  };
+  const mutationSql = buildMutationSql(context, input);
+  return runSqliteMutation(dbPath, mutationSql, currentResultSql(team, input.workItemId));
+}
+
 function main() {
-  const [command, team, packPath] = process.argv.slice(2);
-  if (command !== "validate" && command !== "self-check") {
+  const [command, team, packPath, ...args] = process.argv.slice(2);
+  if (!READ_ONLY_COMMANDS.has(command) && !MUTATION_COMMANDS.has(command)) {
     process.stderr.write(`Error: unknown team-work command: ${command || ""}\n`);
     process.exitCode = 1;
     return;
@@ -207,7 +559,7 @@ function main() {
 
   const pack = parseJson(packText, "contract pack is not valid JSON");
   const roster = parseJson(fs.readFileSync(0, "utf8"), "roster contract is not valid JSON");
-  validateContractPack(pack, roster, team);
+  const seats = validateContractPack(pack, roster, team);
 
   const validation = {
     schemaVersion: 1,
@@ -220,18 +572,23 @@ function main() {
     return;
   }
 
-  emit(Object.assign(validation, {
-    contractDigest: sha256Digest(pack),
-    items: pack.workItems.map((item) => {
-      const canonicalEnvelope = Object.assign({}, item);
-      delete canonicalEnvelope.envelopeDigest;
-      return {
-        id: item.workItem.id,
-        envelopeDigest: envelopeDigest(item),
-        canonicalJson: canonicalJson(canonicalEnvelope),
-      };
-    }),
-  }));
+  if (command === "self-check") {
+    emit(Object.assign(validation, {
+      contractDigest: sha256Digest(pack),
+      items: pack.workItems.map((item) => {
+        const canonicalEnvelope = Object.assign({}, item);
+        delete canonicalEnvelope.envelopeDigest;
+        return {
+          id: item.workItem.id,
+          envelopeDigest: envelopeDigest(item),
+          canonicalJson: canonicalJson(canonicalEnvelope),
+        };
+      }),
+    }));
+    return;
+  }
+
+  emit(executeMutation(command, team, pack, seats, args));
 }
 
 try {
