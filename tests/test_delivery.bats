@@ -9,9 +9,14 @@ setup() {
   # when the suite runs under an agent process. Composite path: test_watch.bats.
   export AGMSG_AGENT_PID=""
   export TEST_PROJECT="$(mktemp -d)"
+  DELIVERY_TEST_WATCH_PID=""
 }
 
 teardown() {
+  if [ -n "${DELIVERY_TEST_WATCH_PID:-}" ]; then
+    kill "$DELIVERY_TEST_WATCH_PID" 2>/dev/null || true
+    wait "$DELIVERY_TEST_WATCH_PID" 2>/dev/null || true
+  fi
   teardown_test_env
   rm -rf "$TEST_PROJECT"
 }
@@ -42,6 +47,15 @@ has_check_inbox() {
 
 settings_file() {
   echo "$TEST_PROJECT/.claude/settings.local.json"
+}
+
+# Read one JSON scalar from a command result. Fixtures in this file use only
+# SQL-safe names/paths, but preserve the normal SQL literal escape so a future
+# JSON payload containing an apostrophe remains a real parser test.
+json_value() {
+  local document="$1" path="$2" escaped
+  escaped=$(printf '%s' "$document" | sed "s/'/''/g")
+  sqlite_mem "SELECT json_extract('$escaped', '$path');"
 }
 
 # --- set <mode> ---
@@ -225,6 +239,205 @@ eperm_pid() {
 @test "delivery status: derives 'off' from settings with no agmsg hooks" {
   run bash "$SCRIPTS/delivery.sh" status claude-code "$TEST_PROJECT"
   [[ "$output" =~ "mode: off" ]]
+}
+
+# --- delivery capability JSON (#39) ---
+
+@test "delivery status JSON: only a live Claude role watcher is deliverable" {
+  skip_on_windows "watcher liveness fixture uses POSIX background process semantics (#39)"
+  bash "$SCRIPTS/join.sh" team alice claude-code "$TEST_PROJECT" >/dev/null
+  bash "$SCRIPTS/delivery.sh" set monitor claude-code "$TEST_PROJECT" >/dev/null
+
+  # A configured SessionStart hook alone has no active receiver.
+  run bash "$SCRIPTS/delivery.sh" status claude-code "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [[ "$output" == \{* ]]
+  [ "$(json_value "$output" '$.deliverable')" = "0" ]
+  [ "$(json_value "$output" '$.liveness')" = "missing" ]
+
+  # watch.sh creates the readiness sentinel only after it has resolved its
+  # exclusive role subscription. The live process is the observable proof that
+  # must turn this seat into a dispatchable receiver.
+  local sid="claude-live.$$"
+  # Bash 3.2 has no BASHPID, so use the test executor's portable PID. A short
+  # poll interval bounds the watcher's internal sleep after teardown without a
+  # fixed readiness delay; the condition helpers below still wait for proof.
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "$sid" "$TEST_PROJECT" claude-code alice </dev/null >/dev/null 2>&1 3>&- &
+  local wpid=$!
+  DELIVERY_TEST_WATCH_PID="$wpid"
+  wait_for_file "$TEST_SKILL_DIR/run/watch.$sid.pid"
+  wait_for_file "$TEST_SKILL_DIR/run/ready.team__alice"
+
+  run bash "$SCRIPTS/delivery.sh" status claude-code "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.deliverable')" = "1" ]
+  [ "$(json_value "$output" '$.sessionId')" = "$sid" ]
+  [ "$(json_value "$output" '$.seats[0].evidence[1].source')" = "watcher" ]
+
+  kill "$wpid" 2>/dev/null || true
+  wait "$wpid" 2>/dev/null || true
+  DELIVERY_TEST_WATCH_PID=""
+}
+
+@test "delivery status JSON: live Codex bridge requires its recorded seat" {
+  skip_on_windows "codex bridge status liveness under Git Bash (#39)"
+  bash "$SCRIPTS/join.sh" team alice codex "$TEST_PROJECT" >/dev/null
+  bash "$SCRIPTS/delivery.sh" set monitor codex "$TEST_PROJECT" >/dev/null
+  _seed_role_record team alice codex-session-1 "$TEST_PROJECT" codex
+  mkdir -p "$TEST_SKILL_DIR/run"
+
+  sleep 60 3>&- &
+  local bpid=$!
+  trap "kill $bpid 2>/dev/null || true; wait $bpid 2>/dev/null || true" EXIT
+  printf '%s\n' "$bpid" > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.pid"
+  cat > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.meta" <<EOF
+pid=$bpid
+project=$TEST_PROJECT
+team=team
+name=alice
+type=codex
+EOF
+
+  run bash "$SCRIPTS/delivery.sh" status codex "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [[ "$output" == \{* ]]
+  [ "$(json_value "$output" '$.deliverable')" = "1" ]
+  [ "$(json_value "$output" '$.sessionId')" = "codex-session-1" ]
+  [ "$(json_value "$output" '$.seats[0].liveness')" = "alive" ]
+
+  kill "$bpid" 2>/dev/null || true
+  wait "$bpid" 2>/dev/null || true
+  trap - EXIT
+}
+
+@test "delivery status JSON: stale Claude readiness is not a live receiver" {
+  skip_on_windows "watcher liveness fixture uses POSIX process semantics (#39)"
+  bash "$SCRIPTS/join.sh" team alice claude-code "$TEST_PROJECT" >/dev/null
+  bash "$SCRIPTS/delivery.sh" set monitor claude-code "$TEST_PROJECT" >/dev/null
+  mkdir -p "$TEST_SKILL_DIR/run"
+  # A crash can leave the advisory readiness file behind. Its owner no longer
+  # exists, so a status consumer must receive a stale/false result, not true.
+  printf '%s\n' 'stale-watcher.999999' > "$TEST_SKILL_DIR/run/ready.team__alice"
+
+  run bash "$SCRIPTS/delivery.sh" status claude-code "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.deliverable')" = "0" ]
+  [ "$(json_value "$output" '$.liveness')" = "stale" ]
+  [ "$(json_value "$output" '$.seats[0].evidence[1].reason')" = "readiness_owner_not_alive" ]
+}
+
+@test "delivery status JSON: Codex metadata mismatch is stale, never deliverable" {
+  skip_on_windows "codex bridge status liveness under Git Bash (#39)"
+  bash "$SCRIPTS/join.sh" team alice codex "$TEST_PROJECT" >/dev/null
+  bash "$SCRIPTS/delivery.sh" set monitor codex "$TEST_PROJECT" >/dev/null
+  _seed_role_record team alice codex-session-mismatch "$TEST_PROJECT" codex
+  mkdir -p "$TEST_SKILL_DIR/run"
+
+  sleep 60 3>&- &
+  local bpid=$!
+  trap "kill $bpid 2>/dev/null || true; wait $bpid 2>/dev/null || true" EXIT
+  printf '%s\n' "$bpid" > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.pid"
+  cat > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.meta" <<EOF
+pid=$bpid
+project=$TEST_PROJECT-other
+team=team
+name=alice
+type=codex
+EOF
+
+  run bash "$SCRIPTS/delivery.sh" status codex "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.deliverable')" = "0" ]
+  [ "$(json_value "$output" '$.liveness')" = "stale" ]
+  [ "$(json_value "$output" '$.seats[0].evidence[1].reason')" = "metadata_mismatch" ]
+
+  kill "$bpid" 2>/dev/null || true
+  wait "$bpid" 2>/dev/null || true
+  trap - EXIT
+}
+
+@test "delivery status JSON: Codex turn mode is not a live delivery claim" {
+  bash "$SCRIPTS/join.sh" team alice codex "$TEST_PROJECT" >/dev/null
+  bash "$SCRIPTS/delivery.sh" set turn codex "$TEST_PROJECT" >/dev/null
+  _seed_role_record team alice codex-turn-session "$TEST_PROJECT" codex
+
+  run bash "$SCRIPTS/delivery.sh" status codex "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.deliverable')" = "0" ]
+  [ "$(json_value "$output" '$.liveness')" = "missing" ]
+  [ "$(json_value "$output" '$.seats[0].evidence[0].state')" = "turn" ]
+}
+
+@test "delivery status JSON: emits multiple seats in stable name order" {
+  bash "$SCRIPTS/join.sh" team zed claude-code "$TEST_PROJECT" >/dev/null
+  bash "$SCRIPTS/join.sh" team amy claude-code "$TEST_PROJECT" >/dev/null
+  bash "$SCRIPTS/delivery.sh" set monitor claude-code "$TEST_PROJECT" >/dev/null
+
+  run bash "$SCRIPTS/delivery.sh" status claude-code "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.seats[0].name')" = "amy" ]
+  [ "$(json_value "$output" '$.seats[1].name')" = "zed" ]
+  [ "$(json_value "$output" '$.deliverable')" = "0" ]
+}
+
+@test "delivery status JSON: unstarted and stale Codex seats never report success" {
+  skip_on_windows "codex bridge status liveness under Git Bash (#39)"
+  bash "$SCRIPTS/join.sh" team alice codex "$TEST_PROJECT" >/dev/null
+  bash "$SCRIPTS/delivery.sh" set monitor codex "$TEST_PROJECT" >/dev/null
+
+  # A configured project without a role/session binding cannot be assumed to
+  # receive messages, even though the bridge may start on a later turn.
+  run bash "$SCRIPTS/delivery.sh" status codex "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [[ "$output" == \{* ]]
+  [ "$(json_value "$output" '$.deliverable')" = "unknown" ]
+  [ "$(json_value "$output" '$.liveness')" = "unknown" ]
+
+  _seed_role_record team alice codex-session-stale "$TEST_PROJECT" codex
+  mkdir -p "$TEST_SKILL_DIR/run"
+  local dead_pid=999999
+  while kill -0 "$dead_pid" 2>/dev/null; do dead_pid=$((dead_pid + 1)); done
+  printf '%s\n' "$dead_pid" > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.pid"
+  cat > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.meta" <<EOF
+pid=$dead_pid
+project=$TEST_PROJECT
+team=team
+name=alice
+type=codex
+EOF
+
+  run bash "$SCRIPTS/delivery.sh" status codex "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.deliverable')" = "0" ]
+  [ "$(json_value "$output" '$.liveness')" = "stale" ]
+}
+
+@test "delivery status JSON: reports receiver handoff separately from task completion" {
+  bash "$SCRIPTS/join.sh" team alice claude-code "$TEST_PROJECT" >/dev/null
+  bash "$SCRIPTS/join.sh" team bob claude-code "$TEST_PROJECT-sender" >/dev/null
+  bash "$SCRIPTS/delivery.sh" set monitor claude-code "$TEST_PROJECT" >/dev/null
+  bash "$SCRIPTS/send.sh" team bob alice "handoff payload" >/dev/null
+  local message_id
+  message_id="$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT id FROM messages WHERE body='handoff payload';")"
+  bash "$SCRIPTS/claim.sh" claim "$message_id" delivery-capability-test 60 >/dev/null
+  bash "$SCRIPTS/claim.sh" ack "$message_id" delivery-capability-test watch_stdout >/dev/null
+
+  run bash "$SCRIPTS/delivery.sh" status claude-code "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [[ "$output" == \{* ]]
+  [ "$(json_value "$output" '$.seats[0].receipt.handedOff')" = "1" ]
+  [ "$(json_value "$output" '$.seats[0].receipt.ackSemantics')" = "receiver_handoff_not_task_completion" ]
+}
+
+@test "delivery status JSON: an unobservable runtime stays unknown" {
+  bash "$SCRIPTS/join.sh" team alice gemini "$TEST_PROJECT" >/dev/null
+  bash "$SCRIPTS/delivery.sh" set turn gemini "$TEST_PROJECT" >/dev/null
+
+  run bash "$SCRIPTS/delivery.sh" status gemini "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [[ "$output" == \{* ]]
+  [ "$(json_value "$output" '$.deliverable')" = "unknown" ]
+  [ "$(json_value "$output" '$.seats[0].evidence[0].reason')" = "runtime_unobservable" ]
 }
 
 # --- rejects unknown mode ---
