@@ -1,0 +1,62 @@
+{
+  "responses": {
+    "issue:kappaseijin/agmsg#42:": {
+      "data": {
+        "repository": {
+          "issue": {
+            "number": 42,
+            "state": "CLOSED",
+            "closedByPullRequestsReferences": {
+              "totalCount": 1,
+              "nodes": [],
+              "pageInfo": {"hasNextPage": true, "endCursor": "issue-page-2"}
+            }
+          }
+        }
+      }
+    },
+    "issue:kappaseijin/agmsg#42:issue-page-2": {
+      "data": {
+        "repository": {
+          "issue": {
+            "number": 42,
+            "state": "CLOSED",
+            "closedByPullRequestsReferences": {
+              "totalCount": 1,
+              "nodes": [{"number": 777, "repository": {"nameWithOwner": "kappaseijin/agmsg"}}],
+              "pageInfo": {"hasNextPage": false, "endCursor": null}
+            }
+          }
+        }
+      }
+    },
+    "pullRequest:kappaseijin/agmsg#777:": {
+      "data": {
+        "repository": {
+          "pullRequest": {
+            "number": 777,
+            "closingIssuesReferences": {
+              "totalCount": 1,
+              "nodes": [],
+              "pageInfo": {"hasNextPage": true, "endCursor": "pr-page-2"}
+            }
+          }
+        }
+      }
+    },
+    "pullRequest:kappaseijin/agmsg#777:pr-page-2": {
+      "data": {
+        "repository": {
+          "pullRequest": {
+            "number": 777,
+            "closingIssuesReferences": {
+              "totalCount": 1,
+              "nodes": [{"number": 42, "repository": {"nameWithOwner": "kappaseijin/agmsg"}}],
+              "pageInfo": {"hasNextPage": false, "endCursor": null}
+            }
+          }
+        }
+      }
+    }
+  }
+}

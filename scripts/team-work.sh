@@ -4,8 +4,8 @@ set -euo pipefail
 # Usage: team-work.sh <command> <team> <contract-pack.json> [command arguments]
 #
 # Validates a work-state contract pack against the selected team's versioned
-# roster JSON contract. Mutating commands use the local SQLite store only;
-# GitHub queries and message delivery remain later team-work slices.
+# roster JSON contract. Mutating commands use the local SQLite store; audit
+# commands read GitHub and local state without changing either one.
 
 COMMAND="${1:-}"
 TEAM="${2:-}"
@@ -15,6 +15,12 @@ case "$COMMAND" in
   validate|self-check)
     if [ "$#" -ne 3 ]; then
       echo "Usage: team-work.sh <validate|self-check> <team> <contract-pack.json>" >&2
+      exit 1
+    fi
+    ;;
+  observe|queue|audit)
+    if [ "$#" -ne 3 ]; then
+      echo "Usage: team-work.sh <observe|queue|audit> <team> <contract-pack.json>" >&2
       exit 1
     fi
     ;;
@@ -80,13 +86,20 @@ else
 fi
 
 case "$COMMAND" in
-  validate|self-check) ;;
+  validate|self-check)
+    printf '%s' "$ROSTER_JSON" | node "$SCRIPT_DIR/lib/team-work.js" "$@"
+    ;;
+  observe|queue|audit)
+    source "$SCRIPT_DIR/lib/storage.sh"
+    AGMSG_TEAM_WORK_DB="$(agmsg_db_path)"
+    export AGMSG_TEAM_WORK_DB
+    printf '%s' "$ROSTER_JSON" | node "$SCRIPT_DIR/lib/team-work-audit.js" "$@"
+    ;;
   *)
     source "$SCRIPT_DIR/lib/storage.sh"
     agmsg_storage_ensure_initialized
     AGMSG_TEAM_WORK_DB="$(agmsg_db_path)"
     export AGMSG_TEAM_WORK_DB
+    printf '%s' "$ROSTER_JSON" | node "$SCRIPT_DIR/lib/team-work.js" "$@"
     ;;
 esac
-
-printf '%s' "$ROSTER_JSON" | node "$SCRIPT_DIR/lib/team-work.js" "$@"

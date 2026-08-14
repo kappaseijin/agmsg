@@ -419,7 +419,7 @@ See [docs/opencode.md](docs/opencode.md) for full setup instructions.
 ~/.agents/skills/<cmd>/scripts/history.sh <team> [agent_id] [limit]
 ~/.agents/skills/<cmd>/scripts/join.sh <team> <agent_id> <type> <project_path> [--role <role>] [--kind <seat|human|service>] [--force]
 ~/.agents/skills/<cmd>/scripts/team.sh <team> [--format human|json]
-~/.agents/skills/<cmd>/scripts/team-work.sh <validate|self-check|claim|ack|renew|release|set-state|link-pr|writeback> <team> <contract-pack.json> ...
+~/.agents/skills/<cmd>/scripts/team-work.sh <validate|self-check|observe|queue|audit|claim|ack|renew|release|set-state|link-pr|writeback> <team> <contract-pack.json> ...
 ~/.agents/skills/<cmd>/scripts/whoami.sh <project_path> [type] [--format human|json]
 ~/.agents/skills/<cmd>/scripts/delivery.sh set <mode> <type> <project_path>
 ~/.agents/skills/<cmd>/scripts/delivery.sh status [<type> <project_path>] [--format human|json]
@@ -486,10 +486,10 @@ messages. `handedOff` acknowledges delivery to the receiver only. It does not
 mean the role finished the task, closed an Issue, or merged a PR.
 ### Read-only work-state contract check
 
-`team-work.sh` validates a versioned work-state contract pack before later
-commands claim work, query GitHub, or deliver a message. It requires `node` on
-`PATH`, reads the selected team's `team.sh --format json` roster, and never
-modifies the pack, team config, GitHub, messages, leases, or agents.
+`validate` and `self-check` validate a versioned work-state contract pack. They
+require `node` on `PATH`, read the selected team's `team.sh --format json`
+roster, and never modify the pack, team config, GitHub, messages, leases, or
+agents.
 
 ```bash
 ~/.agents/skills/<cmd>/scripts/team-work.sh validate demo .team-work.json
@@ -601,6 +601,60 @@ digest, a duplicate PR relation, an unauthorized caller, or a competing live
 lease fails closed with exit code 2 and leaves both tables unchanged. These
 commands do not modify the contract pack, team configuration, `messages`,
 `message_claims`, or `message_receipts`.
+
+### GitHub live audit and work queue
+
+Use these commands to compare the pack and its local lease rows with live
+GitHub Issue / PR state. They require `node` and use authenticated `gh` plus
+`sqlite3` when those live sources are available on `PATH`; an unavailable live
+source becomes an `unknown` result. They read the existing local store but do
+**not** initialize or write it.
+
+```bash
+# See every packed item's observed GitHub/local state.
+~/.agents/skills/<cmd>/scripts/team-work.sh observe demo .team-work.json
+
+# Emit only work that is currently ready to claim.
+~/.agents/skills/<cmd>/scripts/team-work.sh queue demo .team-work.json
+
+# Include closing-relation checks and every safety violation.
+~/.agents/skills/<cmd>/scripts/team-work.sh audit demo .team-work.json
+```
+
+The command fetches each packed source Issue and related PR with GitHub
+GraphQL. Both `Issue.closedByPullRequestsReferences` and
+`PullRequest.closingIssuesReferences` are retrieved through every page. A
+`closes` relation must occur on both sides; a `contributes` relation must not
+close the source Issue. Pack relations and local `link-pr` records are both
+checked. A missing page, API error, unknown relation, one-sided closing
+relation, or a local row whose contract/envelope digest no longer matches the
+pack is never treated as "no work".
+
+Every successful observation is one canonical JSON object. It includes
+`contractDigest`, `sourceDigest`, and `auditDigest`, plus this
+`classificationBasis`:
+
+| Status | Meaning | `queue.ready` |
+| --- | --- | --- |
+| `ready` | One or more packed source Issues are open and have no live matching lease. | Those work items, in pack order. |
+| `fully_allocated` | Open packed Issues all have matching, unexpired local leases. | Empty. |
+| `quiescent` | Every packed source Issue is closed and its checked relations are complete. | Empty. |
+| `unknown` | Evidence is unavailable, incomplete, contradictory, or locally stale. | Empty; do not dispatch from this result. |
+
+`classificationBasis` also records `readyCount`, `openItemCount`,
+`allocatedItemCount`, `closedItemCount`, a stable `reasons` array, and the
+same `sourceDigest`. `observe` returns all item summaries; `queue` adds the
+ready list; `audit` adds `relationChecks` and `violations`. The output uses
+recursively sorted object keys, so its digests and exact JSON are stable for
+the same pack, live responses, and local state.
+
+Malformed packs, invalid command syntax, a missing Node runtime, or an
+unavailable roster remain nonzero errors. In contrast, a live GitHub/local
+source failure returns a valid `unknown` result so a reconciler can record the
+reason while safely withholding work. These commands never create or update a
+GitHub Issue/PR, update a lease, send a message, spawn an agent, or decide a
+remediation action. Their work universe is the supplied pack only; they do not
+discover unlisted repository Issues.
 
 ### Message delivery state
 

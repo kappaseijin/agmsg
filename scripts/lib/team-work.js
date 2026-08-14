@@ -591,14 +591,24 @@ function main() {
   emit(executeMutation(command, team, pack, seats, args));
 }
 
-try {
-  main();
-} catch (error) {
-  if (error instanceof SchemaError) {
-    process.stderr.write(`schema error: ${error.message}\n`);
-    process.exitCode = 2;
-  } else {
-    process.stderr.write(`Error: ${error.message}\n`);
-    process.exitCode = 1;
+module.exports = {
+  SchemaError,
+  canonicalJson,
+  sha256Digest,
+  envelopeDigest,
+  validateContractPack,
+};
+
+if (require.main === module) {
+  try {
+    main();
+  } catch (error) {
+    if (error instanceof SchemaError) {
+      process.stderr.write(`schema error: ${error.message}\n`);
+      process.exitCode = 2;
+    } else {
+      process.stderr.write(`Error: ${error.message}\n`);
+      process.exitCode = 1;
+    }
   }
 }
