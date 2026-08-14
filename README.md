@@ -419,7 +419,7 @@ See [docs/opencode.md](docs/opencode.md) for full setup instructions.
 ~/.agents/skills/<cmd>/scripts/history.sh <team> [agent_id] [limit]
 ~/.agents/skills/<cmd>/scripts/join.sh <team> <agent_id> <type> <project_path> [--role <role>] [--kind <seat|human|service>] [--force]
 ~/.agents/skills/<cmd>/scripts/team.sh <team> [--format human|json]
-~/.agents/skills/<cmd>/scripts/team-work.sh <validate|self-check|observe|queue|audit|claim|ack|renew|release|set-state|link-pr|writeback> <team> <contract-pack.json> ...
+~/.agents/skills/<cmd>/scripts/team-work.sh <validate|self-check|observe|queue|audit|reconcile|watchdog|dispatch|dispatch-ack|claim|ack|renew|release|set-state|link-pr|writeback> <team> <contract-pack.json> ...
 ~/.agents/skills/<cmd>/scripts/whoami.sh <project_path> [type] [--format human|json]
 ~/.agents/skills/<cmd>/scripts/delivery.sh set <mode> <type> <project_path>
 ~/.agents/skills/<cmd>/scripts/delivery.sh status [<type> <project_path>] [--format human|json]
@@ -637,7 +637,7 @@ Every successful observation is one canonical JSON object. It includes
 | Status | Meaning | `queue.ready` |
 | --- | --- | --- |
 | `ready` | One or more packed source Issues are open and have no live matching lease. | Those work items, in pack order. |
-| `fully_allocated` | Open packed Issues all have matching, unexpired local leases. | Empty. |
+| `fully_allocated` | Open packed Issues all have matching, unexpired local leases or dispatch ledger entries. | Empty. |
 | `quiescent` | Every packed source Issue is closed and its checked relations are complete. | Empty. |
 | `unknown` | Evidence is unavailable, incomplete, contradictory, or locally stale. | Empty; do not dispatch from this result. |
 
@@ -655,6 +655,79 @@ reason while safely withholding work. These commands never create or update a
 GitHub Issue/PR, update a lease, send a message, spawn an agent, or decide a
 remediation action. Their work universe is the supplied pack only; they do not
 discover unlisted repository Issues.
+
+### Reconciler, watchdog, and dispatch gate
+
+`reconcile` and `watchdog` run independently of an interactive agent command.
+They consume the same contract pack, roster, live GitHub audit, local lease
+state, and delivery-capability JSON as the commands above. They never call
+`send.sh`, `spawn.sh`, or herdr, and never mutate GitHub. A closed or non-live
+role is reported for remediation; it is not started automatically.
+
+```bash
+# Emit findings and remediation. Without the optional path this is read-only.
+~/.agents/skills/<cmd>/scripts/team-work.sh reconcile demo .team-work.json
+
+# Atomically replace only this requested heartbeat file after one reconcile run.
+~/.agents/skills/<cmd>/scripts/team-work.sh reconcile demo .team-work.json \
+  /tmp/demo-reconciler-heartbeat.json
+
+# Read a heartbeat from a separate process. The default stale limit is 900 seconds.
+~/.agents/skills/<cmd>/scripts/team-work.sh watchdog demo .team-work.json \
+  /tmp/demo-reconciler-heartbeat.json 900
+```
+
+`reconcile` returns canonical JSON with `result` (`healthy` or `attention`),
+`findings`, `remediation`, the G2 `sourceDigest`/`auditDigest`, and a
+`reconcileDigest`. It detects `expired_lease`, `upstream_closed`,
+`orphan_ready`, `writeback_required`, and `stale_state` independently.
+It changes no SQLite state unless an explicit heartbeat path is supplied; the
+parent directory must already exist. The heartbeat records `cycleId`,
+`startedAt`, `finishedAt`, `result`, and `sourceDigest` in canonical JSON.
+
+`watchdog` only reads that heartbeat. It returns canonical JSON with status
+`healthy`, `stale`, or `unknown`, plus `alarm`. A fresh quiescent reconcile is
+healthy and does not produce an alarm. A missing, malformed, future-dated, or
+old heartbeat is never treated as quiescent.
+
+Dispatch is deliberately a two-stage local state transition. First define an
+explicit JSON allowlist of existing seat names, then create a `dispatching`
+entry. The default ACK deadline is 120 seconds.
+
+```bash
+export TEAM_WORK_DISPATCH_ALLOWLIST='["demo_programmer_codex"]'
+
+# Only an exact roster manager may create a dispatching entry.
+~/.agents/skills/<cmd>/scripts/team-work.sh dispatch demo .team-work.json \
+  issue:42 demo_manager_codex 120
+
+# The declared owner must ACK the exact, unexpired epoch before starting work.
+~/.agents/skills/<cmd>/scripts/team-work.sh dispatch-ack demo .team-work.json \
+  issue:42 demo_programmer_codex '<lease-epoch-from-dispatch>' received
+```
+
+`dispatch` requires all of the following: the packed Issue is currently
+`ready`; the target is its exact `kind: "seat"` owner; that owner is in
+`TEAM_WORK_DISPATCH_ALLOWLIST`; and exactly one of its registered delivery
+runtimes reports both `deliverable: true` and `liveness: "alive"`. `false`,
+`"unknown"`, ambiguous registrations, stale runtime evidence, a missing
+allowlist, or an active lease produce `state: "not_dispatchable"` with
+remediation and no ledger write. A caller that is not an exact manager seat is
+rejected with a schema error before any ledger operation.
+
+On success, `dispatch` writes an append-only local dispatch ledger containing
+the queue digest, lease epoch/deadline, and canonical delivery evidence. Its
+JSON reports `state: "dispatching"` and `sendInvoked: false`: queuing or
+sending a message is not task ownership. It does not create a G2 work-item
+lease yet.
+
+`dispatch-ack` requires the declared owner, the same lease epoch, an unexpired
+dispatch, an open and complete source audit, and fresh live delivery evidence.
+Only then does one SQLite transaction change the dispatch ledger to `claimed`
+and create the corresponding G2 `team_work_current` lease. A wrong, late, or
+unavailable ACK returns `acknowledged: false` and leaves both ledgers unchanged.
+Neither command creates a GitHub mutation, sends a message, operates a herdr
+pane, or spawns an agent.
 
 ### Message delivery state
 
