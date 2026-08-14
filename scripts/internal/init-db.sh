@@ -50,4 +50,130 @@ CREATE TABLE IF NOT EXISTS message_receipts (
   handed_off_at TEXT NOT NULL,
   evidence TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS team_work_current (
+  team TEXT NOT NULL,
+  work_item_id TEXT NOT NULL,
+  contract_digest TEXT NOT NULL,
+  envelope_digest TEXT NOT NULL,
+  owner_seat TEXT NOT NULL,
+  source_repository TEXT NOT NULL,
+  source_number INTEGER NOT NULL,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  state TEXT NOT NULL CHECK (state IN ('claimed', 'acknowledged', 'in_progress', 'blocked', 'completed')),
+  lease_owner TEXT,
+  lease_expires_at INTEGER,
+  ack_evidence TEXT,
+  pr_links_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(pr_links_json)),
+  writebacks_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(writebacks_json)),
+  last_action TEXT NOT NULL,
+  last_actor TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (team, work_item_id),
+  CHECK (
+    (lease_owner IS NULL AND lease_expires_at IS NULL) OR
+    (lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_team_work_current_lease_expiry
+  ON team_work_current(lease_expires_at)
+  WHERE lease_expires_at IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS team_work_revisions (
+  team TEXT NOT NULL,
+  work_item_id TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  previous_revision INTEGER,
+  action TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  snapshot_json TEXT NOT NULL CHECK (json_valid(snapshot_json)),
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (team, work_item_id, revision)
+);
+
+CREATE TRIGGER IF NOT EXISTS team_work_current_history_insert
+AFTER INSERT ON team_work_current
+BEGIN
+  INSERT INTO team_work_revisions(
+    team, work_item_id, revision, previous_revision, action, actor, snapshot_json, created_at
+  ) VALUES (
+    NEW.team,
+    NEW.work_item_id,
+    NEW.revision,
+    NULL,
+    NEW.last_action,
+    NEW.last_actor,
+    json_object(
+      'schemaVersion', 1,
+      'team', NEW.team,
+      'workItemId', NEW.work_item_id,
+      'contractDigest', NEW.contract_digest,
+      'envelopeDigest', NEW.envelope_digest,
+      'ownerSeat', NEW.owner_seat,
+      'source', json_object('repository', NEW.source_repository, 'number', NEW.source_number),
+      'revision', NEW.revision,
+      'state', NEW.state,
+      'leaseOwner', NEW.lease_owner,
+      'leaseExpiresAt', NEW.lease_expires_at,
+      'ackEvidence', NEW.ack_evidence,
+      'prLinks', json(NEW.pr_links_json),
+      'writebacks', json(NEW.writebacks_json),
+      'lastAction', NEW.last_action,
+      'lastActor', NEW.last_actor,
+      'createdAt', NEW.created_at,
+      'updatedAt', NEW.updated_at
+    ),
+    NEW.updated_at
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS team_work_current_history_update
+AFTER UPDATE ON team_work_current
+BEGIN
+  INSERT INTO team_work_revisions(
+    team, work_item_id, revision, previous_revision, action, actor, snapshot_json, created_at
+  ) VALUES (
+    NEW.team,
+    NEW.work_item_id,
+    NEW.revision,
+    OLD.revision,
+    NEW.last_action,
+    NEW.last_actor,
+    json_object(
+      'schemaVersion', 1,
+      'team', NEW.team,
+      'workItemId', NEW.work_item_id,
+      'contractDigest', NEW.contract_digest,
+      'envelopeDigest', NEW.envelope_digest,
+      'ownerSeat', NEW.owner_seat,
+      'source', json_object('repository', NEW.source_repository, 'number', NEW.source_number),
+      'revision', NEW.revision,
+      'state', NEW.state,
+      'leaseOwner', NEW.lease_owner,
+      'leaseExpiresAt', NEW.lease_expires_at,
+      'ackEvidence', NEW.ack_evidence,
+      'prLinks', json(NEW.pr_links_json),
+      'writebacks', json(NEW.writebacks_json),
+      'lastAction', NEW.last_action,
+      'lastActor', NEW.last_actor,
+      'createdAt', NEW.created_at,
+      'updatedAt', NEW.updated_at
+    ),
+    NEW.updated_at
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS team_work_revisions_immutable_update
+BEFORE UPDATE ON team_work_revisions
+BEGIN
+  SELECT RAISE(ABORT, 'team_work_revisions is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS team_work_revisions_immutable_delete
+BEFORE DELETE ON team_work_revisions
+BEGIN
+  SELECT RAISE(ABORT, 'team_work_revisions is append-only');
+END;
 SQL
