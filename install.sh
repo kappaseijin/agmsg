@@ -26,6 +26,8 @@ AGENTS_DIR="$HOME/.agents"
 # helpers; safe to source.
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/scripts/lib/type-registry.sh"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/scripts/lib/safe-dir-sync.sh"
 
 # Resolve a provenance version for the source being installed, so an installed
 # copy is uniquely identifiable even between tagged releases (the canonical
@@ -84,7 +86,7 @@ configure_codex_sandbox() {
   if command -v cygpath >/dev/null 2>&1; then
     local i
     for i in "${!writable_paths[@]}"; do
-      writable_paths[$i]="$(cygpath -m "${writable_paths[$i]}" 2>/dev/null || printf '%s' "${writable_paths[$i]}")"
+      writable_paths[i]="$(cygpath -m "${writable_paths[i]}" 2>/dev/null || printf '%s' "${writable_paths[i]}")"
     done
   fi
   local missing=()
@@ -264,10 +266,12 @@ if [ "$UPDATE_ONLY" = true ]; then
     gemini|antigravity|opencode|hermes|cursor|grok-build) TPL_TYPE="$AGENT_TYPE" ;;
   esac
   sed "s/__SKILL_NAME__/$SKILL_NAME/g" "$(agmsg_type_template_path "$TPL_TYPE")" > "$SKILL_DIR/SKILL.md"
-  # Recursive copy so nested helper dirs (scripts/lib/, scripts/drivers/types/)
+  # Recursive sync so nested helper dirs (scripts/lib/, scripts/drivers/types/)
   # ship without enumerating files. The agent-type manifests and per-type runtimes
-  # live under scripts/drivers/types/ now, so this single copy carries them too.
-  cp -R "$SCRIPT_DIR/scripts/." "$SKILL_DIR/scripts/"
+  # live under scripts/drivers/types/ now, so this single sync carries them too.
+  # safe_dir_sync (not cp -R) — this directory has running watchers reading
+  # from it; see scripts/lib/safe-dir-sync.sh and #16/#17.
+  safe_dir_sync "$SCRIPT_DIR/scripts" "$SKILL_DIR/scripts"
   # Ship the external-plugin drop-in dir (just its README) so the location exists
   # post-install. A plain cp — not cp -R --delete — preserves any plugins the
   # user dropped in and their db/trusted-plugins opt-ins.
@@ -371,10 +375,12 @@ case "$AGENT_TYPE" in
   gemini|antigravity|opencode|hermes|cursor|grok-build) TPL_TYPE="$AGENT_TYPE" ;;
 esac
 sed "s/__SKILL_NAME__/$CMD_NAME/g" "$(agmsg_type_template_path "$TPL_TYPE")" > "$SKILL_DIR/SKILL.md"
-# Recursive copy so nested helper dirs (scripts/lib/, scripts/drivers/types/) ship
+# Recursive sync so nested helper dirs (scripts/lib/, scripts/drivers/types/) ship
 # without enumerating files. The agent-type manifests and per-type runtimes live
-# under scripts/drivers/types/ now, so this single copy carries them too.
-cp -R "$SCRIPT_DIR/scripts/." "$SKILL_DIR/scripts/"
+# under scripts/drivers/types/ now, so this single sync carries them too.
+# safe_dir_sync (not cp -R) for consistency with the --update path above, even
+# though a fresh install's destination is normally empty; see #16/#17.
+safe_dir_sync "$SCRIPT_DIR/scripts" "$SKILL_DIR/scripts"
 # Ship the external-plugin drop-in dir (just its README) so the location exists
 # post-install. A plain cp — not cp -R --delete — preserves any plugins the user
 # dropped in and their db/trusted-plugins opt-ins.
