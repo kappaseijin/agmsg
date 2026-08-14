@@ -30,7 +30,7 @@ You stop being the copy-paste courier between your agents. Claude Code, Codex, G
 
 - Not MCP. No MCP server, no extra runtime — just `bash` + `sqlite3`.
 - Not subagents. agmsg connects *peer* sessions across different tools. `spawn` can launch a new peer agent in its own terminal, but it's an independent session you talk to over agmsg — not a child process this one manages.
-- Not a message queue. There's no broker. The SQLite file is the floor; agents are the players.
+- Not a broker. The SQLite file holds the local queue and its short receiver leases; there is no daemon, socket, or remote service.
 
 ## Demo
 
@@ -66,9 +66,9 @@ Prefer to inspect the code first, track the latest `main`, or pick a custom comm
 
 ## How it works
 
-agmsg is a thin transport. Each agent has a hook (or a Monitor stream, depending on delivery mode) that reads from a shared SQLite file and surfaces incoming messages as text the agent can react to. Sending is a `send.sh` call that appends a row. There is no daemon, no socket, no broker — the file is the shared floor and the agents take turns on it.
+agmsg is a thin transport. Each agent has a hook (or a Monitor stream, depending on delivery mode) that reads from a shared SQLite file and surfaces incoming messages as text the agent can react to. `send.sh` queues a row; a receiver takes a short exclusive lease, hands its text to the host, then persists a receipt. There is no daemon, no socket, no broker — the file is the shared floor and the agents take turns on it.
 
-The store is WAL-mode SQLite, so multiple readers and a single writer coexist without conflicts. History is durable: messages stay in the DB after the session ends, and `history.sh` can replay an old room into a fresh agent.
+The store is WAL-mode SQLite, so multiple readers and a single writer coexist without conflicts. A receipt means only that the receiver handed the message to its host (stdout or an inline Codex turn); it does **not** mean the LLM completed the requested task. History is durable: messages stay in the DB after the session ends, and `history.sh` can replay an old room into a fresh agent.
 
 ## Install
 
@@ -415,6 +415,7 @@ See [docs/opencode.md](docs/opencode.md) for full setup instructions.
 ```bash
 ~/.agents/skills/<cmd>/scripts/send.sh <team> <from> <to> "<message>" [--force]
 ~/.agents/skills/<cmd>/scripts/inbox.sh <team> <agent_id>
+~/.agents/skills/<cmd>/scripts/message-status.sh <team> <agent_id> [--format human|json]
 ~/.agents/skills/<cmd>/scripts/history.sh <team> [agent_id] [limit]
 ~/.agents/skills/<cmd>/scripts/team.sh <team>
 ~/.agents/skills/<cmd>/scripts/whoami.sh <project_path> <type>
@@ -424,6 +425,24 @@ See [docs/opencode.md](docs/opencode.md) for full setup instructions.
 ```
 
 `send.sh` takes four positional arguments — `<team> <from> <to> "<message>"` — plus an optional `--force`. The flag may appear before, between, or after the positional arguments. Unknown options and extra arguments fail with a diagnostic; use `--` before a positional value that intentionally starts with `-`. Quote the message so the shell sees it as one argument; an unquoted message with spaces will be misparsed. Both `from` and `to` must already be registered in `<team>`; an unregistered name errors out (listing the currently registered names) instead of silently storing an undeliverable message. Pass `--force` to bypass this check for an intentional pre-registration send.
+
+### Message delivery state
+
+`send.sh` prints `Queued message #<id> … delivery not yet acknowledged.` That is intentionally not a delivery-success claim. Inspect one receiver's state with either the human default or JSON for automation:
+
+```bash
+~/.agents/skills/<cmd>/scripts/message-status.sh myteam alice
+~/.agents/skills/<cmd>/scripts/message-status.sh myteam alice --format json
+```
+
+| State | Meaning |
+| --- | --- |
+| `queued` | No receiver currently holds the message. |
+| `claimed` | A receiver has a short exclusive lease while preparing host handoff. |
+| `handedOff` | A durable receipt records host handoff. This is **not** LLM task completion. |
+| `unknown` | A legacy row has `read_at` but no receipt, so handoff cannot be proven. |
+
+`history.sh` uses the same distinction: `●` queued, `○` receiver handoff acknowledged, and `?` legacy/unknown receipt. If a receiver exits before acknowledging, its lease expires and the message remains eligible for another receive attempt.
 
 `reset.sh` normally resolves `<project_path>` to the registered project associated with the current session or an ancestor/worktree. When the argument is already the exact stored path (for example, while cleaning up an orphaned registration), pass `--no-resolve`; the flag may appear before, between, or after the positional arguments. If no registration is removed, the command prints both the searched path and the argument path, and suggests `--no-resolve` when they differ.
 
@@ -464,7 +483,7 @@ SQLite guarantees the ordering of the log itself — every row has a monotonic i
 
 **Two Claude Code instances grab the same task — claim/lock?**
 
-Not in v1. If two agents are subscribed to the same name, both see the same inbound message, and you'd need a protocol-level claim/lease to decide who acts. A claim table is on the roadmap; the `actas` exclusivity lock already prevents two *sessions* from holding the same role at once, which covers the most common form of this.
+Receiver delivery uses a short message lease, so competing adapters do not both hand the same message to a host at once. This is deliberately narrower than task ownership: a handoff receipt does not assign the requested work or prove it completed. Use `actas` to keep two sessions from holding the same role, and put task ownership / completion rules in your team protocol.
 
 **Runaway loops — where does the stop condition live?**
 
@@ -578,7 +597,7 @@ commands that append or update state can fail with errors such as
 This affects operations such as:
 
 - sending messages (`send.sh` writes to `db/messages.db`)
-- marking inbox rows as read (`inbox.sh` updates `read_at`)
+- claiming or acknowledging inbox handoffs (`inbox.sh`, `check-inbox.sh`, and `watch.sh` update the message store)
 - joining, resetting, switching roles, or changing delivery mode (`teams/` and
   config/state files may be updated)
 

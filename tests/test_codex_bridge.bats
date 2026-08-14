@@ -591,6 +591,8 @@ EOF
     skip "node child_process.spawn is not available in this sandbox"
   fi
 
+  bash "$SCRIPTS/send.sh" team bob alice "default wake stays queued" >/dev/null
+
   local fake="$TEST_SKILL_DIR/fake-app-server.js"
   cat >"$fake" <<'EOF'
 const readline = require("readline");
@@ -648,6 +650,8 @@ EOF
 
   [ "$status" -eq 0 ]
   [[ "$output" =~ "wakeup 1" ]]
+  [ "$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT COUNT(*) FROM message_receipts;")" -eq 0 ]
+  [ "$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT read_at IS NULL FROM messages WHERE body='default wake stays queued';")" -eq 1 ]
 }
 
 @test "codex-bridge: resumes an existing thread before arming" {

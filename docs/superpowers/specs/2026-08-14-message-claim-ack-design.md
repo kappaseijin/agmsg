@@ -49,7 +49,6 @@ agmsg_claim_next <team> <agent> <owner> [ttl_seconds]
 agmsg_claim_id <message_id> <owner> [ttl_seconds]
 agmsg_ack_claim <message_id> <owner> [evidence]
 agmsg_release_claim <message_id> <owner>
-agmsg_receipt_status <team> <agent>
 ```
 
 `agmsg_claim_next` の stdout は既存 inbox と同じ unit separator 形式、`id US from_agent US escaped_body US created_at` とする。空 output は claim 可能な row が無いことを表し、exit 0 とする。`ack` と `release` は owner 不一致または期限切れで non-zero にする。
@@ -63,9 +62,9 @@ claim.sh ack <message_id> <owner> [evidence]
 claim.sh release <message_id> <owner>
 ```
 
-manager 向けには `scripts/message-status.sh <team> <agent> [--format json]` を追加する。JSON は `schemaVersion`、`queued`、`claimed`、`handedOff`、`unknown`、`oldestQueuedAt`、`ackSemantics` を返す。
+manager 向けには `scripts/message-status.sh <team> <agent> [--format human|json]` を追加する。JSON は `schemaVersion`、`queued`、`claimed`、`handedOff`、`unknown`、`oldestQueuedAt`、`ackSemantics` を返す。
 
-`unknown` は legacy `read_at` または観測できない host handoff を意味する。未起動の Codex と正常な turn 間の Codex はいずれも queued のままであり、本 Issue は両者を liveness から推測しない。type/project ごとの live capability JSON は #39 の担当に残す。
+`unknown` は receipt のない legacy `read_at` marker を意味する。未起動の Codex と正常な turn 間の Codex はいずれも queued のままであり、本 Issue は両者を liveness から推測しない。type/project ごとの live capability JSON は #39 の担当に残す。
 
 ## Adapter の規則
 
@@ -74,7 +73,7 @@ manager 向けには `scripts/message-status.sh <team> <agent> [--format json]` 
 1. message を claim する。
 2. host へ message を出力または `turn/start` input に入れる。
 3. host handoff が成功した場合だけ ack する。
-4. handoff に失敗した場合は release する。プロセス crash なら TTL expiry 後に再取得できる。
+4. handoff に失敗した場合は release する。ACK の永続化だけが失敗した場合は lease を残し、プロセス crash と同様に TTL expiry 後に再取得できる。
 
 対象 adapter は `inbox.sh`、`check-inbox.sh`、`watch.sh`、Codex bridge の `--inline-inbox` 経路である。通常の Codex bridge wake prompt は本文を host input に渡さないため ack しない。これにより「turn を起こした」ことを「message を読ませた」こととして記録しない。
 
@@ -82,7 +81,7 @@ manager 向けには `scripts/message-status.sh <team> <agent> [--format json]` 
 
 ## 表示と互換性
 
-- `send.sh` は insert 後に message id を取得し、`Queued message <id> ...; delivery not yet acknowledged.` と表示する。
+- `send.sh` は insert 後に message id を取得し、`Queued message #<id> ...; delivery not yet acknowledged.` と表示する。
 - `history.sh` は `●` を queued、`○` を protocol handoff acknowledged、`?` を legacy/unknown と表示し、legend を出す。
 - `message-status.sh` は handoff ACK が業務タスク完了ではないことを明記する。
 - 既存の人間向け `inbox.sh` と `check-inbox.sh` の本文形式は保つ。
@@ -99,7 +98,7 @@ manager 向けには `scripts/message-status.sh <team> <agent> [--format json]` 
 1. Bats fixture で claim exclusion、release/reclaim、wrong-owner rejection、TTL reclaim、escaped body を確認する。
 2. `send.sh` の output が queued と message id を示し、receiver ACK 前に成功を装わないことを確認する。
 3. `inbox.sh`、`check-inbox.sh`、`watch.sh` の successful handoff が receipt を作り、failure/release が unread row を残すことを確認する。
-4. fake app-server を使い、Codex bridge の inline inbox は `turn/start` ACK 後に receipt を作り、通常 wake prompt は message receipt を作らないことを確認する。
+4. fake app-server を使い、Codex bridge の inline inbox は `turn/start` 成功後に receipt を作り、rejection 時は lease を release する。通常 wake prompt は message receipt を作らないことを確認する。
 5. full `bats tests`、`node --check scripts/drivers/types/codex/codex-bridge.js`、`git diff --check` を実行する。
 
 ## Self-review

@@ -247,11 +247,11 @@ Expected: syntax check と inline receipt integration test が PASS。
 - Consumes: Tasks 1–4 の behavior と test output。
 - Produces: README だけで queue / status / limitation を利用できる説明と #37 専用 PR。
 
-- [ ] **Step 1: README の user-facing usage を更新する**
+- [x] **Step 1: README の user-facing usage を更新する**
 
 `message-status.sh` の command、queued/claimed/handed-off/unknown の表、ACK が task completion ではないこと、`history.sh` legend を README に追加する。古い「claim table is on the roadmap」FAQ は delivery claim と work-item ownership を区別した記述へ置換する。
 
-- [ ] **Step 2: full verification を実行する**
+- [x] **Step 2: full verification を実行する**
 
 Run:
 
@@ -263,6 +263,15 @@ node --check scripts/drivers/types/codex/codex-bridge.js
 ```
 
 Expected: whitespace error なし、test count と PASS count が一致、Node syntax PASS。
+
+実測（2026-08-15T01:24:31+09:00）:
+
+- `bats --count tests`: `1002`
+- `bats tests`: `1002/1002 PASS`、exit `0`
+- `git diff --check`: PASS
+- `bash -n`（変更した Bash command / library）: PASS
+- `node --check scripts/drivers/types/codex/codex-bridge.js`: PASS
+- focused Bats: `test_claims.bats`、`test_messaging.bats`、`test_inbox.bats`、`test_watch.bats`、Codex bridge の inline-inbox / default wake case: PASS
 
 - [ ] **Step 3: implementation notes を実測値で更新する**
 
