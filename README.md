@@ -219,6 +219,30 @@ codex@programmer:
 
 For example, `spawn codex project_architect_codex` applies the `codex@architect` overlay. An overlay key replaces the same key from the base section; an overlay value of `false` suppresses that key entirely. An explicit role must contain only letters, digits, `_`, or `-`; an unsafe value is rejected before spawn creates or joins anything.
 
+To make role configuration fail closed for a type, add the separate metadata
+section below. Missing metadata, a missing type key, or `false` preserves the
+optional behavior. With `true`, `spawn` requires a role and the matching
+`<type>@<role>` section before it resolves a team or pre-joins the agent; an
+empty section is valid for types without a profile contract. Metadata is never
+emitted as CLI argv.
+
+```yaml
+agmsg.require-role-overlay:
+  claude-code: true
+  codex: true
+```
+
+When `codex: true`, the role overlay must select exactly one profile with
+`-p: alias`, `--profile: alias`, `-p=alias: true`, or `--profile=alias: true`.
+The base `codex:` section must not contain a profile flag, including a
+`false` value used to suppress it. The alias must start with a letter or digit
+and contain only letters, digits, `.`, `_`, or `-`. `spawn` verifies the
+readable file `$CODEX_HOME/<alias>.config.toml`; when `CODEX_HOME` is unset it
+uses `~/.codex/`. The verified absolute directory is exported as `CODEX_HOME`
+in the generated boot script. A missing, unreadable, duplicate, or malformed
+profile fails before registration or terminal launch. Policy-disabled Codex
+configurations keep the existing pass-through behavior.
+
 Eight of the nine agent types are spawnable — `claude-code`, `codex`, `grok-build`, `cursor`, `gemini`, `antigravity`, `copilot`, `opencode`. `hermes` is not: its CLI has no mode that starts an interactive session pre-seeded with an initial prompt (#279). macOS is the primary target; Linux and Windows are best-effort (please open an issue/PR if your terminal isn't handled). Headless environments — no tmux **and** no usable terminal — error out, since the agent CLIs need an interactive terminal.
 
 ### Tear down a spawned agent (`despawn`)

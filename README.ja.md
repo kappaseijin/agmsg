@@ -218,6 +218,31 @@ codex@programmer:
 
 例えば `spawn codex project_architect_codex` は `codex@architect` のoverlayを適用する。overlay側に同じkeyがあればbase側を置き換え、overlay値が`false`ならそのkeyを完全に抑止する。明示roleに使えるのは英数字・`_`・`-` だけで、不正な値はspawnが作成・参加操作を行う前に拒否される。
 
+役割設定を必須にして fail-closed にするには、次の独立したmetadata
+sectionを追加する。metadataが無い場合、typeのkeyが無い場合、または
+`false`の場合は従来どおり任意の設定として扱う。`true`の場合は、teamの
+解決やagentの事前参加より前にroleと対応する`<type>@<role>` sectionを
+必須にする。profile契約を持たないtypeでは空のsectionも有効である。
+metadataがCLI argvへ出力されることはない。
+
+```yaml
+agmsg.require-role-overlay:
+  claude-code: true
+  codex: true
+```
+
+`codex: true`の場合、role overlayには次のいずれかでprofileをちょうど1つ
+指定する必要がある。
+`-p: alias`、`--profile: alias`、`-p=alias: true`、
+`--profile=alias: true`。baseの`codex:` sectionには、`false`で抑止する
+場合も含めてprofile flagを置けない。aliasは英数字で始まり、英数字・`.`・
+`_`・`-`だけで構成する。`spawn`は
+`$CODEX_HOME/<alias>.config.toml`が読み取り可能か検証し、
+`CODEX_HOME`が未設定なら`~/.codex/`を使う。検証済みの絶対pathは生成する
+boot scriptの`CODEX_HOME`へexportされる。profileの欠落・非読取・重複・
+不正形式は登録やterminal起動より前に拒否される。policyを無効にした
+Codex設定は従来どおりpass-throughで扱う。
+
 9種類のエージェントタイプのうち8つがspawn可能 — `claude-code`、`codex`、`grok-build`、`cursor`、`gemini`、`antigravity`、`copilot`、`opencode`。`hermes` は不可 — そのCLIには初期プロンプトを事前に仕込んだインタラクティブセッションを開始するモードがない（#279）。macOSが主なターゲットで、LinuxとWindowsはベストエフォート（ターミナルが未対応の場合はissueまたはPRを歓迎）。ヘッドレス環境 — tmuxもなく使えるターミナルもない — はエージェントCLIがインタラクティブなターミナルを必要とするためエラーになる。
 
 ### spawnしたエージェントを終了する（`despawn`）
