@@ -332,10 +332,12 @@ $agmsg
 ~/.agents/skills/<cmd>/scripts/whoami.sh <project_path> <type>
 ~/.agents/skills/<cmd>/scripts/delivery.sh set <mode> <type> <project_path>
 ~/.agents/skills/<cmd>/scripts/delivery.sh status [<type> <project_path>]
-~/.agents/skills/<cmd>/scripts/reset.sh <project_path> <type> [agent_id]
+~/.agents/skills/<cmd>/scripts/reset.sh [--no-resolve] <project_path> <type> [agent_id] [session_id]
 ```
 
-`send.sh` は4つの位置引数 `<team> <from> <to> "<message>"` に加えて、末尾に任意で `--force` を取る。シェルが1つの引数として認識するようメッセージはクォートすること — クォートされていないスペース入りメッセージは誤って分割される。`from`・`to` はどちらも `<team>` に事前登録済みである必要があり、未登録の名前は(登録済み一覧を添えて)エラーになる — 意図的な事前登録前送信をしたい場合のみ `--force` でこのチェックを迂回できる。
+`send.sh` は4つの位置引数 `<team> <from> <to> "<message>"` に加えて、任意の `--force` を取る。フラグは位置引数の前・間・後のどこに置いてもよい。未知のオプションと余分な引数は診断付きで失敗する。`-` で始まる値を意図的に位置引数へ渡す場合は、その前に `--` を置く。シェルが1つの引数として認識するようメッセージはクォートすること — クォートされていないスペース入りメッセージは誤って分割される。`from`・`to` はどちらも `<team>` に事前登録済みである必要があり、未登録の名前は(登録済み一覧を添えて)エラーになる — 意図的な事前登録前送信をしたい場合のみ `--force` でこのチェックを迂回できる。
+
+`reset.sh` は通常、`<project_path>` を現在のセッションに紐づく登録済みプロジェクト、または親ディレクトリ・worktree へ解決する。孤立登録の後片付けなど、引数が保存済みの正確な path だと分かっている場合は `--no-resolve` を渡す。フラグは位置引数の前・間・後のどこに置いてもよい。登録を削除できなかった場合は、検索した path と引数の path を両方表示し、異なる場合は `--no-resolve` を案内する。
 
 ## FAQ / 設計メモ
 

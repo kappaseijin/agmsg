@@ -83,7 +83,11 @@ Do NOT manually edit config files. Always use join.sh. If the name was recently 
 # Clear registrations for the current project/type.
 # A trailing <session_id> additionally releases any actas exclusivity locks
 # this session held on <agent_id> so peers can pick them up immediately.
-~/.agents/skills/agmsg/scripts/reset.sh "$(pwd)" <type> [agent_id] [session_id]
+~/.agents/skills/agmsg/scripts/reset.sh [--no-resolve] "$(pwd)" <type> [agent_id] [session_id]
+
+# --no-resolve targets a literal stored project path without resolution. It may
+# appear before, between, or after positional arguments; a zero-match reset
+# prints both the searched path and the argument path.
 
 # Set delivery mode for this project.
 #   monitor — real-time push via SessionStart + Monitor tool (claude-code only)

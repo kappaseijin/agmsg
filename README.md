@@ -346,10 +346,12 @@ See [docs/opencode.md](docs/opencode.md) for full setup instructions.
 ~/.agents/skills/<cmd>/scripts/whoami.sh <project_path> <type>
 ~/.agents/skills/<cmd>/scripts/delivery.sh set <mode> <type> <project_path>
 ~/.agents/skills/<cmd>/scripts/delivery.sh status [<type> <project_path>]
-~/.agents/skills/<cmd>/scripts/reset.sh <project_path> <type> [agent_id]
+~/.agents/skills/<cmd>/scripts/reset.sh [--no-resolve] <project_path> <type> [agent_id] [session_id]
 ```
 
-`send.sh` takes four positional arguments — `<team> <from> <to> "<message>"` — plus an optional trailing `--force`. Quote the message so the shell sees it as one argument; an unquoted message with spaces will be misparsed. Both `from` and `to` must already be registered in `<team>`; an unregistered name errors out (listing the currently registered names) instead of silently storing an undeliverable message. Pass `--force` to bypass this check for an intentional pre-registration send.
+`send.sh` takes four positional arguments — `<team> <from> <to> "<message>"` — plus an optional `--force`. The flag may appear before, between, or after the positional arguments. Unknown options and extra arguments fail with a diagnostic; use `--` before a positional value that intentionally starts with `-`. Quote the message so the shell sees it as one argument; an unquoted message with spaces will be misparsed. Both `from` and `to` must already be registered in `<team>`; an unregistered name errors out (listing the currently registered names) instead of silently storing an undeliverable message. Pass `--force` to bypass this check for an intentional pre-registration send.
+
+`reset.sh` normally resolves `<project_path>` to the registered project associated with the current session or an ancestor/worktree. When the argument is already the exact stored path (for example, while cleaning up an orphaned registration), pass `--no-resolve`; the flag may appear before, between, or after the positional arguments. If no registration is removed, the command prints both the searched path and the argument path, and suggests `--no-resolve` when they differ.
 
 ## FAQ / Design notes
 
