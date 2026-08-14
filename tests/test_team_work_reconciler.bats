@@ -248,6 +248,44 @@ INSERT INTO team_work_current(
   [ "$(json_value "$output" alarm)" = "false" ]
 }
 
+@test "team-work reconcile: writes only the requested heartbeat artifact" {
+  local pack="$BATS_TEST_TMPDIR/reconcile-heartbeat.json"
+  local heartbeat="$BATS_TEST_TMPDIR/reconcile-heartbeat.out"
+  local database="$TEST_SKILL_DIR/db/messages.db"
+  local before
+  write_pack "$pack"
+  before="$(sha256_file "$database")"
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" reconcile "$pack" TEAM_WORK_NOW=101 TEAM_WORK_FAKE_DELIVERY=true -- "$heartbeat"
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" heartbeatPath)" = "$heartbeat" ]
+  [ -f "$heartbeat" ]
+  [ "$(json_value "$(cat "$heartbeat")" team)" = "demo" ]
+  [ "$before" = "$(sha256_file "$database")" ]
+}
+
+@test "team-work G3 wrapper: rejects incomplete command arguments" {
+  local pack="$BATS_TEST_TMPDIR/usage.json"
+  write_pack "$pack"
+
+  run bash "$SCRIPTS/team-work.sh" reconcile demo "$pack" first second
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Usage: team-work.sh reconcile"* ]]
+
+  run bash "$SCRIPTS/team-work.sh" watchdog demo "$pack"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Usage: team-work.sh watchdog"* ]]
+
+  run bash "$SCRIPTS/team-work.sh" dispatch demo "$pack" issue:42
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Usage: team-work.sh dispatch"* ]]
+
+  run bash "$SCRIPTS/team-work.sh" dispatch-ack demo "$pack" issue:42 owner
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Usage: team-work.sh dispatch-ack"* ]]
+}
+
 @test "team-work dispatch: denies a ready owner that is not allowlisted or live" {
   local pack="$BATS_TEST_TMPDIR/dispatch-denied.json"
   local database="$TEST_SKILL_DIR/db/messages.db"

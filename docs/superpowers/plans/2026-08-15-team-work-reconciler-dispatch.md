@@ -47,7 +47,7 @@ timestamp: "2026-08-15T07:07:31+09:00"
 - Produces SQLite tables `team_work_dispatch_current` and `team_work_dispatch_revisions`.
 - The current row has `state`, `lease_epoch`, `queue_digest`, `delivery_evidence_json`, `ack_evidence`, and `lease_expires_at`.
 
-- [ ] **Step 1: Write the failing schema/history tests**
+- [x] **Step 1: Write the failing schema/history tests**
 
 ```bash
 sqlite3 "$TEST_SKILL_DIR/db/messages.db" \
@@ -56,23 +56,23 @@ sqlite3 "$TEST_SKILL_DIR/db/messages.db" \
 
 Assert that the table and immutable revision trigger exist after test setup, and that a direct update/delete of a history row fails.
 
-- [ ] **Step 2: Run the focused test to verify RED**
+- [x] **Step 2: Run the focused test to verify RED**
 
 Run: `bats tests/test_team_work_reconciler.bats`
 
 Expected: FAIL because `team_work_dispatch_current` does not exist.
 
-- [ ] **Step 3: Add the minimal schema and triggers**
+- [x] **Step 3: Add the minimal schema and triggers**
 
 Add `CREATE TABLE IF NOT EXISTS` definitions and insert/update history triggers in `scripts/internal/init-db.sh`. Keep the existing G2 tables and triggers unchanged. Store snapshots with `json_object` and reject history update/delete with SQLite triggers.
 
-- [ ] **Step 4: Run the focused test to verify GREEN**
+- [x] **Step 4: Run the focused test to verify GREEN**
 
 Run: `bats tests/test_team_work_reconciler.bats`
 
 Expected: PASS for the schema/history assertions.
 
-- [ ] **Step 5: Commit the focused deliverable**
+- [x] **Step 5: Commit the focused deliverable**
 
 ```bash
 git add scripts/internal/init-db.sh tests/test_team_work_reconciler.bats
@@ -93,27 +93,27 @@ git commit -m "feat: add dispatch ledger schema"
 - A valid active dispatch row contributes `localState.status: "active"` and a `dispatchState` of `"dispatching"` or `"claimed"`.
 - Missing G3 tables remain equivalent to no dispatch rows for old local stores.
 
-- [ ] **Step 1: Write failing audit tests**
+- [x] **Step 1: Write failing audit tests**
 
 Create one valid `dispatching` row, run `team-work.sh queue`, and assert `fully_allocated` instead of `ready`. Add a legacy-store fixture where the G3 table is absent and assert the existing ready result remains unchanged.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `bats tests/test_team_work_audit.bats tests/test_team_work_reconciler.bats`
 
 Expected: FAIL because audit ignores the dispatch row or cannot be imported.
 
-- [ ] **Step 3: Export and extend the reader**
+- [x] **Step 3: Export and extend the reader**
 
 Guard `main()` with `require.main === module`, export `runAudit`, and read the optional dispatch table through `sqlite3 -readonly`. Validate contract/envelope/owner/epoch fields; mark malformed rows stale rather than treating them as absent.
 
-- [ ] **Step 4: Run GREEN**
+- [x] **Step 4: Run GREEN**
 
 Run: `bats tests/test_team_work_audit.bats tests/test_team_work_reconciler.bats`
 
 Expected: PASS, including all existing audit cases.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/team-work-audit.js tests/test_team_work_audit.bats tests/test_team_work_reconciler.bats
@@ -133,27 +133,27 @@ git commit -m "feat: include dispatch state in team-work audit"
 - `reconcile <team> <pack> [heartbeat-path]` emits canonical JSON with `findings`, `remediation`, `sourceDigest`, and `reconcileDigest`.
 - `watchdog <team> <pack> <heartbeat-path> [stale-seconds]` emits canonical JSON with `status` of `healthy`, `stale`, or `unknown`.
 
-- [ ] **Step 1: Write failing fixture tests**
+- [x] **Step 1: Write failing fixture tests**
 
 Use fake GitHub data and temporary SQLite rows to assert each of `expired_lease`, `upstream_closed`, `orphan_ready`, `writeback_required`, and `stale_state`. Add stale and quiescent heartbeat fixtures and assert watchdog does not change the database hash.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `bats tests/test_team_work_reconciler.bats`
 
 Expected: FAIL with `unknown team-work command: reconcile` or missing module.
 
-- [ ] **Step 3: Implement G3 readers**
+- [x] **Step 3: Implement G3 readers**
 
 Reuse `runAudit`, derive seat capability only from `delivery.sh status <type> <project> --format json`, and return remediation objects in stable order. Write the optional heartbeat with temp-file plus rename; watchdog only reads and validates it.
 
-- [ ] **Step 4: Run GREEN**
+- [x] **Step 4: Run GREEN**
 
 Run: `bats tests/test_team_work_reconciler.bats`
 
 Expected: PASS for all finding, watchdog, canonical-output, and no-side-effect assertions.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/team-work-reconciler.js scripts/team-work.sh tests/test_team_work_reconciler.bats
@@ -173,27 +173,27 @@ git commit -m "feat: add team-work reconciler watchdog"
 - `dispatch <team> <pack> <work-item-id> <manager-seat> [ack-ttl]` creates only an eligible `dispatching` ledger entry.
 - `dispatch-ack <team> <pack> <work-item-id> <owner-seat> <lease-epoch> [evidence]` transitions the exact live epoch to `claimed` and creates the G2 lease atomically.
 
-- [ ] **Step 1: Write failing dispatch tests**
+- [x] **Step 1: Write failing dispatch tests**
 
 Assert all negative paths: missing/malformed allowlist, non-manager actor, closed/non-seat target, `deliverable: false`, `deliverable: "unknown"`, no ready item, duplicate dispatch, wrong epoch, and expired ACK. Assert successful dispatch does not call `send.sh`/herdr or create a G2 claim before ACK.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `bats tests/test_team_work_reconciler.bats`
 
 Expected: FAIL because the `dispatch` and `dispatch-ack` commands do not exist.
 
-- [ ] **Step 3: Implement guarded transaction paths**
+- [x] **Step 3: Implement guarded transaction paths**
 
 Parse the JSON allowlist strictly, require an exact manager seat, run a fresh G2 queue audit, and persist queue/lease/delivery evidence in the dispatch ledger. On ACK, require exact owner and epoch plus fresh live delivery, then use one SQLite transaction to create the `claimed` G2 lease and append the dispatch ACK revision.
 
-- [ ] **Step 4: Run GREEN**
+- [x] **Step 4: Run GREEN**
 
 Run: `bats tests/test_team_work_reconciler.bats tests/test_team_work_state.bats tests/test_team_work_audit.bats`
 
 Expected: PASS. Verify that the success case records `dispatching` before ACK and `claimed` only after the exact ACK.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/team-work-reconciler.js scripts/team-work.sh tests/test_team_work_reconciler.bats
@@ -212,21 +212,21 @@ git commit -m "feat: gate dispatch claims on acknowledgement"
 
 - README contains the executable syntax, `TEAM_WORK_DISPATCH_ALLOWLIST` schema, JSON output semantics, heartbeat behavior, and no-spawn/no-GitHub-mutation limits.
 
-- [ ] **Step 1: Write failing documentation-surface tests**
+- [x] **Step 1: Write failing documentation-surface tests**
 
 Add focused assertions for the wrapper usage errors and command result fields that users need to consume.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `bats tests/test_team_work_reconciler.bats`
 
 Expected: FAIL until the documented wrapper contract exists.
 
-- [ ] **Step 3: Update README and complete plan checkboxes**
+- [x] **Step 3: Update README and complete plan checkboxes**
 
 Describe every G3 command, default ACK timeout, heartbeat file lifecycle, output findings, allowlist JSON, explicit ACK requirement, and safe remediation behavior. Mark only verified plan steps complete.
 
-- [ ] **Step 4: Run complete verification**
+- [x] **Step 4: Run complete verification**
 
 Run:
 
@@ -235,7 +235,7 @@ bats tests/test_team_work.bats tests/test_team_work_state.bats tests/test_team_w
 node --check scripts/lib/team-work.js
 node --check scripts/lib/team-work-audit.js
 node --check scripts/lib/team-work-reconciler.js
-shellcheck -s bash -e scripts/team-work.sh scripts/internal/init-db.sh
+shellcheck -s bash -e SC1091 scripts/team-work.sh scripts/internal/init-db.sh
 git diff --check
 ```
 
