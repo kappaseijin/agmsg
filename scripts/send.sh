@@ -3,16 +3,27 @@ set -euo pipefail
 
 # Usage: send.sh <team> <from> <to> <message> [--force]
 
-TEAM="${1:?Usage: send.sh <team> <from> <to> <message> [--force]}"
-FROM="${2:?Missing from agent}"
-TO="${3:?Missing to agent}"
-BODY="${4:?Missing message body}"
-FORCE=0
-if [ "${5:-}" = "--force" ]; then
-  FORCE=1
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/cli-options.sh"
+
+agmsg_parse_cli_options "send.sh" 1 0 "$@" || {
+  parse_status=$?
+  exit "$parse_status"
+}
+if [ "${#AGMSG_POSITIONAL_ARGS[@]}" -ne 4 ]; then
+  echo "Usage: send.sh <team> <from> <to> <message> [--force]" >&2
+  echo "send.sh: expected 4 positional arguments, got ${#AGMSG_POSITIONAL_ARGS[@]}." >&2
+  exit 2
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TEAM="${AGMSG_POSITIONAL_ARGS[0]}"
+FROM="${AGMSG_POSITIONAL_ARGS[1]}"
+TO="${AGMSG_POSITIONAL_ARGS[2]}"
+BODY="${AGMSG_POSITIONAL_ARGS[3]}"
+FORCE="$AGMSG_OPTION_FORCE"
+
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/storage.sh"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/validate.sh"

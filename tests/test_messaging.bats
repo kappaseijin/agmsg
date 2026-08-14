@@ -61,6 +61,30 @@ teardown() {
   [ "$n" -eq 1 ]
 }
 
+@test "send: --force works in leading, middle, and trailing positions" {
+  run bash "$SCRIPTS/send.sh" --force brandnewteam ghost nobody "leading"
+  [ "$status" -eq 0 ]
+  run bash "$SCRIPTS/send.sh" brandnewteam --force ghost nobody "middle"
+  [ "$status" -eq 0 ]
+  run bash "$SCRIPTS/send.sh" brandnewteam ghost nobody "trailing" --force
+  [ "$status" -eq 0 ]
+
+  local n
+  n=$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT COUNT(*) FROM messages WHERE team='brandnewteam';")
+  [ "$n" -eq 3 ]
+}
+
+@test "send: rejects an unknown option and extra positional argument" {
+  run bash "$SCRIPTS/send.sh" testteam alice bob "hi" --forse
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "unknown option '--forse'" ]]
+  [[ "$output" != *"Use --force to bypass"* ]]
+
+  run bash "$SCRIPTS/send.sh" testteam alice bob "hi" extra
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "expected 4 positional arguments" ]]
+}
+
 # --- send.sh: team-name validation (#414) ---
 
 @test "send: rejects a team name with path traversal (../) and never consults a config outside teams/" {
