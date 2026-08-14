@@ -18,7 +18,9 @@ teardown() {
 @test "send: delivers a message" {
   run bash "$SCRIPTS/send.sh" testteam alice bob "hello"
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "Sent to bob" ]]
+  [[ "$output" =~ "Queued message" ]]
+  [[ "$output" =~ Queued\ message\ \#[0-9]+ ]]
+  [[ "$output" =~ "delivery not yet acknowledged" ]]
 }
 
 @test "send: fails without required args" {
@@ -55,7 +57,7 @@ teardown() {
 @test "send: --force bypasses the roster check even with no team config at all" {
   run bash "$SCRIPTS/send.sh" brandnewteam ghost nobody "hi" --force
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "Sent to nobody" ]]
+  [[ "$output" =~ "Queued message" ]]
   local n
   n=$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT COUNT(*) FROM messages WHERE team='brandnewteam';")
   [ "$n" -eq 1 ]
@@ -129,7 +131,33 @@ teardown() {
   bash "$SCRIPTS/join.sh" "テストチーム" bob claude-code /tmp/project-jp2
   run bash "$SCRIPTS/send.sh" "テストチーム" alice bob "hello"
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "Sent to bob" ]]
+  [[ "$output" =~ "Queued message" ]]
+}
+
+@test "message-status: reports each delivery state as JSON" {
+  bash "$SCRIPTS/send.sh" testteam alice bob "queued payload" >/dev/null
+  bash "$SCRIPTS/send.sh" testteam alice bob "claimed payload" >/dev/null
+  bash "$SCRIPTS/send.sh" testteam alice bob "handed-off payload" >/dev/null
+  bash "$SCRIPTS/send.sh" testteam alice bob "legacy payload" >/dev/null
+
+  local claimed_id handed_off_id legacy_id
+  claimed_id="$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT id FROM messages WHERE body='claimed payload';")"
+  handed_off_id="$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT id FROM messages WHERE body='handed-off payload';")"
+  legacy_id="$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT id FROM messages WHERE body='legacy payload';")"
+
+  bash "$SCRIPTS/claim.sh" claim "$claimed_id" status-daemon 60
+  bash "$SCRIPTS/claim.sh" claim "$handed_off_id" status-daemon 60
+  bash "$SCRIPTS/claim.sh" ack "$handed_off_id" status-daemon test_handoff
+  sqlite3 "$TEST_SKILL_DIR/db/messages.db" "UPDATE messages SET read_at='2026-08-14T00:00:00Z' WHERE id=$legacy_id;"
+
+  run bash "$SCRIPTS/message-status.sh" testteam bob --format json
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"schemaVersion":1'* ]]
+  [[ "$output" == *'"queued":1'* ]]
+  [[ "$output" == *'"claimed":1'* ]]
+  [[ "$output" == *'"handedOff":1'* ]]
+  [[ "$output" == *'"unknown":1'* ]]
+  [[ "$output" == *'"ackSemantics":"receiver_handoff_not_task_completion"'* ]]
 }
 
 # --- inbox.sh ---
@@ -223,6 +251,18 @@ line"
   [ "$status" -eq 0 ]
   [[ "$output" =~ "msg1" ]]
   [[ "$output" =~ "msg2" ]]
+}
+
+@test "history: marks a legacy read marker without a receipt as unknown" {
+  bash "$SCRIPTS/send.sh" testteam alice bob "legacy read"
+  local id
+  id="$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT id FROM messages WHERE body='legacy read';")"
+  sqlite3 "$TEST_SKILL_DIR/db/messages.db" "UPDATE messages SET read_at='2026-08-14T00:00:00Z' WHERE id=$id;"
+
+  run bash "$SCRIPTS/history.sh" testteam
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"  ? ["* ]]
+  [[ "$output" == *"Legend: ● queued; ○ receiver handoff acknowledged; ? legacy/unknown receipt"* ]]
 }
 
 @test "history: filters by agent" {

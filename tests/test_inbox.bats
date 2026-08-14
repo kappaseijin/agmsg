@@ -41,10 +41,32 @@ await_barrier_reached() {
   [ "$(unread_count alice)" -eq 0 ]
 }
 
+@test "inbox: records a receipt after handing a message to stdout" {
+  bash "$SCRIPTS/send.sh" testteam bob alice "receipt payload" >/dev/null
+  local id
+  id="$(sqlite3 "$DBPATH" "SELECT id FROM messages WHERE body='receipt payload';")"
+
+  run bash "$SCRIPTS/inbox.sh" testteam alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"receipt payload"* ]]
+  [ "$(sqlite3 "$DBPATH" "SELECT COUNT(*) FROM message_receipts WHERE message_id=$id;")" -eq 1 ]
+  [ "$(sqlite3 "$DBPATH" "SELECT evidence FROM message_receipts WHERE message_id=$id;")" = "inbox_stdout" ]
+  [ "$(sqlite3 "$DBPATH" "SELECT read_at IS NOT NULL FROM messages WHERE id=$id;")" -eq 1 ]
+}
+
 @test "inbox: --quiet is silent when there is nothing unread" {
   run bash "$SCRIPTS/inbox.sh" testteam alice --quiet
   [ "$status" -eq 0 ]
   [ -z "$output" ]
+}
+
+@test "inbox: empty queue exits successfully under system Bash with nounset" {
+  # macOS ships Bash 3.2, where expanding an empty array with `set -u` fails.
+  # Use the system shell explicitly so the receiver's EXIT cleanup stays
+  # compatible even when `bash` on PATH is a newer Homebrew installation.
+  run /bin/bash "$SCRIPTS/inbox.sh" testteam alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No new messages."* ]]
 }
 
 @test "inbox: a message arriving between display and mark is NOT marked read unseen" {
@@ -71,6 +93,19 @@ await_barrier_reached() {
 }
 
 # --- check-inbox.sh ------------------------------------------------------
+
+@test "check-inbox: records a receipt after emitting its hook payload" {
+  bash "$SCRIPTS/send.sh" testteam bob alice "hook receipt payload" >/dev/null
+  local id
+  id="$(sqlite3 "$DBPATH" "SELECT id FROM messages WHERE body='hook receipt payload';")"
+
+  run bash -c "echo '{}' | bash '$SCRIPTS/check-inbox.sh' claude-code /tmp/project-a"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"hook receipt payload"* ]]
+  [ "$(sqlite3 "$DBPATH" "SELECT COUNT(*) FROM message_receipts WHERE message_id=$id;")" -eq 1 ]
+  [ "$(sqlite3 "$DBPATH" "SELECT evidence FROM message_receipts WHERE message_id=$id;")" = "check_inbox_stdout" ]
+  [ "$(sqlite3 "$DBPATH" "SELECT read_at IS NOT NULL FROM messages WHERE id=$id;")" -eq 1 ]
+}
 
 @test "check-inbox: a later team's query failure does not lose earlier teams' messages (#637)" {
   # alice is in two teams; glob order enumerates testteam before zteam.

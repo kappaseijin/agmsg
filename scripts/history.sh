@@ -25,15 +25,22 @@ fi
 _agmsg_sqlesc() { printf %s "$1" | sed "s/'/''/g"; }
 
 if [ -n "$AGENT" ]; then
-  WHERE="WHERE team='$(_agmsg_sqlesc "$TEAM")' AND (from_agent='$(_agmsg_sqlesc "$AGENT")' OR to_agent='$(_agmsg_sqlesc "$AGENT")')"
+  WHERE="WHERE m.team='$(_agmsg_sqlesc "$TEAM")' AND (m.from_agent='$(_agmsg_sqlesc "$AGENT")' OR m.to_agent='$(_agmsg_sqlesc "$AGENT")')"
 else
-  WHERE="WHERE team='$(_agmsg_sqlesc "$TEAM")'"
+  WHERE="WHERE m.team='$(_agmsg_sqlesc "$TEAM")'"
 fi
 
 # Escape newlines/tabs in body, use unit separator between fields
 RESULT=$(agmsg_sqlite "$DB" "
-  SELECT from_agent || char(31) || to_agent || char(31) || replace(replace(body, char(10), '\n'), char(9), '\t') || char(31) || created_at || char(31) || CASE WHEN read_at IS NULL THEN '●' ELSE '○' END
-  FROM messages $WHERE ORDER BY created_at DESC LIMIT $LIMIT;
+  SELECT m.from_agent || char(31) || m.to_agent || char(31) || replace(replace(m.body, char(10), '\n'), char(9), '\t') || char(31) || m.created_at || char(31)
+       || CASE
+            WHEN r.message_id IS NOT NULL THEN '○'
+            WHEN m.read_at IS NULL THEN '●'
+            ELSE '?'
+          END
+  FROM messages AS m
+  LEFT JOIN message_receipts AS r ON r.message_id=m.id
+  $WHERE ORDER BY m.created_at DESC LIMIT $LIMIT;
 ")
 
 if [ -z "$RESULT" ]; then
@@ -43,6 +50,7 @@ fi
 
 # Reverse order (oldest first) and display
 REVERSED=$(echo "$RESULT" | tail -r 2>/dev/null || echo "$RESULT" | tac 2>/dev/null || echo "$RESULT" | awk '{a[NR]=$0} END{for(i=NR;i>=1;i--)print a[i]}')
+echo "Legend: ● queued; ○ receiver handoff acknowledged; ? legacy/unknown receipt"
 while IFS=$'\x1f' read -r from to body ts status; do
   echo "  $status [$ts] $from → $to: $body"
 done <<< "$REVERSED"
