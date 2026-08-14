@@ -143,6 +143,34 @@ not installed, it leaves the guard uninstalled and prints a message; rerun
 `./install.sh --update` after installing `gh`. `uninstall.sh` removes only the
 agmsg-generated guard.
 
+### Git push destination guard
+
+When Git is installed, `install.sh` also installs `~/.agents/bin/git`. Put
+`~/.agents/bin` before the real Git executable on every agent PATH, then verify
+the effective command with:
+
+```bash
+PATH="$HOME/.agents/bin:$PATH" command -v git
+```
+
+It must print `~/.agents/bin/git` (with the home directory expanded). The
+launcher pins the guard and the real Git executable to absolute paths at
+install time. `git push` checks every effective push URL, including all
+`remote.*.pushurl` entries and `url.*.insteadOf` / `url.*.pushInsteadOf`
+rewrites. Writes are allowed only for `github.com` owners `kappaseijin` and
+`kappaseijinjp`; malformed URLs, local paths, unknown hosts, third-party
+owners, and unresolved destinations fail closed before transport starts.
+Direct URLs are resolved through a temporary synthetic remote so the same
+rewrite rules are checked. Git aliases and `git send-pack` are rejected;
+read-only commands and `git clone` continue to use the real Git executable.
+
+The installer refuses to overwrite a non-agmsg `~/.agents/bin/git`. If Git is
+not found, it leaves the guard uninstalled and prints a message; rerun
+`./install.sh --update` after installing Git. `uninstall.sh` removes only the
+agmsg-generated Git guard. This is a user-space PATH guard: invoking Git by an
+absolute path, changing PATH, replacing the shim, or using another user is
+outside its guarantee.
+
 ### Windows: Git Bash & Codex
 
 agmsg's implementation is the Bash script set under `scripts/`, so on Windows the

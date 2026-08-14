@@ -170,6 +170,71 @@ install_windows_helpers() {
   fi
 }
 
+# Install the global git push owner guard. The launcher fixes both the inner
+# guard and the real Git executable to absolute paths at install time, so a
+# later PATH entry cannot replace either the authorization code or the binary
+# used for resolution and the final push.
+find_real_git_for_owner_guard() {
+  local path_entry candidate candidate_dir name target="$AGENTS_DIR/bin/git"
+  local -a path_entries=() names=(git git.exe)
+  IFS=':' read -r -a path_entries <<< "${PATH:-}"
+  for path_entry in "${path_entries[@]}"; do
+    [ -n "$path_entry" ] || path_entry='.'
+    for name in "${names[@]}"; do
+      candidate="$path_entry/$name"
+      [ -x "$candidate" ] && [ ! -d "$candidate" ] || continue
+      candidate_dir="$(cd "$(dirname "$candidate")" 2>/dev/null && pwd -P)" || continue
+      candidate="$candidate_dir/$(basename "$candidate")"
+      [ "$candidate" = "$target" ] && continue
+      grep -Eq '^# agmsg git push owner guard launcher$' "$candidate" 2>/dev/null && continue
+      if [ -e "$target" ] && [ "$candidate" -ef "$target" ]; then
+        continue
+      fi
+      printf '%s\n' "$candidate"
+      return 0
+    done
+  done
+  return 1
+}
+
+is_agmsg_git_owner_guard() {
+  local target="$AGENTS_DIR/bin/git"
+  [ -f "$target" ] || return 1
+  grep -q '^# agmsg git push owner guard launcher$' "$target" 2>/dev/null
+}
+
+install_git_push_owner_guard() {
+  local target="$AGENTS_DIR/bin/git"
+  local guard_script="$SKILL_DIR/scripts/guards/git-push-owner-guard.sh"
+  local launcher_template="$SKILL_DIR/scripts/guards/git-push-owner-guard-launcher.sh"
+  local real_git tmp guard_replacement real_replacement
+
+  if { [ -e "$target" ] || [ -L "$target" ]; } && ! is_agmsg_git_owner_guard; then
+    echo "  ! Refusing to overwrite non-agmsg $target" >&2
+    return 1
+  fi
+  if [ ! -x "$guard_script" ] || [ ! -f "$launcher_template" ]; then
+    echo "  ! git push owner guard files are missing from $SKILL_DIR" >&2
+    return 1
+  fi
+  if ! real_git="$(find_real_git_for_owner_guard)"; then
+    echo "  ~ git not found; skipped ~/.agents/bin/git push owner guard (re-run after installing Git)" >&2
+    return 0
+  fi
+
+  mkdir -p "$AGENTS_DIR/bin"
+  guard_replacement="$(printf '%s' "$guard_script" | sed 's/[&|\\\\]/\\\\&/g')"
+  real_replacement="$(printf '%s' "$real_git" | sed 's/[&|\\\\]/\\\\&/g')"
+  tmp="$target.tmp.$$"
+  sed \
+    -e "s|__AGMSG_GIT_GUARD_SCRIPT__|$guard_replacement|g" \
+    -e "s|__AGMSG_REAL_GIT__|$real_replacement|g" \
+    "$launcher_template" > "$tmp"
+  chmod +x "$tmp"
+  mv -f "$tmp" "$target"
+  echo "  + installed git push owner guard (~/.agents/bin/git; real Git: $real_git)"
+}
+
 # Install the destination owner guard for GitHub CLI writes. The launcher is
 # generated with absolute paths so a later PATH entry cannot replace either
 # the authorization code or the real gh binary it inspected.
@@ -393,6 +458,7 @@ if [ "$UPDATE_ONLY" = true ]; then
       && echo "  + refreshed Codex monitor shim (~/.agents/bin/codex)"
   fi
   install_windows_helpers
+  install_git_push_owner_guard
   install_gh_owner_guard
   INSTALLED_VERSION="$(agmsg_source_version)"
   printf '%s\n' "$INSTALLED_VERSION" > "$SKILL_DIR/VERSION"
@@ -468,6 +534,7 @@ if [ -x "$CODEX_SHIM" ] && AGMSG_CODEX_SHIM_INSTALL_QUIET=1 "$CODEX_SHIM" status
     && echo "  + refreshed Codex monitor shim (~/.agents/bin/codex)"
 fi
 install_windows_helpers
+install_git_push_owner_guard
 install_gh_owner_guard
 
 # Marker file for uninstall detection

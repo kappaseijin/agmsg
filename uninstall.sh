@@ -213,13 +213,21 @@ if [ "$REMOVED_SQLITE_SHIM" = true ] && [ -f "$SQLITE_SHIM_CACHE" ]; then
   REMOVED=true
 fi
 
-# Remove only the agmsg-generated GitHub CLI owner guard. A user-owned gh
-# executable, including an older non-agmsg wrapper, is never touched.
+# Remove only the agmsg-generated GitHub CLI and Git owner guards. User-owned
+# executables, including older non-agmsg wrappers, are never touched.
 GH_OWNER_GUARD="$AGENTS_DIR/bin/gh"
 if [ -f "$GH_OWNER_GUARD" ] && [ ! -L "$GH_OWNER_GUARD" ] \
     && grep -q '^# agmsg gh owner guard launcher$' "$GH_OWNER_GUARD" 2>/dev/null; then
   rm -f "$GH_OWNER_GUARD"
   echo "  - removed $GH_OWNER_GUARD"
+  REMOVED=true
+fi
+
+GIT_OWNER_GUARD="$AGENTS_DIR/bin/git"
+if [ -f "$GIT_OWNER_GUARD" ] && [ ! -L "$GIT_OWNER_GUARD" ] \
+    && grep -q '^# agmsg git push owner guard launcher$' "$GIT_OWNER_GUARD" 2>/dev/null; then
+  rm -f "$GIT_OWNER_GUARD"
+  echo "  - removed $GIT_OWNER_GUARD"
   REMOVED=true
 fi
 

@@ -7,7 +7,7 @@ tags:
   - security
   - owner-allowlist
   - issue-3
-status: proposed
+status: implemented
 timestamp: "2026-08-11T12:13:28+09:00"
 ---
 
@@ -144,6 +144,12 @@ flowchart TD
 | GPG-15 | 各標準 agent launcher で `command -v git` を実行 | すべて `~/.agents/bin/git` | 対話 shell だけが shim を解決し、実 agent が素通りする配布不具合 |
 
 GPG-01 は本件の必須負のコントロールである。`thirdparty` という GitHub 形式の非許可 owner を与えながら transport 自体はローカル fake SSH に固定するため、guard が壊れても GitHub や第三者 repository へ接続しない。一方で fake SSH / receive hook が起動すれば、guard が実際の push 起動前に止められなかったことを検出できる。GPG-05b と GPG-10 も同じ fixture を使い、直接 URL の書換えと plumbing 経路を実ネットワークなしで検出する。
+
+## 実装結果
+
+設計どおり、`~/.agents/bin/git` の `/bin/sh` launcher と固定絶対パスの Bash guard、installer / uninstaller の marker 保護、README / README.ja の導入説明を実装した。remote 名、直接URL、全 push URL、Git config の書換え後URLを同一 Git context で解決し、第三者 owner・不正URL・alias・`send-pack`・Bash起動汚染・PATH decoyを fail-closed で検証した。
+
+検証は第三者本番へ接続せず、使い捨て bare remote と fake SSH のみで行った。`tests/test_git_push_owner_guard.bats` は14/14、`tests/test_install.bats` は52/52、シェル構文検査・ShellCheck・`git diff --check` は成功した。既存を含む Bats 943件は、前半699件と spawn 以降の261件をファイル単位で実行し、全件成功を確認した。
 
 ## 保証境界と残余リスク
 
