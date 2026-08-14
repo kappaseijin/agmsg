@@ -1,23 +1,59 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: team-work.sh <validate|self-check> <team> <contract-pack.json>
+# Usage: team-work.sh <command> <team> <contract-pack.json> [command arguments]
 #
-# Validates a read-only work-state contract pack against the selected team's
-# versioned roster JSON contract. State mutation, GitHub queries, and message
-# delivery intentionally belong to later team-work slices.
+# Validates a work-state contract pack against the selected team's versioned
+# roster JSON contract. Mutating commands use the local SQLite store only;
+# GitHub queries and message delivery remain later team-work slices.
 
 COMMAND="${1:-}"
 TEAM="${2:-}"
 PACK="${3:-}"
 
-if [ "$#" -ne 3 ]; then
-  echo "Usage: team-work.sh <validate|self-check> <team> <contract-pack.json>" >&2
-  exit 1
-fi
-
 case "$COMMAND" in
-  validate|self-check) ;;
+  validate|self-check)
+    if [ "$#" -ne 3 ]; then
+      echo "Usage: team-work.sh <validate|self-check> <team> <contract-pack.json>" >&2
+      exit 1
+    fi
+    ;;
+  claim|renew)
+    if [ "$#" -ne 5 ] && [ "$#" -ne 6 ]; then
+      echo "Usage: team-work.sh $COMMAND <team> <contract-pack.json> <work-item-id> <actor-seat> [ttl-seconds]" >&2
+      exit 1
+    fi
+    ;;
+  ack)
+    if [ "$#" -ne 5 ] && [ "$#" -ne 6 ]; then
+      echo "Usage: team-work.sh ack <team> <contract-pack.json> <work-item-id> <actor-seat> [evidence]" >&2
+      exit 1
+    fi
+    ;;
+  release)
+    if [ "$#" -ne 5 ]; then
+      echo "Usage: team-work.sh release <team> <contract-pack.json> <work-item-id> <actor-seat>" >&2
+      exit 1
+    fi
+    ;;
+  set-state)
+    if [ "$#" -ne 6 ]; then
+      echo "Usage: team-work.sh set-state <team> <contract-pack.json> <work-item-id> <actor-seat> <state>" >&2
+      exit 1
+    fi
+    ;;
+  link-pr)
+    if [ "$#" -ne 8 ]; then
+      echo "Usage: team-work.sh link-pr <team> <contract-pack.json> <work-item-id> <actor-seat> <repository> <number> <contributes|closes>" >&2
+      exit 1
+    fi
+    ;;
+  writeback)
+    if [ "$#" -ne 6 ]; then
+      echo "Usage: team-work.sh writeback <team> <contract-pack.json> <work-item-id> <actor-seat> <evidence>" >&2
+      exit 1
+    fi
+    ;;
   *)
     echo "Error: unknown team-work command: $COMMAND" >&2
     exit 1
@@ -43,4 +79,14 @@ else
   exit "$roster_status"
 fi
 
-printf '%s' "$ROSTER_JSON" | node "$SCRIPT_DIR/lib/team-work.js" "$COMMAND" "$TEAM" "$PACK"
+case "$COMMAND" in
+  validate|self-check) ;;
+  *)
+    source "$SCRIPT_DIR/lib/storage.sh"
+    agmsg_storage_ensure_initialized
+    AGMSG_TEAM_WORK_DB="$(agmsg_db_path)"
+    export AGMSG_TEAM_WORK_DB
+    ;;
+esac
+
+printf '%s' "$ROSTER_JSON" | node "$SCRIPT_DIR/lib/team-work.js" "$@"
