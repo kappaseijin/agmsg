@@ -103,14 +103,14 @@ git commit -m "docs: plan team-work live audit"
 - Produces: fixture cases that exercise query names/cursors and inspect parsed
   canonical output instead of calling the network.
 
-- [ ] **Step 1: Create reusable fixture helpers and a fake `gh` executable**
+- [x] **Step 1: Create reusable fixture helpers and a fake `gh` executable**
 
 The fake command must parse `gh api graphql` arguments, log the named operation
 and cursor, and return fixture-selected JSON or a nonzero error.  It should
 recognize `TeamWorkIssueClosingRelations` and
 `TeamWorkPullRequestClosingRelations` by their query text.
 
-- [ ] **Step 2: Add a two-sided, two-page closing-relation test**
+- [x] **Step 2: Add a two-sided, two-page closing-relation test**
 
 ```bash
 @test "team-work audit: follows both closing relation pages" {
@@ -125,20 +125,20 @@ recognize `TeamWorkIssueClosingRelations` and
 }
 ```
 
-- [ ] **Step 3: Run the focused audit test and verify red**
+- [x] **Step 3: Run the focused audit test and verify red**
 
 Run: `BATS_SHELL=/bin/bash bats --print-output-on-failure tests/test_team_work_audit.bats --filter 'follows both closing relation pages'`
 
 Expected: FAIL because `team-work.sh` rejects the `audit` command.
 
-- [ ] **Step 4: Add queue and unknown classification cases**
+- [x] **Step 4: Add queue and unknown classification cases**
 
 Add independent tests for an unleased open source (`ready`), a valid live lease
 (`fully_allocated`), a closed complete source (`quiescent`), a fake `gh`
 failure, a PR-side missing close, and a changed pack after an existing lease
 (`local_state_stale`).  Each unknown case asserts `queue.ready == []`.
 
-- [ ] **Step 5: Add guard red tests**
+- [x] **Step 5: Add guard red tests**
 
 ```bash
 @test "GHG-21: allows only explicit GraphQL queries" {
@@ -151,7 +151,7 @@ failure, a PR-side missing close, and a changed pack after an existing lease
 
 The test also retains rejection of `gh api -f q=1 /repos/...`.
 
-- [ ] **Step 6: Commit the red suite**
+- [x] **Step 6: Commit the red suite**
 
 ```bash
 git add tests/test_team_work_audit.bats tests/test_gh_write_owner_guard.bats
@@ -176,47 +176,47 @@ git commit -m "test: cover team-work live audit"
 - Each GraphQL page is invoked as a named explicit query with owner, repository,
   number, and optional `after` cursor fields.
 
-- [ ] **Step 1: Export reusable validation and canonical helpers**
+- [x] **Step 1: Export reusable validation and canonical helpers**
 
 Guard `main()` in `team-work.js` with `require.main === module` and export
 `SchemaError`, `canonicalJson`, `sha256Digest`, `envelopeDigest`, and
 `validateContractPack`.  Run the existing contract/state Bats files immediately
 afterward to prove no CLI regression.
 
-- [ ] **Step 2: Add audit command routing without initialization**
+- [x] **Step 2: Add audit command routing without initialization**
 
 Extend the wrapper's argument case with exactly three positional arguments for
 `observe|queue|audit`.  Source `lib/storage.sh`, call only `agmsg_db_path`,
 export the result, get roster JSON, and invoke the new Node entrypoint.
 
-- [ ] **Step 3: Implement total-checked pagination**
+- [x] **Step 3: Implement total-checked pagination**
 
 Implement `fetchIssueClosingPages` and `fetchPullRequestClosingPages` around
 the two named queries.  For each page, reject GraphQL errors, absent
 `pageInfo`, duplicate node, cursor reuse, missing next cursor, or final
 `nodes.length !== totalCount` as a normalized source violation.
 
-- [ ] **Step 4: Read and validate local current rows**
+- [x] **Step 4: Read and validate local current rows**
 
 Use `sqlite3 -readonly` to obtain one compact JSON row per packed item.
 Compare stored contract/envelope/source/owner fields to the supplied pack;
 represent DB/open/read/parse failure or a mismatch as stable unknown evidence.
 
-- [ ] **Step 5: Build relation checks, classification, and canonical output**
+- [x] **Step 5: Build relation checks, classification, and canonical output**
 
 Union packed/local PR links, validate both directions for every closing
 relation, flag untracked Issue-side closers, then classify only if no
 violations.  Canonically emit `observe` item summaries, `queue.ready`, and
 `audit` relation checks/violations with `sourceDigest` and `auditDigest`.
 
-- [ ] **Step 6: Run the audit suite until green**
+- [x] **Step 6: Run the audit suite until green**
 
 Run: `BATS_SHELL=/bin/bash bats --print-output-on-failure tests/test_team_work_audit.bats`
 
 Expected: all pagination, queue, fully-allocated, quiescent, unknown, stale,
 and no-side-effect tests pass.
 
-- [ ] **Step 7: Commit the audit implementation**
+- [x] **Step 7: Commit the audit implementation**
 
 ```bash
 git add scripts/team-work.sh scripts/lib/team-work.js scripts/lib/team-work-audit.js
@@ -236,27 +236,27 @@ git commit -m "feat: add team-work live audit"
   `query=` field whose document starts with `query`; explicit methods/input and
   mutation/subscription documents remain rejected.
 
-- [ ] **Step 1: Parse endpoint and query field without weakening REST parsing**
+- [x] **Step 1: Parse endpoint and query field without weakening REST parsing**
 
 Record the first API endpoint, count/retain `query=` field values across
 `-f`, `-F`, `--field`, and `--raw-field` forms, and preserve existing malformed
 flag handling.
 
-- [ ] **Step 2: Add the conservative GraphQL predicate**
+- [x] **Step 2: Add the conservative GraphQL predicate**
 
 Require endpoint `graphql`, no explicit method/input, exactly one query field,
 an explicit leading `query` token, and no standalone `mutation` or
 `subscription` token.  Fall back to the current REST GET/no-parameter rule in
 all other cases.
 
-- [ ] **Step 3: Run the guard suite until green**
+- [x] **Step 3: Run the guard suite until green**
 
 Run: `BATS_SHELL=/bin/bash bats --print-output-on-failure tests/test_gh_write_owner_guard.bats`
 
 Expected: the explicit query reaches fake `gh`; the mutation and all existing
 write paths remain blocked.
 
-- [ ] **Step 4: Commit the guard change**
+- [x] **Step 4: Commit the guard change**
 
 ```bash
 git add scripts/guards/gh-write-owner-guard.sh tests/test_gh_write_owner_guard.bats
@@ -275,13 +275,13 @@ git commit -m "feat: allow guarded GraphQL queries"
 - Documents command syntax, dependency requirements, output fields,
   classification meaning, and read-only boundary without requiring `docs/`.
 
-- [ ] **Step 1: Add README command examples and classification table**
+- [x] **Step 1: Add README command examples and classification table**
 
 Place the new command block after the local lease section.  State that the
 commands require `gh`, `node`, and `sqlite3`; make GraphQL/SQLite reads only;
 explain that unknown is a safety outcome and never means an empty queue.
 
-- [ ] **Step 2: Run focused, regression, static, and CI-equivalent checks**
+- [x] **Step 2: Run focused, regression, static, and CI-equivalent checks**
 
 ```bash
 BATS_SHELL=/bin/bash bats --print-output-on-failure \
@@ -296,7 +296,7 @@ git diff --check origin/main...HEAD
 Then run all Bats files through `.github/scripts/shard-tests.sh` in four
 shards and record each exit status.
 
-- [ ] **Step 3: Record actual evidence and commit docs**
+- [x] **Step 3: Record actual evidence and commit docs**
 
 Replace this task's checklist with exact pass counts and commands, then:
 
@@ -304,6 +304,27 @@ Replace this task's checklist with exact pass counts and commands, then:
 git add README.md docs/superpowers/plans/2026-08-15-team-work-live-audit.md
 git commit -m "docs: document team-work live audit"
 ```
+
+## Verification record
+
+- The initial focused audit test failed as intended with
+  `Error: unknown team-work command: audit`; the initial guard test failed
+  because GraphQL was not classified as a safe read.  A later `-X GET` test
+  also failed before the guard was tightened, proving the explicit-method
+  bypass was not accepted.
+- `BATS_SHELL=/bin/bash /tmp/agmsg-bats113.iQXKkW/node_modules/.bin/bats --print-output-on-failure tests/test_team_work_audit.bats`
+  passed 8/8 fixture-driven audit, pagination, status, stale-state, digest,
+  and no-write tests.
+- `BATS_SHELL=/bin/bash /tmp/agmsg-bats113.iQXKkW/node_modules/.bin/bats --print-output-on-failure tests/test_gh_write_owner_guard.bats`
+  passed 21/21 guard tests.
+- The combined #40/#41/#42/guard public suite passed 49/49 tests.
+- `node --check scripts/lib/team-work.js`,
+  `node --check scripts/lib/team-work-audit.js`, and
+  `shellcheck -s bash -e SC1091 scripts/team-work.sh scripts/guards/gh-write-owner-guard.sh`
+  passed; `git diff --check` passed.
+- CI-equivalent `.github/scripts/shard-tests.sh <shard> 4 | xargs bats`
+  completed with shard 1: 263/263, shard 2: 263/263, shard 3: 261/261, and
+  shard 4: 263/263 tests passing (1,050 total).
 
 ## Execution handoff
 
