@@ -75,6 +75,30 @@ json_valid_line() {
   [ -z "$output" ]
 }
 
+@test "api: get teams <team> registrations emits one JSONL row per registration" {
+  bash "$SCRIPTS/join.sh" testteam alice claude-code /tmp/project-a-2
+  run bash "$SCRIPTS/api.sh" get teams testteam registrations
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | wc -l | tr -d ' ')" -eq 3 ]
+
+  local seen_alice_a=0 seen_alice_b=0 seen_bob=0 unexpected=0 line key
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    key="$(json_field "$line" team)|$(json_field "$line" agent)|$(json_field "$line" type)|$(json_field "$line" project)"
+    case "$key" in
+      "testteam|alice|claude-code|/tmp/project-a") seen_alice_a=1 ;;
+      "testteam|alice|claude-code|/tmp/project-a-2") seen_alice_b=1 ;;
+      "testteam|bob|codex|/tmp/project-b") seen_bob=1 ;;
+      *) unexpected=1 ;;
+    esac
+  done <<< "$output"
+
+  [ "$unexpected" -eq 0 ]
+  [ "$seen_alice_a" -eq 1 ]
+  [ "$seen_alice_b" -eq 1 ]
+  [ "$seen_bob" -eq 1 ]
+}
+
 @test "api: rejects a team name with path traversal (../) before it reaches the filesystem (#87 cluster)" {
   run bash "$SCRIPTS/api.sh" get teams "../../escape-api" members
   [ "$status" -eq 1 ]

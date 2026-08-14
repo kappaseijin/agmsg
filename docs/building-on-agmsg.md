@@ -23,11 +23,20 @@ them is free to change.
 ```sh
 ~/.agents/skills/<cmd>/scripts/api.sh get teams
 ~/.agents/skills/<cmd>/scripts/api.sh get teams <team> members
+~/.agents/skills/<cmd>/scripts/api.sh get teams <team> registrations
 ~/.agents/skills/<cmd>/scripts/api.sh get teams <team> messages [--agent <name>] [--limit N] [--before-id <id>]
 ```
 
 JSON out — plain lines for `teams`, JSONL (one record per line) for
-`members`/`messages`. `messages` returns oldest-first, capped by `--limit`
+`members`/`registrations`/`messages`. `registrations` emits one record for
+each registration, preserving the `type`/`project` pair:
+
+```json
+{"team":"agsuite","agent":"alice","type":"claude-code","project":"/work/agmsg"}
+```
+
+`members` remains the compatibility view that aggregates an agent's types and
+returns one project. `messages` returns oldest-first, capped by `--limit`
 (default 30, meaning the most recent 30 — not the first 30), each record
 shaped like:
 
@@ -44,7 +53,7 @@ JSON today keeps working unmodified after that migration — which is the
 whole point of going through it instead of the database file.
 
 `api.sh` is intentionally read-only in v1 and shaped like a small REST API —
-verb (`get`) + resource nouns (`teams`, `members`, `messages`) — kubectl-style
+verb (`get`) + resource nouns (`teams`, `members`, `registrations`, `messages`) — kubectl-style
 positional args rather than a `/teams/<team>/messages`-style path string
 (there's a fixed, small set of routes; a path string would just add parsing
 overhead on both ends for no real flexibility). A write verb (`post` for
