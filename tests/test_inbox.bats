@@ -60,6 +60,15 @@ await_barrier_reached() {
   [ -z "$output" ]
 }
 
+@test "inbox: empty queue exits successfully under system Bash with nounset" {
+  # macOS ships Bash 3.2, where expanding an empty array with `set -u` fails.
+  # Use the system shell explicitly so the receiver's EXIT cleanup stays
+  # compatible even when `bash` on PATH is a newer Homebrew installation.
+  run /bin/bash "$SCRIPTS/inbox.sh" testteam alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No new messages."* ]]
+}
+
 @test "inbox: a message arriving between display and mark is NOT marked read unseen" {
   bash "$SCRIPTS/send.sh" testteam bob alice "early"
   # Pause the run between display and mark, land a message inside the window,

@@ -44,6 +44,7 @@ OWNER="inbox:$$"
 CLAIM_IDS=()
 release_claims() {
   local id
+  [ "${#CLAIM_IDS[@]}" -gt 0 ] || return 0
   for id in "${CLAIM_IDS[@]}"; do
     agmsg_release_claim "$id" "$OWNER" >/dev/null 2>&1 || true
   done
