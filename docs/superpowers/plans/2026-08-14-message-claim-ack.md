@@ -112,7 +112,7 @@ esac
 - Consumes: Task 1 の claim / receipt table。
 - Produces: message id を含む queue output、JSON/human receipt status、正しい history legend。
 
-- [ ] **Step 1: send output の failing test を書く**
+- [x] **Step 1: send output の failing test を書く**
 
 `tests/test_messaging.bats` の送信 test を次の期待へ変更する。
 
@@ -121,13 +121,13 @@ esac
 [[ "$output" =~ "delivery not yet acknowledged" ]]
 ```
 
-- [ ] **Step 2: failing test を実行する**
+- [x] **Step 2: failing test を実行する**
 
 Run: `bats tests/test_messaging.bats`
 
 Expected: FAIL because `send.sh` still prints `Sent to`.
 
-- [ ] **Step 3: send と status を実装する**
+- [x] **Step 3: send と status を実装する**
 
 同一 sqlite invocation で `INSERT` の直後に `SELECT last_insert_rowid();` を実行し、取得した numeric id を queue output に入れる。`message-status.sh --format json` は以下を返す。
 
@@ -142,11 +142,11 @@ Expected: FAIL because `send.sh` still prints `Sent to`.
 }
 ```
 
-- [ ] **Step 4: history の legacy marker test を追加する**
+- [x] **Step 4: history の legacy marker test を追加する**
 
 receipt 無しで `read_at` だけが非 null の fixture を作り、`history.sh` が `?` と legend を表示することを assert する。
 
-- [ ] **Step 5: focused tests を green にする**
+- [x] **Step 5: focused tests を green にする**
 
 Run: `bats tests/test_claims.bats tests/test_messaging.bats`
 

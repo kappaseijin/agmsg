@@ -93,12 +93,23 @@ INSERT="INSERT INTO messages (team, from_agent, to_agent, body) VALUES ('$(_agms
 # busy_timeout, so re-running it waits for the schema, then the INSERT lands.
 # See #114.
 # Pipe the SQL via stdin (not as an argv) so a large body cannot overflow the
-# OS command-line limit (the "Argument list too long" crash).
-if ! printf '%s
-' "$INSERT" | agmsg_sqlite "$DB" 2>/dev/null; then
+# OS command-line limit (the "Argument list too long" crash). Keep the INSERT
+# and last_insert_rowid() in one SQLite invocation: the id is connection-local.
+SQL="$INSERT
+SELECT last_insert_rowid();"
+if ! MESSAGE_ID="$(printf '%s\n' "$SQL" | agmsg_sqlite "$DB" 2>/dev/null)"; then
   bash "$SCRIPT_DIR/internal/init-db.sh" >/dev/null
-  printf '%s
-' "$INSERT" | agmsg_sqlite "$DB"
+  if ! MESSAGE_ID="$(printf '%s\n' "$SQL" | agmsg_sqlite "$DB" 2>/dev/null)"; then
+    echo "Error: failed to queue message." >&2
+    exit 1
+  fi
 fi
 
-echo "Sent to $TO in team $TEAM"
+case "$MESSAGE_ID" in
+  ''|*[!0-9]*)
+    echo "Error: queue insert did not return a message id." >&2
+    exit 1
+    ;;
+esac
+
+printf 'Queued message #%s to %s in team %s; delivery not yet acknowledged.\n' "$MESSAGE_ID" "$TO" "$TEAM"
