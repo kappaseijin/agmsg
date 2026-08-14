@@ -407,6 +407,14 @@ git pull
 
 DB and team configs are preserved. Only scripts and assets are updated.
 
+The script tree is staged and moved into place by rename, so an already-running
+watcher keeps reading the old file it has open instead of reading a partially
+overwritten file. Restart running agent sessions after the update to use the new
+scripts. If the staging move cannot be performed safely, the update fails
+loudly; it does not fall back to an in-place overwrite. The no-interruption
+guarantee is verified on macOS/Linux; Windows/MSYS2 behavior remains an
+explicitly unverified edge case.
+
 ## Uninstall
 
 An `uninstall.sh` copy ships inside every install, so this works whether you

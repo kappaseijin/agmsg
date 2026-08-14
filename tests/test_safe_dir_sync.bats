@@ -8,10 +8,15 @@ load test_helper
 setup() {
   export WORK="$(mktemp -d)"
   export LIB="$BATS_TEST_DIRNAME/../scripts/lib/safe-dir-sync.sh"
+  WATCHER_PID=""
   source "$LIB"
 }
 
 teardown() {
+  if [ -n "${WATCHER_PID:-}" ]; then
+    kill "$WATCHER_PID" 2>/dev/null || true
+    wait "$WATCHER_PID" 2>/dev/null || true
+  fi
   rm -rf "$WORK"
 }
 
@@ -125,4 +130,52 @@ teardown() {
   # undisturbed for the running process, but genuinely updated on disk.
   run grep -c "ALL-TICKS-COMPLETE-V2-SHORT" "$WORK/dest/watcher.sh"
   [ "$output" -eq 1 ]
+}
+
+@test "install --update keeps a live installed watcher delivering after sync" {
+  local project="$BATS_TEST_DIRNAME/.."
+  local e2e_home="$WORK/e2e-home"
+  local skill="$e2e_home/.agents/skills/agmsg"
+  local ready="$skill/run/ready.e2e__receiver"
+  local log="$WORK/watch.log"
+
+  run env HOME="$e2e_home" bash "$project/install.sh" --cmd agmsg
+  [ "$status" -eq 0 ]
+
+  run env HOME="$e2e_home" bash "$skill/scripts/join.sh" e2e sender codex "$project"
+  [ "$status" -eq 0 ]
+  run env HOME="$e2e_home" bash "$skill/scripts/join.sh" e2e receiver codex "$project"
+  [ "$status" -eq 0 ]
+
+  env HOME="$e2e_home" AGMSG_WATCH_INTERVAL=1 \
+    bash "$skill/scripts/watch.sh" e2e-session "$project" codex receiver >"$log" 2>&1 &
+  WATCHER_PID=$!
+
+  local ready_found=false
+  for _ in $(seq 1 50); do
+    if [ -f "$ready" ]; then
+      ready_found=true
+      break
+    fi
+    kill -0 "$WATCHER_PID" 2>/dev/null || break
+    sleep 0.1
+  done
+  [ "$ready_found" = true ]
+
+  run env HOME="$e2e_home" bash "$project/install.sh" --cmd agmsg --update
+  [ "$status" -eq 0 ]
+  kill -0 "$WATCHER_PID"
+
+  run env HOME="$e2e_home" bash "$skill/scripts/send.sh" e2e sender receiver post-update
+  [ "$status" -eq 0 ]
+
+  local delivered=false
+  for _ in $(seq 1 50); do
+    if grep -q "post-update" "$log"; then
+      delivered=true
+      break
+    fi
+    sleep 0.1
+  done
+  [ "$delivered" = true ]
 }

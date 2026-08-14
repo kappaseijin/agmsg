@@ -86,7 +86,7 @@ configure_codex_sandbox() {
   if command -v cygpath >/dev/null 2>&1; then
     local i
     for i in "${!writable_paths[@]}"; do
-      writable_paths[$i]="$(cygpath -m "${writable_paths[$i]}" 2>/dev/null || printf '%s' "${writable_paths[$i]}")"
+      writable_paths[i]="$(cygpath -m "${writable_paths[i]}" 2>/dev/null || printf '%s' "${writable_paths[i]}")"
     done
   fi
   local missing=()
