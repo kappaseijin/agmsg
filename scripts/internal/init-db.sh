@@ -81,6 +81,42 @@ CREATE INDEX IF NOT EXISTS idx_team_work_current_lease_expiry
   ON team_work_current(lease_expires_at)
   WHERE lease_expires_at IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS team_work_dispatch_current (
+  team TEXT NOT NULL,
+  work_item_id TEXT NOT NULL,
+  contract_digest TEXT NOT NULL,
+  envelope_digest TEXT NOT NULL,
+  owner_seat TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('dispatching', 'claimed')),
+  lease_epoch TEXT NOT NULL,
+  lease_expires_at INTEGER NOT NULL,
+  queue_digest TEXT NOT NULL,
+  delivery_evidence_json TEXT NOT NULL CHECK (json_valid(delivery_evidence_json)),
+  ack_evidence TEXT,
+  last_action TEXT NOT NULL,
+  last_actor TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (team, work_item_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_team_work_dispatch_current_lease_expiry
+  ON team_work_dispatch_current(lease_expires_at);
+
+CREATE TABLE IF NOT EXISTS team_work_dispatch_revisions (
+  team TEXT NOT NULL,
+  work_item_id TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  previous_revision INTEGER,
+  action TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('dispatching', 'claimed')),
+  lease_epoch TEXT NOT NULL,
+  snapshot_json TEXT NOT NULL CHECK (json_valid(snapshot_json)),
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (team, work_item_id, revision)
+);
+
 CREATE TABLE IF NOT EXISTS team_work_revisions (
   team TEXT NOT NULL,
   work_item_id TEXT NOT NULL,
@@ -165,6 +201,86 @@ BEGIN
   );
 END;
 
+CREATE TRIGGER IF NOT EXISTS team_work_dispatch_current_history_insert
+AFTER INSERT ON team_work_dispatch_current
+BEGIN
+  INSERT INTO team_work_dispatch_revisions(
+    team, work_item_id, revision, previous_revision, action, actor, state, lease_epoch, snapshot_json, created_at
+  ) VALUES (
+    NEW.team,
+    NEW.work_item_id,
+    1,
+    NULL,
+    NEW.last_action,
+    NEW.last_actor,
+    NEW.state,
+    NEW.lease_epoch,
+    json_object(
+      'schemaVersion', 1,
+      'team', NEW.team,
+      'workItemId', NEW.work_item_id,
+      'contractDigest', NEW.contract_digest,
+      'envelopeDigest', NEW.envelope_digest,
+      'ownerSeat', NEW.owner_seat,
+      'state', NEW.state,
+      'leaseEpoch', NEW.lease_epoch,
+      'leaseExpiresAt', NEW.lease_expires_at,
+      'queueDigest', NEW.queue_digest,
+      'deliveryEvidence', json(NEW.delivery_evidence_json),
+      'ackEvidence', NEW.ack_evidence,
+      'lastAction', NEW.last_action,
+      'lastActor', NEW.last_actor,
+      'createdAt', NEW.created_at,
+      'updatedAt', NEW.updated_at
+    ),
+    NEW.updated_at
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS team_work_dispatch_current_history_update
+AFTER UPDATE ON team_work_dispatch_current
+BEGIN
+  INSERT INTO team_work_dispatch_revisions(
+    team, work_item_id, revision, previous_revision, action, actor, state, lease_epoch, snapshot_json, created_at
+  ) VALUES (
+    NEW.team,
+    NEW.work_item_id,
+    (
+      SELECT COALESCE(MAX(revision), 0) + 1
+      FROM team_work_dispatch_revisions
+      WHERE team = NEW.team AND work_item_id = NEW.work_item_id
+    ),
+    (
+      SELECT MAX(revision)
+      FROM team_work_dispatch_revisions
+      WHERE team = NEW.team AND work_item_id = NEW.work_item_id
+    ),
+    NEW.last_action,
+    NEW.last_actor,
+    NEW.state,
+    NEW.lease_epoch,
+    json_object(
+      'schemaVersion', 1,
+      'team', NEW.team,
+      'workItemId', NEW.work_item_id,
+      'contractDigest', NEW.contract_digest,
+      'envelopeDigest', NEW.envelope_digest,
+      'ownerSeat', NEW.owner_seat,
+      'state', NEW.state,
+      'leaseEpoch', NEW.lease_epoch,
+      'leaseExpiresAt', NEW.lease_expires_at,
+      'queueDigest', NEW.queue_digest,
+      'deliveryEvidence', json(NEW.delivery_evidence_json),
+      'ackEvidence', NEW.ack_evidence,
+      'lastAction', NEW.last_action,
+      'lastActor', NEW.last_actor,
+      'createdAt', NEW.created_at,
+      'updatedAt', NEW.updated_at
+    ),
+    NEW.updated_at
+  );
+END;
+
 CREATE TRIGGER IF NOT EXISTS team_work_revisions_immutable_update
 BEFORE UPDATE ON team_work_revisions
 BEGIN
@@ -175,5 +291,17 @@ CREATE TRIGGER IF NOT EXISTS team_work_revisions_immutable_delete
 BEFORE DELETE ON team_work_revisions
 BEGIN
   SELECT RAISE(ABORT, 'team_work_revisions is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS team_work_dispatch_revisions_immutable_update
+BEFORE UPDATE ON team_work_dispatch_revisions
+BEGIN
+  SELECT RAISE(ABORT, 'team_work_dispatch_revisions is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS team_work_dispatch_revisions_immutable_delete
+BEFORE DELETE ON team_work_dispatch_revisions
+BEGIN
+  SELECT RAISE(ABORT, 'team_work_dispatch_revisions is append-only');
 END;
 SQL
