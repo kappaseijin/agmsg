@@ -54,6 +54,17 @@ flowchart LR
   F --> I[next invocation reads new code]
 ```
 
+## 変異試験の実測
+
+2026-08-14T11:59:38+09:00 に、対象試験の無変異・変異・復元を順に実行した。
+
+- 無変異: `bats --filter 'safe_dir_sync leaves a running script completely undisturbed' tests/test_safe_dir_sync.bats` が `ok`（exit 0）。
+- `M-SAFE-DIR-CP-R`: 一時コピー内の `safe_dir_sync` を `cp -R` 実装へ戻す変異を適用すると、同じ対象試験が `not ok`（exit 1）。復元後は再び `ok`。判定は `KILLED`。
+- `KILLED-BY-TSC`: 対象は Bash 実装で TypeScript 型検査を使用しないため `not_applicable`。
+- `SURVIVED`: なし。
+
+変異は一時コピーだけに適用し、リポジトリの実装は復元済みである。
+
 ## 完了条件
 
 Issue #22 の実装・文書・テスト・CI・PR 状態を current state で再確認し、未解決の review gate が無い場合だけ merge する。レビュー不能または required CI 未完了の場合は、解決済みと扱わない。
