@@ -290,6 +290,15 @@ fi
 # drop on spawn; unset (the default) strips nothing.
 SPAWN_UNSET_VARS="$(agmsg_type_get "$AGENT_TYPE" spawn_unset_env)"
 
+# Required role overlays are opt-in metadata. Validate before team resolution,
+# pre-join, session recording, or terminal placement so a failed policy leaves
+# no registration or launched process behind.
+if ! agmsg_spawn_options_validate_required_role_overlay "$AGENT_TYPE" "$ROLE"; then
+  exit 1
+fi
+SPAWN_PROFILE_HOME="$AGMSG_SPAWN_OPTIONS_PROFILE_HOME"
+SPAWN_PROFILE_HOME_ENV="$AGMSG_SPAWN_OPTIONS_PROFILE_HOME_ENV"
+
 # Extra CLI args for this type from the spawn options file (opt-in, see
 # scripts/lib/spawn-options.sh). Read line-by-line — never word-split — so a
 # value containing spaces stays a single token.
@@ -467,6 +476,9 @@ esac
   # Drop inherited same-type session-identity vars before exec'ing the CLI (#294).
   if [ -n "$SPAWN_UNSET_VARS" ]; then
     printf 'unset %s\n' "$SPAWN_UNSET_VARS"
+  fi
+  if [ -n "$SPAWN_PROFILE_HOME" ]; then
+    printf 'export %s=%q\n' "$SPAWN_PROFILE_HOME_ENV" "$SPAWN_PROFILE_HOME"
   fi
   if [ -n "$SPAWN_AGENT" ]; then
     # Node-launcher path: pass the universal agmsg context + the actas prompt.

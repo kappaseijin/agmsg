@@ -1245,3 +1245,49 @@ _spawn_recorded_id() {
     ! grep -q "pane run" "$HERDR_CALL_LOG"
   done
 }
+
+# --- required role overlay policy (#8) --------------------------------------
+
+@test "spawn: required role overlay rejects before pre-join" {
+  local options="$TEST_SKILL_DIR/spawn_options.yaml"
+  cat > "$options" <<'YAML'
+agmsg.require-role-overlay:
+  claude-code: true
+YAML
+  export AGMSG_SPAWN_OPTIONS_FILE="$options"
+  bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
+
+  run bash "$SCRIPTS/spawn.sh" claude-code project_reviewer_claude \
+    --project "$PROJ" --no-wait
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"role overlay"* ]]
+  [[ "$output" == *"claude-code"* ]]
+  [[ "$output" == *"reviewer"* ]]
+
+  run bash "$SCRIPTS/identities.sh" "$PROJ" claude-code
+  [[ "$output" != *"project_reviewer_claude"* ]]
+  [ ! -f "$CAPTURE" ]
+}
+
+@test "spawn: required codex overlay exports the validated CODEX_HOME" {
+  local options="$TEST_SKILL_DIR/spawn_options.yaml"
+  mkdir -p "$HOME/.codex"
+  : > "$HOME/.codex/architect.config.toml"
+  cat > "$options" <<'YAML'
+agmsg.require-role-overlay:
+  codex: true
+codex@architect:
+  -p: architect
+YAML
+  export AGMSG_SPAWN_OPTIONS_FILE="$options"
+  bash "$SCRIPTS/join.sh" cxteam existing codex "$PROJ"
+
+  run bash "$SCRIPTS/spawn.sh" codex project_architect_codex \
+    --project "$PROJ" --team cxteam --no-wait
+  [ "$status" -eq 0 ]
+  boot="$(cat "$CAPTURE")"
+  expected_home="$(cd "$HOME/.codex" && pwd -P)"
+  run cat "$boot"
+  [[ "$output" == *"export CODEX_HOME=$expected_home"* ]]
+  [[ "$output" == *"-p architect"* ]]
+}
