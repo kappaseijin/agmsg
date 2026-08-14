@@ -19,6 +19,7 @@ setup() {
   export MOCK="$TEST_SKILL_DIR/mock-bridge.sh"
   cat > "$MOCK" <<EOF
 #!/usr/bin/env bash
+[ -z "\${MOCK_BRIDGE_CAPTURE_DELAY:-}" ] || sleep "\$MOCK_BRIDGE_CAPTURE_DELAY"
 printf '%s\n' "\$*" >> "$CAPTURE"
 [ -z "\${MOCK_BRIDGE_SLEEP:-}" ] || sleep "\$MOCK_BRIDGE_SLEEP"
 exit 0
@@ -46,19 +47,23 @@ write_request() {
 
 # Drive the launcher against a short-lived parent, blocking until it exits. fd 3
 # is closed on the backgrounded parent and the launcher so a stray descriptor
-# can't keep bats from exiting on macOS (#bats-fd3).
+# can't keep bats from exiting on macOS (#bats-fd3). Pass `no-capture` for a
+# negative test that proves no bridge was started.
 run_launcher() {
+  local expectation="${1:-capture}"
   sleep 6 3>&- & local p=$!
   bash "$LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$p" >/dev/null 2>&1 3>&- || true
   wait "$p" 2>/dev/null || true
-  # The launcher starts the mock through nohup. Its bound-thread metadata is
-  # written synchronously, but the mock's capture can land just after the
-  # parent exits, especially now that a per-role child launcher is involved.
-  local i
-  for i in {1..30}; do
-    [ -f "$CAPTURE" ] && break
-    sleep 0.1
-  done
+  [ "$expectation" = "no-capture" ] && return 0
+  if ! wait_for_file "$CAPTURE"; then
+    echo "bridge start did not complete: capture file was not created" >&2
+    if [ -f "$RUN_DIR/codex-bridge.team.alice.pid" ]; then
+      echo "bridge pidfile: $(cat "$RUN_DIR/codex-bridge.team.alice.pid")" >&2
+    else
+      echo "bridge pidfile: absent" >&2
+    fi
+    return 1
+  fi
 }
 
 @test "launcher: binds the recorded thread when the record's project matches (#350)" {
@@ -67,6 +72,15 @@ run_launcher() {
   [ -f "$CAPTURE" ]
   grep -q -- "--thread rec-thread-1" "$CAPTURE"
   ! grep -q -- "--thread loaded" "$CAPTURE"
+}
+
+@test "launcher: waits for a delayed bridge start beyond the legacy poll window" {
+  export MOCK_BRIDGE_CAPTURE_DELAY=10
+  put_record team alice delayed-thread "$PROJ" codex
+  run_launcher
+
+  [ -f "$CAPTURE" ]
+  grep -q -- "--thread delayed-thread" "$CAPTURE"
 }
 
 @test "launcher: passes the active storage override as a workspace root" {
@@ -79,13 +93,13 @@ run_launcher() {
 }
 
 @test "launcher: leaves a role without a recorded live thread unsubscribed (#150)" {
-  run_launcher
+  run_launcher no-capture
   [ ! -f "$CAPTURE" ]
 }
 
 @test "launcher: leaves a role with a foreign-project record unsubscribed (#150)" {
   put_record team alice other-thread "/some/other/project" codex
-  run_launcher
+  run_launcher no-capture
   [ ! -f "$CAPTURE" ]
 }
 
