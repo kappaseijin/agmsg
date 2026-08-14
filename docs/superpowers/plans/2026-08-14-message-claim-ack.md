@@ -273,6 +273,13 @@ Expected: whitespace error なし、test count と PASS count が一致、Node s
 - `node --check scripts/drivers/types/codex/codex-bridge.js`: PASS
 - focused Bats: `test_claims.bats`、`test_messaging.bats`、`test_inbox.bats`、`test_watch.bats`、Codex bridge の inline-inbox / default wake case: PASS
 
+macOS compatibility correction（2026-08-15T02:00:58+09:00）:
+
+- GitHub macOS `/bin/bash 3.2` で `set -u` と空 `CLAIM_IDS` の EXIT trap が unbound variable になることを、system Bash を明示する regression test で RED にした。
+- `release_claims` の空配列を length guard し、`test_inbox.bats`（8/8）と `test_dispatch.bats`（6/6）を GREEN にした。
+- `bats --count tests`: `1003`、`bats tests`: `1003/1003 PASS`、exit `0`。
+- GitHub Actions tests run `31820464249`: 15/15 SUCCESS（macOS / Ubuntu / Windows を含む）。
+
 - [x] **Step 3: implementation notes を実測値で更新する**
 
 本計画書に test count、focused tests、full suite、PR head SHA を追記する。spec に実装と異なる API 名や state があれば実装に合わせて更新する。
@@ -280,6 +287,7 @@ Expected: whitespace error なし、test count と PASS count が一致、Node s
 実績:
 
 - PR 作成時 head: `ba610bacfa46ac2f3f27ba4523fd020a85d5a0bf`
+- compatibility fix head: `cf70d290632fd213f95eb2dc36c59916fde0fd1d`
 - PR: [#44](https://github.com/kappaseijin/agmsg/pull/44)
 - spec は実装に合わせ、実在しない receipt API、status format、legacy `read_at`、ACK persistence failure、Codex rejection path を修正済み。
 
