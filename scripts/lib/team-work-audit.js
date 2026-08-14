@@ -217,9 +217,22 @@ function fetchPullRequestEvidence(repository, number) {
   );
 }
 
+function parseLocalRows(output) {
+  const rows = new Map();
+  for (const line of String(output || "").replace(/\r/g, "").split("\n")) {
+    if (line.length === 0) continue;
+    const row = JSON.parse(line);
+    if (!isObject(row) || !isNonEmptyString(row.workItemId) || rows.has(row.workItemId)) {
+      throw new Error("invalid row");
+    }
+    rows.set(row.workItemId, row);
+  }
+  return rows;
+}
+
 function readLocalRows(dbPath, team) {
   if (!isNonEmptyString(dbPath)) {
-    return { error: true, rows: new Map() };
+    return { error: true, rows: new Map(), dispatchRows: new Map() };
   }
   const sql = [
     "SELECT json_object(",
@@ -232,7 +245,8 @@ function readLocalRows(dbPath, team) {
     "  'state', state,",
     "  'leaseOwner', lease_owner,",
     "  'leaseExpiresAt', lease_expires_at,",
-    "  'prLinks', json(pr_links_json)",
+    "  'prLinks', json(pr_links_json),",
+    "  'writebacks', json(writebacks_json)",
     ")",
     "FROM team_work_current",
     `WHERE team = ${sqlLiteral(team)}`,
@@ -242,22 +256,52 @@ function readLocalRows(dbPath, team) {
     encoding: "utf8",
     maxBuffer: 4 * 1024 * 1024,
   });
-  if (result.error || result.status !== 0) return { error: true, rows: new Map() };
+  if (result.error || result.status !== 0) return { error: true, rows: new Map(), dispatchRows: new Map() };
 
-  const rows = new Map();
+  let rows;
   try {
-    for (const line of String(result.stdout || "").replace(/\r/g, "").split("\n")) {
-      if (line.length === 0) continue;
-      const row = JSON.parse(line);
-      if (!isObject(row) || !isNonEmptyString(row.workItemId) || rows.has(row.workItemId)) {
-        throw new Error("invalid row");
-      }
-      rows.set(row.workItemId, row);
-    }
+    rows = parseLocalRows(result.stdout);
   } catch (_) {
-    return { error: true, rows: new Map() };
+    return { error: true, rows: new Map(), dispatchRows: new Map() };
   }
-  return { error: false, rows };
+
+  const tableResult = childProcess.spawnSync(
+    "sqlite3",
+    ["-readonly", dbPath, "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'team_work_dispatch_current');"],
+    { encoding: "utf8", maxBuffer: 1024 * 1024 },
+  );
+  if (tableResult.error || tableResult.status !== 0) return { error: true, rows: new Map(), dispatchRows: new Map() };
+  const hasDispatchTable = String(tableResult.stdout || "").trim();
+  if (hasDispatchTable === "0") return { error: false, rows, dispatchRows: new Map() };
+  if (hasDispatchTable !== "1") return { error: true, rows: new Map(), dispatchRows: new Map() };
+
+  const dispatchSql = [
+    "SELECT json_object(",
+    "  'workItemId', work_item_id,",
+    "  'contractDigest', contract_digest,",
+    "  'envelopeDigest', envelope_digest,",
+    "  'ownerSeat', owner_seat,",
+    "  'state', state,",
+    "  'leaseEpoch', lease_epoch,",
+    "  'leaseExpiresAt', lease_expires_at,",
+    "  'queueDigest', queue_digest,",
+    "  'deliveryEvidence', json(delivery_evidence_json),",
+    "  'ackEvidence', ack_evidence",
+    ")",
+    "FROM team_work_dispatch_current",
+    `WHERE team = ${sqlLiteral(team)}`,
+    "ORDER BY work_item_id;",
+  ].join("\n");
+  const dispatchResult = childProcess.spawnSync("sqlite3", ["-readonly", dbPath, dispatchSql], {
+    encoding: "utf8",
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  if (dispatchResult.error || dispatchResult.status !== 0) return { error: true, rows: new Map(), dispatchRows: new Map() };
+  try {
+    return { error: false, rows, dispatchRows: parseLocalRows(dispatchResult.stdout) };
+  } catch (_) {
+    return { error: true, rows: new Map(), dispatchRows: new Map() };
+  }
 }
 
 function addViolation(violations, code, item, extra) {
@@ -273,40 +317,75 @@ function sortViolations(violations) {
 function localStateForItem(local, item, contractDigest, now, violations) {
   if (local.error) {
     addViolation(violations, "local_state_unavailable", item);
-    return { status: "unavailable", row: null, prLinks: [] };
+    return { status: "unavailable", row: null, dispatchRow: null, prLinks: [] };
   }
   const row = local.rows.get(item.workItem.id);
-  if (!row) return { status: "absent", row: null, prLinks: [] };
+  const dispatchRow = local.dispatchRows.get(item.workItem.id);
 
   const source = item.workItem.source;
-  const validRow =
-    isObject(row.source) &&
-    row.contractDigest === contractDigest &&
-    row.envelopeDigest === envelopeDigest(item) &&
-    row.ownerSeat === item.ownerSeat &&
-    row.source.repository === source.repository &&
-    row.source.number === source.number &&
-    Array.isArray(row.prLinks);
-  if (!validRow) {
-    addViolation(violations, "local_state_stale", item);
-    return { status: "stale", row, prLinks: [] };
+  if (row) {
+    const validRow =
+      isObject(row.source) &&
+      row.contractDigest === contractDigest &&
+      row.envelopeDigest === envelopeDigest(item) &&
+      row.ownerSeat === item.ownerSeat &&
+      row.source.repository === source.repository &&
+      row.source.number === source.number &&
+      Array.isArray(row.prLinks) &&
+      Array.isArray(row.writebacks);
+    if (!validRow) {
+      addViolation(violations, "local_state_stale", item);
+      return { status: "stale", row, dispatchRow, prLinks: [] };
+    }
   }
 
   const prLinks = [];
-  for (const link of row.prLinks) {
+  for (const link of row ? row.prLinks : []) {
     if (!isObject(link) || !isNonEmptyString(link.repository) || !Number.isInteger(link.number) || link.number <= 0 ||
       (link.relation !== "contributes" && link.relation !== "closes")) {
       addViolation(violations, "local_state_stale", item);
-      return { status: "stale", row, prLinks: [] };
+      return { status: "stale", row, dispatchRow, prLinks: [] };
     }
     prLinks.push({ repository: link.repository, number: link.number, relation: link.relation });
   }
 
-  const active = isNonEmptyString(row.leaseOwner) && Number.isInteger(row.leaseExpiresAt) && row.leaseExpiresAt > now;
+  const currentActive = Boolean(row) && isNonEmptyString(row.leaseOwner) && Number.isInteger(row.leaseExpiresAt) && row.leaseExpiresAt > now;
+  if (dispatchRow) {
+    const validDispatch =
+      dispatchRow.contractDigest === contractDigest &&
+      dispatchRow.envelopeDigest === envelopeDigest(item) &&
+      dispatchRow.ownerSeat === item.ownerSeat &&
+      (dispatchRow.state === "dispatching" || dispatchRow.state === "claimed") &&
+      isNonEmptyString(dispatchRow.leaseEpoch) &&
+      Number.isInteger(dispatchRow.leaseExpiresAt) &&
+      isNonEmptyString(dispatchRow.queueDigest) &&
+      isObject(dispatchRow.deliveryEvidence);
+    if (!validDispatch || (currentActive && (dispatchRow.state !== "claimed" || row.leaseOwner !== item.ownerSeat))) {
+      addViolation(violations, "local_state_stale", item);
+      return { status: "stale", row, dispatchRow, prLinks: [] };
+    }
+    const dispatchActive = dispatchRow.leaseExpiresAt > now;
+    if (dispatchActive) {
+      return {
+        status: "active",
+        row,
+        dispatchRow,
+        dispatchState: dispatchRow.state,
+        prLinks,
+        writebacks: row ? row.writebacks : [],
+        leaseOwner: dispatchRow.ownerSeat,
+        leaseExpiresAt: dispatchRow.leaseExpiresAt,
+      };
+    }
+  }
+
+  if (!row) return { status: "absent", row: null, dispatchRow, prLinks: [], writebacks: [] };
   return {
-    status: active ? "active" : "inactive",
+    status: currentActive ? "active" : "inactive",
     row,
+    dispatchRow,
     prLinks,
+    writebacks: row.writebacks,
     leaseOwner: row.leaseOwner || null,
     leaseExpiresAt: Number.isInteger(row.leaseExpiresAt) ? row.leaseExpiresAt : null,
   };
@@ -427,6 +506,7 @@ function summarizeItem(item, sourceEvidence, localState, relationChecks, hasViol
     issueState: sourceEvidence ? sourceEvidence.state : "unknown",
     localState: {
       status: localState.status,
+      dispatchState: localState.dispatchState || null,
       leaseOwner: localState.leaseOwner || null,
       leaseExpiresAt: localState.leaseExpiresAt || null,
     },
@@ -552,14 +632,21 @@ function main() {
   process.stdout.write(`${canonicalJson(runAudit(command, team, pack, roster))}\n`);
 }
 
-try {
-  main();
-} catch (error) {
-  if (error instanceof SchemaError) {
-    process.stderr.write(`schema error: ${error.message}\n`);
-    process.exitCode = 2;
-  } else {
-    process.stderr.write(`Error: ${error.message}\n`);
-    process.exitCode = 1;
+module.exports = {
+  readLocalRows,
+  runAudit,
+};
+
+if (require.main === module) {
+  try {
+    main();
+  } catch (error) {
+    if (error instanceof SchemaError) {
+      process.stderr.write(`schema error: ${error.message}\n`);
+      process.exitCode = 2;
+    } else {
+      process.stderr.write(`Error: ${error.message}\n`);
+      process.exitCode = 1;
+    }
   }
 }

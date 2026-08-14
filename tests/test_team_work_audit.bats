@@ -114,6 +114,33 @@ if (input !== JSON.stringify(sort(value))) process.exit(1);
   [ "$(json_value "$output" classificationBasis.readyCount)" = "0" ]
 }
 
+@test "team-work queue: dispatching ledger entry allocates an open work item" {
+  local pack="$BATS_TEST_TMPDIR/dispatching.json"
+  local self_check contract_digest envelope_digest
+  write_pack "$pack"
+
+  self_check="$(bash "$SCRIPTS/team-work.sh" self-check demo "$pack")"
+  contract_digest="$(json_value "$self_check" contractDigest)"
+  envelope_digest="$(json_value "$self_check" items[0].envelopeDigest)"
+  sqlite3 "$TEST_SKILL_DIR/db/messages.db" "
+INSERT INTO team_work_dispatch_current(
+  team, work_item_id, contract_digest, envelope_digest, owner_seat, state,
+  lease_epoch, lease_expires_at, queue_digest, delivery_evidence_json,
+  ack_evidence, last_action, last_actor, created_at, updated_at
+) VALUES (
+  'demo', 'issue:42', '$contract_digest', '$envelope_digest', 'owner', 'dispatching',
+  'epoch-dispatching', 4102444800, 'sha256:queue', '{}', NULL, 'dispatch', 'dispatch', 100, 100
+);
+"
+
+  run_team_work "$AUDIT_FIXTURES/open.json" queue "$pack"
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" classificationBasis.status)" = "fully_allocated" ]
+  [ "$(json_value "$output" items[0].localState.dispatchState)" = "dispatching" ]
+  [ "$(json_value "$output" classificationBasis.readyCount)" = "0" ]
+}
+
 @test "team-work observe: records quiescent basis for a closed source" {
   local pack="$BATS_TEST_TMPDIR/closed.json"
   write_pack "$pack"
