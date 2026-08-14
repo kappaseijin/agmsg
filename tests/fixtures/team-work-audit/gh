@@ -1,0 +1,81 @@
+#!/usr/bin/env node
+"use strict";
+
+const fs = require("fs");
+
+const args = process.argv.slice(2);
+const fixturePath = process.env.TEAM_WORK_GH_FIXTURE;
+const logPath = process.env.TEAM_WORK_GH_LOG;
+
+if (!fixturePath || !logPath || args[0] !== "api" || args[1] !== "graphql") {
+  process.stderr.write("fake gh requires: api graphql, TEAM_WORK_GH_FIXTURE, TEAM_WORK_GH_LOG\n");
+  process.exit(97);
+}
+
+function addField(fields, raw) {
+  const equals = raw.indexOf("=");
+  if (equals <= 0) {
+    process.stderr.write(`malformed GraphQL field: ${raw}\n`);
+    process.exit(96);
+  }
+  const name = raw.slice(0, equals);
+  if (Object.prototype.hasOwnProperty.call(fields, name)) {
+    process.stderr.write(`duplicate GraphQL field: ${name}\n`);
+    process.exit(96);
+  }
+  fields[name] = raw.slice(equals + 1);
+}
+
+function parseFields(argv) {
+  const fields = {};
+  for (let index = 2; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (["-f", "-F", "--field", "--raw-field"].includes(argument)) {
+      index += 1;
+      addField(fields, argv[index] || "");
+      continue;
+    }
+    const short = /^-[fF](.+)$/.exec(argument);
+    const long = /^--(?:field|raw-field)=(.*)$/.exec(argument);
+    if (short) addField(fields, short[1]);
+    if (long) addField(fields, long[1]);
+  }
+  return fields;
+}
+
+const fields = parseFields(args);
+const query = fields.query || "";
+let operation = "";
+if (/\bquery\s+TeamWorkIssueClosingRelations\b/.test(query)) operation = "issue";
+if (/\bquery\s+TeamWorkPullRequestClosingRelations\b/.test(query)) operation = "pullRequest";
+if (!operation) {
+  process.stderr.write("unrecognized GraphQL operation\n");
+  process.exit(95);
+}
+
+let fixture;
+try {
+  fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
+} catch (error) {
+  process.stderr.write(`cannot read fixture: ${error.message}\n`);
+  process.exit(94);
+}
+
+if (fixture.error) {
+  process.stderr.write(`${fixture.error}\n`);
+  process.exit(70);
+}
+
+const owner = fields.owner || "";
+const name = fields.name || "";
+const number = fields.number || "";
+const after = fields.after || "";
+const key = `${operation}:${owner}/${name}#${number}:${after}`;
+const response = fixture.responses && fixture.responses[key];
+if (!response) {
+  process.stderr.write(`missing fixture response: ${key}\n`);
+  process.exit(93);
+}
+
+fs.appendFileSync(logPath, `${JSON.stringify({ operation, owner, name, number, after })}\n`);
+process.stdout.write(`${JSON.stringify(response)}\n`);

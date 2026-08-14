@@ -231,6 +231,18 @@ assert_rejected() {
   [ ! -s "$FAKE_WRITE_LOG" ]
 }
 
+@test "GHG-21: allows an explicit GraphQL query but rejects a mutation" {
+  run_guard api graphql -f 'query=query TeamWorkAudit { viewer { login } }'
+  [ "$status" -eq 0 ]
+  grep -Fq 'api graphql -f query=query TeamWorkAudit { viewer { login } }' "$FAKE_READ_LOG"
+
+  : > "$FAKE_READ_LOG"
+  assert_rejected api graphql -f 'query=mutation Unsafe { updateIssue(input:{}) { clientMutationId } }'
+  [ ! -s "$FAKE_READ_LOG" ]
+
+  assert_rejected api graphql -X POST -f 'query=query TeamWorkAudit { viewer { login } }'
+}
+
 @test "GHG-16: launcher neutralizes BASH_ENV before the guard starts" {
   export BASH_ENV="$TEST_SKILL_DIR/evil.bash"
   cat > "$BASH_ENV" <<'EVIL'
