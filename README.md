@@ -419,7 +419,7 @@ See [docs/opencode.md](docs/opencode.md) for full setup instructions.
 ~/.agents/skills/<cmd>/scripts/history.sh <team> [agent_id] [limit]
 ~/.agents/skills/<cmd>/scripts/join.sh <team> <agent_id> <type> <project_path> [--role <role>] [--kind <seat|human|service>] [--force]
 ~/.agents/skills/<cmd>/scripts/team.sh <team> [--format human|json]
-~/.agents/skills/<cmd>/scripts/team-work.sh <validate|self-check> <team> <contract-pack.json>
+~/.agents/skills/<cmd>/scripts/team-work.sh <validate|self-check|claim|ack|renew|release|set-state|link-pr|writeback> <team> <contract-pack.json> ...
 ~/.agents/skills/<cmd>/scripts/whoami.sh <project_path> [type] [--format human|json]
 ~/.agents/skills/<cmd>/scripts/delivery.sh set <mode> <type> <project_path>
 ~/.agents/skills/<cmd>/scripts/delivery.sh status [<type> <project_path>] [--format human|json]
@@ -547,6 +547,60 @@ these SHA-256 digests; array order remains significant. Invalid packs return
 exit code 2 with `schema error:` on stderr. Usage errors, a missing pack, a
 missing Node runtime, or an unavailable roster return nonzero without treating
 the contract as empty or valid.
+
+### Work-item leases and local state
+
+After a pack validates, `team-work.sh` can record an explicit local work-item
+lease and its append-only revision chain. Mutating commands require both
+`node` and `sqlite3` on `PATH`. They initialize the same local store used by
+agmsg messages: `$AGMSG_STORAGE_PATH/messages.db` when
+`AGMSG_STORAGE_PATH` is set, otherwise the skill's `db/messages.db`.
+
+```bash
+# The declared owner obtains a 300-second lease (the default TTL is 300).
+~/.agents/skills/<cmd>/scripts/team-work.sh claim demo .team-work.json issue:41 architect 300
+
+# The active lease holder records delivery acknowledgement, renews, then releases.
+~/.agents/skills/<cmd>/scripts/team-work.sh ack demo .team-work.json issue:41 architect received
+~/.agents/skills/<cmd>/scripts/team-work.sh renew demo .team-work.json issue:41 architect 600
+~/.agents/skills/<cmd>/scripts/team-work.sh release demo .team-work.json issue:41 architect
+
+# An exact roster manager may update local work state and references.
+~/.agents/skills/<cmd>/scripts/team-work.sh set-state demo .team-work.json issue:41 manager in_progress
+~/.agents/skills/<cmd>/scripts/team-work.sh link-pr demo .team-work.json issue:41 manager kappaseijin/agmsg 47 contributes
+~/.agents/skills/<cmd>/scripts/team-work.sh writeback demo .team-work.json issue:41 manager "merged PR verified locally"
+```
+
+| Command | Authorized caller | Result |
+| --- | --- | --- |
+| `claim` | Declared owner seat or exact `kind: seat`, `role: manager` member | Takes an absent or expired lease. A manager claim makes that manager the lease holder. |
+| `ack`, `renew`, `release` | The exact, unexpired lease holder | Acknowledges with evidence, extends the TTL, or clears the lease. |
+| `set-state`, `link-pr`, `writeback` | The active holder, or an exact manager seat | Appends a local state, PR-link, or writeback revision. |
+
+Authorization comes only from `team.sh --format json`: names that merely look
+like managers, and `human` or `service` members, are rejected. An active owner
+cannot have its ACK, renewal, or release performed by a manager or another
+seat. A manager may record state, PR-link, and writeback changes without taking
+the owner's live lease. `ttl-seconds` is a non-negative integer; zero is useful
+only for deterministic expiry tests. An expired lease cannot be renewed or
+released; an authorized owner or manager must claim it again.
+
+`set-state` accepts `acknowledged`, `in_progress`, `blocked`, or `completed`;
+`claim` itself creates `claimed`. `link-pr` accepts a positive PR number and
+one unique `contributes` or `closes` relation. A `closes` relation must use the
+same repository as the work item's issue source. `writeback` and `link-pr`
+record local evidence only: they do not query GitHub, write a GitHub comment,
+close an Issue, or merge a PR.
+
+Each successful mutation returns compact JSON with `team`, `workItemId`,
+`revision`, `state`, `leaseOwner`, `leaseExpiresAt`, `envelopeDigest`, and
+`lastAction`. The current snapshot is stored in `team_work_current`; SQLite
+triggers append the resulting immutable JSON snapshot to
+`team_work_revisions` in the same transaction. A changed contract or envelope
+digest, a duplicate PR relation, an unauthorized caller, or a competing live
+lease fails closed with exit code 2 and leaves both tables unchanged. These
+commands do not modify the contract pack, team configuration, `messages`,
+`message_claims`, or `message_receipts`.
 
 ### Message delivery state
 

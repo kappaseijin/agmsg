@@ -29,12 +29,15 @@ source:
 - the declared owner seat may claim its own item;
 - a member whose exact `kind` is `seat` and exact `role` is `manager` may claim
   any item;
-- after a claim, only the unexpired lease holder may acknowledge, renew,
-  release, change state, link a PR, or record writeback evidence.
+- only the unexpired lease holder may acknowledge, renew, or release its
+  lease;
+- a manager may change state, link a PR, or record writeback evidence for any
+  item, while an active lease holder may perform those same mutations for its
+  own lease.
 
-Manager authority is never inferred from an agent name. A manager who needs to
-intervene in a live lease must wait for expiry or acquire an unleased item, so a
-second manager cannot rewrite an active owner's history.
+Manager authority is never inferred from an agent name. A manager cannot ACK,
+renew, or release another actor's live lease, but it can write the explicitly
+manager-authorized state and work-reference mutations without taking that lease.
 
 ```mermaid
 sequenceDiagram
@@ -111,10 +114,11 @@ replaces an absent/expired lease while incrementing revision. Two simultaneous
 different claims race on the same transaction; only one conditional write can
 change a row.
 
-`renew`, `ack`, `release`, `set-state`, `link-pr`, and `writeback` require the
-actor to equal the active lease owner and require `lease_expires_at` to be
-strictly later than the SQLite clock. An expired lease cannot be renewed or
-released; an authorized owner or manager instead reclaims it with `claim`.
+`renew`, `ack`, and `release` require the actor to equal the active lease owner
+and require `lease_expires_at` to be strictly later than the SQLite clock.
+`set-state`, `link-pr`, and `writeback` accept either that active holder or an
+exact roster manager. An expired lease cannot be renewed or released; an
+authorized owner or manager instead reclaims it with `claim`.
 
 The command refuses contract drift: every existing state row must have the same
 contract digest and item envelope digest as the supplied pack. `link-pr`
@@ -145,7 +149,9 @@ SQLite CLI portability on macOS, Linux, and Git Bash.
 3. a non-holder cannot ack, renew, or release and cannot change revision or
    history;
 4. expiry permits safe reclaim and leaves a contiguous append-only chain;
-5. manager authority depends on explicit roster `kind` and `role`, not a name;
+5. manager authority depends on explicit roster `kind` and `role`, not a name,
+   and permits the manager-authorized mutations without taking another seat's
+   lease;
 6. `set-state`, `link-pr`, and `writeback` append result snapshots; and
 7. local mutations never alter the contract pack, team config, messages, or
    receiver claim/receipt tables.
