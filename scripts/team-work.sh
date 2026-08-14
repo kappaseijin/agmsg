@@ -24,6 +24,18 @@ case "$COMMAND" in
       exit 1
     fi
     ;;
+  reconcile)
+    if [ "$#" -ne 3 ] && [ "$#" -ne 4 ]; then
+      echo "Usage: team-work.sh reconcile <team> <contract-pack.json> [heartbeat-path]" >&2
+      exit 1
+    fi
+    ;;
+  watchdog)
+    if [ "$#" -ne 5 ] && [ "$#" -ne 6 ]; then
+      echo "Usage: team-work.sh watchdog <team> <contract-pack.json> <heartbeat-path> [stale-seconds]" >&2
+      exit 1
+    fi
+    ;;
   claim|renew)
     if [ "$#" -ne 5 ] && [ "$#" -ne 6 ]; then
       echo "Usage: team-work.sh $COMMAND <team> <contract-pack.json> <work-item-id> <actor-seat> [ttl-seconds]" >&2
@@ -94,6 +106,13 @@ case "$COMMAND" in
     AGMSG_TEAM_WORK_DB="$(agmsg_db_path)"
     export AGMSG_TEAM_WORK_DB
     printf '%s' "$ROSTER_JSON" | node "$SCRIPT_DIR/lib/team-work-audit.js" "$@"
+    ;;
+  reconcile|watchdog)
+    source "$SCRIPT_DIR/lib/storage.sh"
+    AGMSG_TEAM_WORK_DB="$(agmsg_db_path)"
+    AGMSG_TEAM_WORK_SCRIPT_DIR="$SCRIPT_DIR"
+    export AGMSG_TEAM_WORK_DB AGMSG_TEAM_WORK_SCRIPT_DIR
+    printf '%s' "$ROSTER_JSON" | node "$SCRIPT_DIR/lib/team-work-reconciler.js" "$@"
     ;;
   *)
     source "$SCRIPT_DIR/lib/storage.sh"
