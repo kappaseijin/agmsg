@@ -363,6 +363,80 @@ JSON
   [[ "$output" =~ "carol" ]]
 }
 
+# --- reset.sh vs identities.sh asymmetry (#63/#17) ---
+
+@test "reset: reproduces the explicit-path marker hijack without new diagnostics" {
+  skip_on_windows "process argv faking via exec -a (#349)"
+  reg T orphan "$ROOT/sub" codex
+
+  # A live marker for another project makes the old reset path resolution pick
+  # the caller's project instead of the exact path supplied as an argument.
+  bash -c 'exec -a codex sleep 5' 3>&- &
+  local agent_pid=$!
+  sleep 0.3
+  local decoy; decoy="$(mktemp -d)"
+  agmsg_write_project_marker "$agent_pid" "$decoy"
+
+  run env AGMSG_AGENT_PID="$agent_pid" bash "$SKILL_DIR/scripts/reset.sh" "$ROOT/sub" codex orphan
+  kill "$agent_pid" 2>/dev/null || true
+  rm -rf "$decoy"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "No registrations removed" ]]
+  run bash "$SKILL_DIR/scripts/identities.sh" "$ROOT/sub" codex
+  [[ "$output" =~ "orphan" ]]
+}
+
+@test "reset: zero-match output shows searched and argument paths" {
+  skip_on_windows "process argv faking via exec -a (#349)"
+  reg T orphan "$ROOT/sub" codex
+
+  bash -c 'exec -a codex sleep 5' 3>&- &
+  local agent_pid=$!
+  sleep 0.3
+  local decoy; decoy="$(mktemp -d)"
+  agmsg_write_project_marker "$agent_pid" "$decoy"
+
+  run env AGMSG_AGENT_PID="$agent_pid" bash "$SKILL_DIR/scripts/reset.sh" "$ROOT/sub" codex orphan
+  kill "$agent_pid" 2>/dev/null || true
+  rm -rf "$decoy"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "No registrations removed" ]]
+  [[ "$output" == *"searched project: $decoy"* ]]
+  [[ "$output" == *"argument was:     $ROOT/sub"* ]]
+  [[ "$output" == *"--no-resolve"* ]]
+}
+
+@test "reset: --no-resolve works in leading and trailing positions" {
+  skip_on_windows "process argv faking via exec -a (#349)"
+  local trailing_root="$ROOT/trailing"
+  mkdir -p "$trailing_root"
+  reg T leading "$ROOT/sub" codex
+  reg T trailing "$trailing_root" codex
+
+  bash -c 'exec -a codex sleep 5' 3>&- &
+  local agent_pid=$!
+  sleep 0.3
+  local decoy; decoy="$(mktemp -d)"
+  agmsg_write_project_marker "$agent_pid" "$decoy"
+
+  run env AGMSG_AGENT_PID="$agent_pid" bash "$SKILL_DIR/scripts/reset.sh" --no-resolve "$ROOT/sub" codex leading
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "removed 1 registration" ]]
+
+  run env AGMSG_AGENT_PID="$agent_pid" bash "$SKILL_DIR/scripts/reset.sh" "$trailing_root" codex trailing --no-resolve
+  kill "$agent_pid" 2>/dev/null || true
+  rm -rf "$decoy"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "removed 1 registration" ]]
+
+  run bash "$SKILL_DIR/scripts/identities.sh" "$ROOT/sub" codex
+  [[ ! "$output" =~ "leading" ]]
+  run bash "$SKILL_DIR/scripts/identities.sh" "$trailing_root" codex
+  [[ ! "$output" =~ "trailing" ]]
+}
+
 # --- watch.sh: actas/drop watcher must not die from a subdir (the High bug) ---
 
 @test "watch: actas watcher from a subdir does not exit with no-registration" {

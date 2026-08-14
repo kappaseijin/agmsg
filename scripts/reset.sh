@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: reset.sh <project_path> <type> [agent_id] [session_id]
+# Usage: reset.sh [--no-resolve] <project_path> <type> [agent_id] [session_id]
 #
 # Removes registrations for the given project/type across all teams.
 # If agent_id is omitted, it is resolved from whoami.sh for the current project/type.
@@ -10,12 +10,26 @@ set -euo pipefail
 # returns the role to the pool so peer sessions can pick it up immediately
 # without waiting for stale-lock GC.
 
-PROJECT_PATH="${1:?Usage: reset.sh <project_path> <type> [agent_id] [session_id]}"
-AGENT_TYPE="${2:?Usage: reset.sh <project_path> <type> [agent_id] [session_id]}"
-TARGET_AGENT="${3:-}"
-SESSION_ID="${4:-}"
-
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/cli-options.sh"
+
+agmsg_parse_cli_options "reset.sh" 0 1 "$@" || {
+  parse_status=$?
+  exit "$parse_status"
+}
+if [ "${#AGMSG_POSITIONAL_ARGS[@]}" -lt 2 ] || [ "${#AGMSG_POSITIONAL_ARGS[@]}" -gt 4 ]; then
+  echo "Usage: reset.sh [--no-resolve] <project_path> <type> [agent_id] [session_id]" >&2
+  echo "reset.sh: expected 2 to 4 positional arguments, got ${#AGMSG_POSITIONAL_ARGS[@]}." >&2
+  exit 2
+fi
+
+PROJECT_PATH="${AGMSG_POSITIONAL_ARGS[0]}"
+AGENT_TYPE="${AGMSG_POSITIONAL_ARGS[1]}"
+TARGET_AGENT="${AGMSG_POSITIONAL_ARGS[2]:-}"
+SESSION_ID="${AGMSG_POSITIONAL_ARGS[3]:-}"
+ARGUMENT_PATH="$PROJECT_PATH"
+
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TEAMS_DIR="$SKILL_DIR/teams"
 # shellcheck disable=SC1091
@@ -38,7 +52,12 @@ _agmsg_sqlesc() { printf %s "$1" | sed "s/'/''/g"; }
 
 # Resolve the session's real project root (see #92) so a drop issued from a
 # subdir/worktree clears the registration on the project the session lives in.
-PROJECT_PATH="$(agmsg_resolve_project "$PROJECT_PATH" "$AGENT_TYPE")"
+# --no-resolve is for callers that already have the literal registered path.
+if [ "$AGMSG_OPTION_NO_RESOLVE" -eq 1 ]; then
+  PROJECT_PATH="$(AGMSG_RESOLVE_PROJECT=0 agmsg_resolve_project "$PROJECT_PATH" "$AGENT_TYPE")"
+else
+  PROJECT_PATH="$(agmsg_resolve_project "$PROJECT_PATH" "$AGENT_TYPE")"
+fi
 # Equivalent path spellings (#268) — a drop must remove a registration stored
 # in any Windows/MSYS form, not just the exact resolved string.
 PROJECT_SQL_IN=$(agmsg_project_sql_in_list "$PROJECT_PATH")
@@ -189,6 +208,11 @@ done
 
 if [ "$REMOVED" -eq 0 ]; then
   echo "No registrations removed."
+  echo "  (searched project: $PROJECT_PATH)"
+  echo "  (argument was:     $ARGUMENT_PATH)"
+  if [ "$PROJECT_PATH" != "$ARGUMENT_PATH" ]; then
+    echo "  Hint: pass --no-resolve to match the argument verbatim instead of the resolved project."
+  fi
 else
   echo "Reset complete: removed $REMOVED registration(s) across $TOUCHED_TEAMS team(s)"
 fi
