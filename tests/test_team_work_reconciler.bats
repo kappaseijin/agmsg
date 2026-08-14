@@ -88,9 +88,17 @@ if (input !== JSON.stringify(sort(value))) process.exit(1);
 run_reconciler() {
   local fixture="$1" command="$2" pack="$3"
   shift 3
+  local -a environment=()
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+    environment+=("$1")
+    shift
+  done
+  if [ "${1:-}" = "--" ]; then
+    shift
+  fi
   run env PATH="$FAKE_GH_BIN:$PATH" TEAM_WORK_GH_FIXTURE="$fixture" TEAM_WORK_GH_LOG="$TEAM_WORK_GH_LOG" \
-    AGMSG_TEAM_WORK_DELIVERY_BIN="$FAKE_DELIVERY_BIN" "$@" \
-    bash "$SCRIPTS/team-work.sh" "$command" demo "$pack"
+    AGMSG_TEAM_WORK_DELIVERY_BIN="$FAKE_DELIVERY_BIN" "${environment[@]}" \
+    bash "$SCRIPTS/team-work.sh" "$command" demo "$pack" "$@"
 }
 
 @test "team-work reconciler: dispatch ledger has immutable history" {
@@ -238,4 +246,88 @@ INSERT INTO team_work_current(
   [ "$status" -eq 0 ]
   [ "$(json_value "$output" status)" = "healthy" ]
   [ "$(json_value "$output" alarm)" = "false" ]
+}
+
+@test "team-work dispatch: denies a ready owner that is not allowlisted or live" {
+  local pack="$BATS_TEST_TMPDIR/dispatch-denied.json"
+  local database="$TEST_SKILL_DIR/db/messages.db"
+  local before
+  write_pack "$pack"
+  before="$(sha256_file "$database")"
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch "$pack" TEAM_WORK_NOW=101 TEAM_WORK_FAKE_DELIVERY=false -- issue:42 dispatch
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" dispatched)" = "false" ]
+  [ "$(json_value "$output" state)" = "not_dispatchable" ]
+  [ "$before" = "$(sha256_file "$database")" ]
+  [ "$(sqlite3 "$database" "SELECT count(*) FROM team_work_dispatch_current;")" = "0" ]
+}
+
+@test "team-work dispatch: records dispatching without claiming before ACK" {
+  local pack="$BATS_TEST_TMPDIR/dispatch.json"
+  local database="$TEST_SKILL_DIR/db/messages.db"
+  local lease_epoch
+  write_pack "$pack"
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch "$pack" TEAM_WORK_NOW=101 TEAM_WORK_FAKE_DELIVERY=true TEAM_WORK_DISPATCH_ALLOWLIST='["owner"]' -- issue:42 dispatch 120
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" dispatched)" = "true" ]
+  [ "$(json_value "$output" state)" = "dispatching" ]
+  [ "$(json_value "$output" sendInvoked)" = "false" ]
+  lease_epoch="$(json_value "$output" leaseEpoch)"
+  [[ "$lease_epoch" =~ ^[0-9a-f-]{36}$ ]]
+  [ "$(sqlite3 "$database" "SELECT state FROM team_work_dispatch_current WHERE team = 'demo' AND work_item_id = 'issue:42';")" = "dispatching" ]
+  [ "$(sqlite3 "$database" "SELECT count(*) FROM team_work_current WHERE team = 'demo' AND work_item_id = 'issue:42';")" = "0" ]
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch-ack "$pack" TEAM_WORK_NOW=102 TEAM_WORK_FAKE_DELIVERY=true TEAM_WORK_DISPATCH_ALLOWLIST='["owner"]' -- issue:42 owner "$lease_epoch" received
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" acknowledged)" = "true" ]
+  [ "$(json_value "$output" state)" = "claimed" ]
+  [ "$(sqlite3 "$database" "SELECT state FROM team_work_dispatch_current WHERE team = 'demo' AND work_item_id = 'issue:42';")" = "claimed" ]
+  [ "$(sqlite3 "$database" "SELECT state FROM team_work_current WHERE team = 'demo' AND work_item_id = 'issue:42';")" = "claimed" ]
+  [ "$(sqlite3 "$database" "SELECT count(*) FROM team_work_dispatch_revisions WHERE team = 'demo' AND work_item_id = 'issue:42';")" = "2" ]
+}
+
+@test "team-work dispatch: refuses an owner whose delivery capability is unknown" {
+  local pack="$BATS_TEST_TMPDIR/dispatch-unknown.json"
+  local database="$TEST_SKILL_DIR/db/messages.db"
+  local before
+  write_pack "$pack"
+  before="$(sha256_file "$database")"
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch "$pack" TEAM_WORK_NOW=101 TEAM_WORK_FAKE_DELIVERY=unknown TEAM_WORK_DISPATCH_ALLOWLIST='["owner"]' -- issue:42 dispatch
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" dispatched)" = "false" ]
+  [ "$(json_value "$output" state)" = "not_dispatchable" ]
+  [ "$(json_value "$output" delivery.status)" = "unknown" ]
+  [ "$before" = "$(sha256_file "$database")" ]
+}
+
+@test "team-work dispatch ACK: rejects a wrong or expired epoch without claiming" {
+  local pack="$BATS_TEST_TMPDIR/dispatch-ack-reject.json"
+  local database="$TEST_SKILL_DIR/db/messages.db"
+  local lease_epoch before
+  write_pack "$pack"
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch "$pack" TEAM_WORK_NOW=101 TEAM_WORK_FAKE_DELIVERY=true TEAM_WORK_DISPATCH_ALLOWLIST='["owner"]' -- issue:42 dispatch 1
+  [ "$status" -eq 0 ]
+  lease_epoch="$(json_value "$output" leaseEpoch)"
+  before="$(sha256_file "$database")"
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch-ack "$pack" TEAM_WORK_NOW=101 TEAM_WORK_FAKE_DELIVERY=true TEAM_WORK_DISPATCH_ALLOWLIST='["owner"]' -- issue:42 owner wrong-epoch received
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" acknowledged)" = "false" ]
+  [ "$before" = "$(sha256_file "$database")" ]
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch-ack "$pack" TEAM_WORK_NOW=103 TEAM_WORK_FAKE_DELIVERY=true TEAM_WORK_DISPATCH_ALLOWLIST='["owner"]' -- issue:42 owner "$lease_epoch" late
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" acknowledged)" = "false" ]
+  [ "$before" = "$(sha256_file "$database")" ]
+  [ "$(sqlite3 "$database" "SELECT count(*) FROM team_work_current WHERE team = 'demo' AND work_item_id = 'issue:42';")" = "0" ]
 }

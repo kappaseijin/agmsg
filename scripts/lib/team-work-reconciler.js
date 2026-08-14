@@ -9,6 +9,7 @@ const {
   SchemaError,
   canonicalJson,
   sha256Digest,
+  envelopeDigest,
   validateContractPack,
 } = require("./team-work");
 const {
@@ -16,7 +17,7 @@ const {
   runAudit,
 } = require("./team-work-audit");
 
-const RECONCILER_COMMANDS = new Set(["reconcile", "watchdog"]);
+const RECONCILER_COMMANDS = new Set(["reconcile", "watchdog", "dispatch", "dispatch-ack"]);
 const POSITIVE_INTEGER = /^[1-9][0-9]*$/;
 const NON_NEGATIVE_INTEGER = /^(0|[1-9][0-9]*)$/;
 const DEFAULT_HEARTBEAT_STALE_SECONDS = 900;
@@ -67,6 +68,47 @@ function addDistinct(list, value) {
 
 function sorted(values) {
   return values.slice().sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right)));
+}
+
+function sqlLiteral(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function requireDatabasePath() {
+  if (!isNonEmptyString(process.env.AGMSG_TEAM_WORK_DB)) {
+    throw new Error("team-work mutation database is unavailable");
+  }
+  return process.env.AGMSG_TEAM_WORK_DB;
+}
+
+function runSqliteTransaction(dbPath, statements) {
+  const script = [
+    ".bail on",
+    ".timeout 5000",
+    "BEGIN IMMEDIATE;",
+    statements,
+    "COMMIT;",
+  ].join("\n");
+  const result = childProcess.spawnSync("sqlite3", [dbPath], {
+    encoding: "utf8",
+    input: script,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  if (result.error) {
+    if (result.error.code === "ENOENT") throw new Error("team-work requires sqlite3 on PATH");
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(String(result.stderr || "").trim() || "sqlite3 dispatch mutation failed");
+  }
+}
+
+function requireOneChange(guard) {
+  return [
+    `CREATE TEMP TABLE ${guard}(value INTEGER NOT NULL CHECK(value = 1));`,
+    `INSERT INTO ${guard}(value) SELECT changes();`,
+    `DROP TABLE ${guard};`,
+  ].join("\n");
 }
 
 function deliveryBin() {
@@ -355,6 +397,290 @@ function runWatchdog(team, pack, roster, heartbeatPath, staleSeconds) {
   return output;
 }
 
+function memberMap(roster) {
+  return new Map((roster.members || []).map((member) => [member.name, member]));
+}
+
+function dispatchAllowlist() {
+  const raw = process.env.TEAM_WORK_DISPATCH_ALLOWLIST;
+  if (!isNonEmptyString(raw)) return { valid: false, seats: new Set(), reason: "dispatch_allowlist_unavailable" };
+  let value;
+  try {
+    value = JSON.parse(raw);
+  } catch (_) {
+    return { valid: false, seats: new Set(), reason: "dispatch_allowlist_invalid" };
+  }
+  if (!Array.isArray(value) || value.length === 0 || value.some((seat) => !isNonEmptyString(seat))) {
+    return { valid: false, seats: new Set(), reason: "dispatch_allowlist_invalid" };
+  }
+  const seats = new Set(value);
+  if (seats.size !== value.length) return { valid: false, seats: new Set(), reason: "dispatch_allowlist_invalid" };
+  return { valid: true, seats };
+}
+
+function dispatchRemediation(code) {
+  const text = {
+    dispatch_allowlist_unavailable: "configure a non-empty JSON dispatch allowlist before dispatching",
+    dispatch_allowlist_invalid: "correct TEAM_WORK_DISPATCH_ALLOWLIST to a unique JSON string array",
+    owner_not_allowlisted: "add the existing owner seat to the explicit allowlist after review",
+    work_not_ready: "refresh the queue and select an open unallocated work item",
+    source_unknown: "resolve the audit violation before dispatching",
+    seat_not_live: "do not spawn; restore the existing seat's live delivery evidence or assign another owner",
+    duplicate_dispatch: "wait for the existing dispatch epoch to be ACKed or reconciled explicitly",
+  };
+  return text[code] || "inspect the dispatch evidence before an explicit action";
+}
+
+function dispatchOutput(team, workItemId, managerSeat, details) {
+  const output = Object.assign({
+    schemaVersion: 1,
+    command: "dispatch",
+    team,
+    workItemId,
+    managerSeat,
+    dispatched: false,
+    state: "not_dispatchable",
+    remediation: [],
+  }, details || {});
+  output.dispatchDigest = sha256Digest(output);
+  return output;
+}
+
+function readyWorkItem(audit, pack, workItemId) {
+  return readyItemsFromAudit(audit, pack).find((item) => item.workItemId === workItemId) || null;
+}
+
+function runDispatch(team, pack, roster, workItemId, managerSeat, ackTtl) {
+  validateContractPack(pack, roster, team);
+  if (!isNonEmptyString(workItemId)) schemaError("work-item-id must be a non-empty string");
+  if (!isNonEmptyString(managerSeat)) schemaError("manager-seat must be a non-empty string");
+  const members = memberMap(roster);
+  const manager = members.get(managerSeat);
+  if (!manager || manager.kind !== "seat" || manager.role !== "manager") {
+    schemaError("manager-seat must be an exact kind: seat manager");
+  }
+  const item = pack.workItems.find((candidate) => candidate.workItem.id === workItemId);
+  if (!item) schemaError(`work item does not exist: ${workItemId}`);
+  const now = parseNow();
+  const ttl = parsePositiveInteger(ackTtl, "ack-ttl-seconds", 120);
+  const allowlist = dispatchAllowlist();
+  if (!allowlist.valid) {
+    return dispatchOutput(team, workItemId, managerSeat, {
+      remediation: [{ code: allowlist.reason, remediation: dispatchRemediation(allowlist.reason) }],
+    });
+  }
+  if (!allowlist.seats.has(item.ownerSeat)) {
+    return dispatchOutput(team, workItemId, managerSeat, {
+      remediation: [{ code: "owner_not_allowlisted", ownerSeat: item.ownerSeat, remediation: dispatchRemediation("owner_not_allowlisted") }],
+    });
+  }
+
+  const audit = runAudit("audit", team, pack, roster);
+  if (audit.classificationBasis.status === "unknown") {
+    return dispatchOutput(team, workItemId, managerSeat, {
+      sourceDigest: audit.sourceDigest,
+      remediation: [{ code: "source_unknown", remediation: dispatchRemediation("source_unknown") }],
+    });
+  }
+  if (!readyWorkItem(audit, pack, workItemId)) {
+    return dispatchOutput(team, workItemId, managerSeat, {
+      sourceDigest: audit.sourceDigest,
+      remediation: [{ code: "work_not_ready", remediation: dispatchRemediation("work_not_ready") }],
+    });
+  }
+  const owner = members.get(item.ownerSeat);
+  const seat = deliveryStatus(team, owner);
+  if (seat.status !== "available") {
+    return dispatchOutput(team, workItemId, managerSeat, {
+      sourceDigest: audit.sourceDigest,
+      ownerSeat: item.ownerSeat,
+      delivery: seat,
+      remediation: [{ code: "seat_not_live", ownerSeat: item.ownerSeat, seatStatus: seat.status, remediation: dispatchRemediation("seat_not_live") }],
+    });
+  }
+
+  const leaseEpoch = crypto.randomUUID();
+  const leaseExpiresAt = now + ttl;
+  const contractDigest = sha256Digest(pack);
+  const deliveryEvidence = canonicalJson({
+    auditDigest: audit.auditDigest,
+    queueDigest: audit.sourceDigest,
+    seat,
+  });
+  const dbPath = requireDatabasePath();
+  const sql = `
+INSERT INTO team_work_dispatch_current(
+  team, work_item_id, contract_digest, envelope_digest, owner_seat, state,
+  lease_epoch, lease_expires_at, queue_digest, delivery_evidence_json,
+  ack_evidence, last_action, last_actor, created_at, updated_at
+)
+SELECT
+  ${sqlLiteral(team)}, ${sqlLiteral(item.workItem.id)}, ${sqlLiteral(contractDigest)}, ${sqlLiteral(envelopeDigest(item))}, ${sqlLiteral(item.ownerSeat)}, 'dispatching',
+  ${sqlLiteral(leaseEpoch)}, ${leaseExpiresAt}, ${sqlLiteral(audit.sourceDigest)}, ${sqlLiteral(deliveryEvidence)},
+  NULL, 'dispatch', ${sqlLiteral(managerSeat)}, ${now}, ${now}
+WHERE NOT EXISTS (
+  SELECT 1 FROM team_work_current
+  WHERE team = ${sqlLiteral(team)}
+    AND work_item_id = ${sqlLiteral(item.workItem.id)}
+    AND lease_expires_at > ${now}
+)
+AND NOT EXISTS (
+  SELECT 1 FROM team_work_dispatch_current
+  WHERE team = ${sqlLiteral(team)}
+    AND work_item_id = ${sqlLiteral(item.workItem.id)}
+    AND lease_expires_at > ${now}
+);
+${requireOneChange("team_work_dispatch_insert_guard")}
+`;
+  try {
+    runSqliteTransaction(dbPath, sql);
+  } catch (_) {
+    return dispatchOutput(team, workItemId, managerSeat, {
+      sourceDigest: audit.sourceDigest,
+      remediation: [{ code: "duplicate_dispatch", remediation: dispatchRemediation("duplicate_dispatch") }],
+    });
+  }
+  const output = dispatchOutput(team, workItemId, managerSeat, {
+    dispatched: true,
+    state: "dispatching",
+    ownerSeat: item.ownerSeat,
+    leaseEpoch,
+    leaseExpiresAt,
+    sourceDigest: audit.sourceDigest,
+    auditDigest: audit.auditDigest,
+    delivery: seat,
+    remediation: [],
+    sendInvoked: false,
+  });
+  output.dispatchDigest = sha256Digest(Object.assign({}, output, { dispatchDigest: undefined }));
+  return output;
+}
+
+function ackOutput(team, workItemId, ownerSeat, leaseEpoch, details) {
+  const output = Object.assign({
+    schemaVersion: 1,
+    command: "dispatch-ack",
+    team,
+    workItemId,
+    ownerSeat,
+    leaseEpoch,
+    acknowledged: false,
+    state: "not_acknowledged",
+    remediation: [],
+  }, details || {});
+  output.ackDigest = sha256Digest(output);
+  return output;
+}
+
+function runDispatchAck(team, pack, roster, workItemId, ownerSeat, leaseEpoch, evidence) {
+  validateContractPack(pack, roster, team);
+  if (!isNonEmptyString(workItemId)) schemaError("work-item-id must be a non-empty string");
+  if (!isNonEmptyString(ownerSeat)) schemaError("owner-seat must be a non-empty string");
+  if (!isNonEmptyString(leaseEpoch)) schemaError("lease-epoch must be a non-empty string");
+  const members = memberMap(roster);
+  const owner = members.get(ownerSeat);
+  if (!owner || owner.kind !== "seat") schemaError("owner-seat must be an exact kind: seat member");
+  const item = pack.workItems.find((candidate) => candidate.workItem.id === workItemId);
+  if (!item) schemaError(`work item does not exist: ${workItemId}`);
+  if (item.ownerSeat !== ownerSeat) {
+    return ackOutput(team, workItemId, ownerSeat, leaseEpoch, {
+      remediation: [{ code: "owner_mismatch", remediation: "only the declared owner seat may acknowledge this dispatch" }],
+    });
+  }
+  const now = parseNow();
+  const local = readLocalRows(process.env.AGMSG_TEAM_WORK_DB, team);
+  const dispatch = local.dispatchRows.get(workItemId);
+  if (local.error || !dispatch || dispatch.state !== "dispatching" || dispatch.ownerSeat !== ownerSeat || dispatch.leaseEpoch !== leaseEpoch || dispatch.leaseExpiresAt <= now) {
+    return ackOutput(team, workItemId, ownerSeat, leaseEpoch, {
+      remediation: [{ code: "dispatch_epoch_invalid", remediation: "use the exact unexpired dispatch epoch; do not start work without it" }],
+    });
+  }
+  const audit = runAudit("audit", team, pack, roster);
+  const auditItem = audit.items.find((candidate) => candidate.workItemId === workItemId);
+  if (audit.classificationBasis.status === "unknown" || !auditItem || auditItem.issueState !== "OPEN" || auditItem.relationStatus !== "complete") {
+    return ackOutput(team, workItemId, ownerSeat, leaseEpoch, {
+      sourceDigest: audit.sourceDigest,
+      remediation: [{ code: "source_unknown", remediation: "refresh the source before acknowledging the dispatch" }],
+    });
+  }
+  const seat = deliveryStatus(team, owner);
+  if (seat.status !== "available") {
+    return ackOutput(team, workItemId, ownerSeat, leaseEpoch, {
+      sourceDigest: audit.sourceDigest,
+      delivery: seat,
+      remediation: [{ code: "seat_not_live", remediation: "restore the existing live delivery evidence before ACK" }],
+    });
+  }
+
+  const contractDigest = sha256Digest(pack);
+  const ackEvidence = canonicalJson({
+    evidence: isNonEmptyString(evidence) ? evidence : "owner_ack",
+    acknowledgedAt: now,
+    leaseEpoch,
+    queueDigest: dispatch.queueDigest,
+    delivery: seat,
+  });
+  const dbPath = requireDatabasePath();
+  const sql = `
+UPDATE team_work_dispatch_current SET
+  state = 'claimed',
+  ack_evidence = ${sqlLiteral(ackEvidence)},
+  last_action = 'dispatch-ack',
+  last_actor = ${sqlLiteral(ownerSeat)},
+  updated_at = ${now}
+WHERE team = ${sqlLiteral(team)}
+  AND work_item_id = ${sqlLiteral(workItemId)}
+  AND state = 'dispatching'
+  AND owner_seat = ${sqlLiteral(ownerSeat)}
+  AND lease_epoch = ${sqlLiteral(leaseEpoch)}
+  AND lease_expires_at > ${now};
+${requireOneChange("team_work_dispatch_ack_guard")}
+INSERT INTO team_work_current(
+  team, work_item_id, contract_digest, envelope_digest, owner_seat,
+  source_repository, source_number, revision, state, lease_owner,
+  lease_expires_at, ack_evidence, pr_links_json, writebacks_json,
+  last_action, last_actor, created_at, updated_at
+) VALUES (
+  ${sqlLiteral(team)}, ${sqlLiteral(item.workItem.id)}, ${sqlLiteral(contractDigest)}, ${sqlLiteral(envelopeDigest(item))}, ${sqlLiteral(item.ownerSeat)},
+  ${sqlLiteral(item.workItem.source.repository)}, ${item.workItem.source.number}, 1, 'claimed', ${sqlLiteral(ownerSeat)},
+  ${dispatch.leaseExpiresAt}, ${sqlLiteral(ackEvidence)}, '[]', '[]',
+  'dispatch-ack', ${sqlLiteral(ownerSeat)}, ${now}, ${now}
+)
+ON CONFLICT(team, work_item_id) DO UPDATE SET
+  revision = revision + 1,
+  state = 'claimed',
+  lease_owner = ${sqlLiteral(ownerSeat)},
+  lease_expires_at = ${dispatch.leaseExpiresAt},
+  ack_evidence = ${sqlLiteral(ackEvidence)},
+  last_action = 'dispatch-ack',
+  last_actor = ${sqlLiteral(ownerSeat)},
+  updated_at = ${now}
+WHERE contract_digest = ${sqlLiteral(contractDigest)}
+  AND envelope_digest = ${sqlLiteral(envelopeDigest(item))}
+  AND owner_seat = ${sqlLiteral(item.ownerSeat)}
+  AND (lease_expires_at IS NULL OR lease_expires_at <= ${now});
+${requireOneChange("team_work_claim_ack_guard")}
+`;
+  try {
+    runSqliteTransaction(dbPath, sql);
+  } catch (_) {
+    return ackOutput(team, workItemId, ownerSeat, leaseEpoch, {
+      sourceDigest: audit.sourceDigest,
+      remediation: [{ code: "claim_conflict", remediation: "a concurrent lease prevented ACK; refresh before retrying" }],
+    });
+  }
+  const output = ackOutput(team, workItemId, ownerSeat, leaseEpoch, {
+    acknowledged: true,
+    state: "claimed",
+    sourceDigest: audit.sourceDigest,
+    leaseExpiresAt: dispatch.leaseExpiresAt,
+    delivery: seat,
+    remediation: [],
+  });
+  output.ackDigest = sha256Digest(Object.assign({}, output, { ackDigest: undefined }));
+  return output;
+}
+
 function main() {
   const [command, team, packPath, ...args] = process.argv.slice(2);
   if (!RECONCILER_COMMANDS.has(command)) {
@@ -368,14 +694,22 @@ function main() {
   if (command === "reconcile") {
     if (args.length > 1) schemaError("invalid arguments for reconcile");
     output = runReconcile(team, pack, roster, args[0]);
-  } else {
+  } else if (command === "watchdog") {
     if (args.length < 1 || args.length > 2) schemaError("invalid arguments for watchdog");
     output = runWatchdog(team, pack, roster, args[0], args[1]);
+  } else if (command === "dispatch") {
+    if (args.length < 2 || args.length > 3) schemaError("invalid arguments for dispatch");
+    output = runDispatch(team, pack, roster, args[0], args[1], args[2]);
+  } else {
+    if (args.length < 3 || args.length > 4) schemaError("invalid arguments for dispatch-ack");
+    output = runDispatchAck(team, pack, roster, args[0], args[1], args[2], args[3]);
   }
   process.stdout.write(`${canonicalJson(output)}\n`);
 }
 
 module.exports = {
+  runDispatch,
+  runDispatchAck,
   runReconcile,
   runWatchdog,
 };

@@ -36,6 +36,18 @@ case "$COMMAND" in
       exit 1
     fi
     ;;
+  dispatch)
+    if [ "$#" -ne 5 ] && [ "$#" -ne 6 ]; then
+      echo "Usage: team-work.sh dispatch <team> <contract-pack.json> <work-item-id> <manager-seat> [ack-ttl-seconds]" >&2
+      exit 1
+    fi
+    ;;
+  dispatch-ack)
+    if [ "$#" -ne 6 ] && [ "$#" -ne 7 ]; then
+      echo "Usage: team-work.sh dispatch-ack <team> <contract-pack.json> <work-item-id> <owner-seat> <lease-epoch> [evidence]" >&2
+      exit 1
+    fi
+    ;;
   claim|renew)
     if [ "$#" -ne 5 ] && [ "$#" -ne 6 ]; then
       echo "Usage: team-work.sh $COMMAND <team> <contract-pack.json> <work-item-id> <actor-seat> [ttl-seconds]" >&2
@@ -109,6 +121,14 @@ case "$COMMAND" in
     ;;
   reconcile|watchdog)
     source "$SCRIPT_DIR/lib/storage.sh"
+    AGMSG_TEAM_WORK_DB="$(agmsg_db_path)"
+    AGMSG_TEAM_WORK_SCRIPT_DIR="$SCRIPT_DIR"
+    export AGMSG_TEAM_WORK_DB AGMSG_TEAM_WORK_SCRIPT_DIR
+    printf '%s' "$ROSTER_JSON" | node "$SCRIPT_DIR/lib/team-work-reconciler.js" "$@"
+    ;;
+  dispatch|dispatch-ack)
+    source "$SCRIPT_DIR/lib/storage.sh"
+    agmsg_storage_ensure_initialized
     AGMSG_TEAM_WORK_DB="$(agmsg_db_path)"
     AGMSG_TEAM_WORK_SCRIPT_DIR="$SCRIPT_DIR"
     export AGMSG_TEAM_WORK_DB AGMSG_TEAM_WORK_SCRIPT_DIR
