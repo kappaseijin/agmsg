@@ -121,6 +121,29 @@ cd agmsg
 
 インストール後、**エージェントを再起動**して（Claude Code / Codex / Gemini CLI / Copilot CLI / Antigravity / OpenCode）新しいスキルを反映させる。
 
+### GitHub CLIの宛先ガード
+
+`gh` がインストール済みの場合、`install.sh` は
+`~/.agents/bin/gh` も配置する。まだ設定されていなければ、エージェントの
+PATHで `~/.agents/bin` を実体のGitHub CLIより前に置くこと。ランチャーは
+インストール時にガードスクリプトと実 `gh` の絶対パスを固定し、後からPATHを
+再探索しない。
+
+ガードは読み取り専用コマンドを許可し、GitHubへの書き込みは宛先を検査する。
+書き込みが許可されるのは、解決されたURLが `github.com` と完全一致し、所有者が
+`kappaseijin` または `kappaseijinjp` の場合だけである。宛先は、明示した
+`-R`/`--repo`、`GH_REPO`、`gh repo set-default --view`、現在のcheckoutの順に
+解決する。`GH_HOST`、形式不正・欠落・複数指定、resolverの失敗や不正な出力は
+拒否する。`gh api` はGET（またはmethod/bodyの指定なし）の場合だけ読み取りと
+みなし、`-f`/`-F`、`--field`/`--raw-field`、`--input` があるmethod省略呼出しは
+書き込み側として拒否する。コマンド未分類の操作、コマンドを実行するalias、
+コマンドを実行・インストールするextensionはfail-closedで拒否する。
+
+インストーラーは、agmsg製でない `~/.agents/bin/gh` を上書きしない。`gh` が
+未インストールの場合はガードを配置せずメッセージを表示するため、`gh` の導入後に
+`./install.sh --update` を再実行すること。`uninstall.sh` が削除するのはagmsgが
+生成したガードだけである。
+
 ### Windows: Git Bash と Codex
 
 agmsgの実装は `scripts/` 配下のBashスクリプト群であるため、Windowsでは

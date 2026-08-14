@@ -121,6 +121,28 @@ The **command name** determines:
 
 After install, **restart your agent** (Claude Code / Codex / Gemini CLI / Copilot CLI / Antigravity / OpenCode) so it picks up the new skill.
 
+### GitHub CLI destination guard
+
+When `gh` is installed, `install.sh` also installs `~/.agents/bin/gh`. Put
+`~/.agents/bin` before the real GitHub CLI on the agent PATH if it is not
+already there. The launcher fixes both the guard script and the real `gh`
+executable to absolute paths at install time; it does not search PATH again.
+
+The guard allows read-only commands and destination-checks GitHub writes. A
+write is allowed only when the resolved URL is exactly on `github.com` and the
+owner is `kappaseijin` or `kappaseijinjp`. It resolves destinations in this
+order: explicit `-R`/`--repo`, `GH_REPO`, `gh repo set-default --view`, then the
+current checkout. `GH_HOST` and malformed, missing, ambiguous, or failed
+resolver results are rejected. `gh api` is read-only only for GET (or when no
+method/body is requested); `-f`/`-F`, `--field`/`--raw-field`, and `--input`
+make an omitted-method request non-read-only. Unknown commands, aliases that
+execute commands, and extensions that execute or install commands fail closed.
+
+The installer refuses to overwrite a non-agmsg `~/.agents/bin/gh`. If `gh` is
+not installed, it leaves the guard uninstalled and prints a message; rerun
+`./install.sh --update` after installing `gh`. `uninstall.sh` removes only the
+agmsg-generated guard.
+
 ### Windows: Git Bash & Codex
 
 agmsg's implementation is the Bash script set under `scripts/`, so on Windows the

@@ -36,6 +36,50 @@ teardown() {
   [[ "$output" =~ "hello from install" ]]
 }
 
+@test "install: gh owner guard fixes the inner script and real gh to absolute paths" {
+  local real_bin="$FAKE_HOME/real-bin" guard="$FAKE_HOME/.agents/bin/gh"
+  mkdir -p "$real_bin"
+  printf '#!/bin/sh\nexit 0\n' > "$real_bin/gh"
+  chmod +x "$real_bin/gh"
+
+  run env HOME="$FAKE_HOME" PATH="$real_bin:/usr/bin:/bin" \
+    bash "$REPO_ROOT/install.sh" --cmd agmsg
+  [ "$status" -eq 0 ]
+  [ -x "$guard" ]
+  grep -Fq '# agmsg gh owner guard launcher' "$guard"
+  grep -Fq "$FAKE_HOME/.agents/skills/agmsg/scripts/guards/gh-write-owner-guard.sh" "$guard"
+  grep -Fq "$real_bin/gh" "$guard"
+  ! grep -q '__AGMSG_.*__' "$guard"
+}
+
+@test "install: gh owner guard refuses to overwrite a non-agmsg gh" {
+  local real_bin="$FAKE_HOME/real-bin" guard="$FAKE_HOME/.agents/bin/gh"
+  mkdir -p "$real_bin" "${guard%/*}"
+  printf '#!/bin/sh\nprintf user-owned\n' > "$guard"
+  chmod +x "$guard"
+  printf '#!/bin/sh\nexit 0\n' > "$real_bin/gh"
+  chmod +x "$real_bin/gh"
+
+  run env HOME="$FAKE_HOME" PATH="$real_bin:/usr/bin:/bin" \
+    bash "$REPO_ROOT/install.sh" --cmd agmsg
+  [ "$status" -ne 0 ]
+  grep -Fq 'printf user-owned' "$guard"
+}
+
+@test "uninstall: removes only the installed gh owner guard" {
+  local real_bin="$FAKE_HOME/real-bin" guard="$FAKE_HOME/.agents/bin/gh"
+  mkdir -p "$real_bin"
+  printf '#!/bin/sh\nexit 0\n' > "$real_bin/gh"
+  chmod +x "$real_bin/gh"
+  env HOME="$FAKE_HOME" PATH="$real_bin:/usr/bin:/bin" \
+    bash "$REPO_ROOT/install.sh" --cmd agmsg >/dev/null
+  [ -x "$guard" ]
+
+  run env HOME="$FAKE_HOME" bash "$REPO_ROOT/uninstall.sh" --yes
+  [ "$status" -eq 0 ]
+  [ ! -e "$guard" ]
+}
+
 @test "install: Codex skill documents safe Git Bash quoting for Windows PowerShell" {
   HOME="$FAKE_HOME" bash "$REPO_ROOT/install.sh" --cmd agmsg --agent-type codex
 

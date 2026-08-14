@@ -170,6 +170,68 @@ install_windows_helpers() {
   fi
 }
 
+# Install the destination owner guard for GitHub CLI writes. The launcher is
+# generated with absolute paths so a later PATH entry cannot replace either
+# the authorization code or the real gh binary it inspected.
+find_real_gh_for_owner_guard() {
+  local path_entry candidate candidate_dir target="$AGENTS_DIR/bin/gh"
+  local -a path_entries=()
+  IFS=':' read -r -a path_entries <<< "${PATH:-}"
+  for path_entry in "${path_entries[@]}"; do
+    [ -n "$path_entry" ] || path_entry='.'
+    candidate="$path_entry/gh"
+    [ -x "$candidate" ] && [ ! -d "$candidate" ] || continue
+    candidate_dir="$(cd "$(dirname "$candidate")" 2>/dev/null && pwd -P)" || continue
+    candidate="$candidate_dir/$(basename "$candidate")"
+    [ "$candidate" = "$target" ] && continue
+    grep -Eq '^# (agmsg gh owner guard launcher|gh write guard shim)' "$candidate" 2>/dev/null && continue
+    if [ -e "$target" ] && [ "$candidate" -ef "$target" ]; then
+      continue
+    fi
+    printf '%s\n' "$candidate"
+    return 0
+  done
+  return 1
+}
+
+is_agmsg_gh_owner_guard() {
+  local target="$AGENTS_DIR/bin/gh"
+  [ -f "$target" ] || return 1
+  grep -Eq '^# (agmsg gh owner guard launcher|gh write guard shim)' "$target" 2>/dev/null
+}
+
+install_gh_owner_guard() {
+  local target="$AGENTS_DIR/bin/gh"
+  local guard_script="$SKILL_DIR/scripts/guards/gh-write-owner-guard.sh"
+  local launcher_template="$SKILL_DIR/scripts/guards/gh-write-owner-guard-launcher.sh"
+  local real_gh tmp guard_replacement real_replacement
+
+  if { [ -e "$target" ] || [ -L "$target" ]; } && ! is_agmsg_gh_owner_guard; then
+    echo "  ! Refusing to overwrite non-agmsg $target" >&2
+    return 1
+  fi
+  if [ ! -x "$guard_script" ] || [ ! -f "$launcher_template" ]; then
+    echo "  ! gh owner guard files are missing from $SKILL_DIR" >&2
+    return 1
+  fi
+  if ! real_gh="$(find_real_gh_for_owner_guard)"; then
+    echo "  ~ gh not found; skipped ~/.agents/bin/gh owner guard (re-run after installing gh)" >&2
+    return 0
+  fi
+
+  mkdir -p "$AGENTS_DIR/bin"
+  guard_replacement="$(printf '%s' "$guard_script" | sed 's/[&|\\]/\\&/g')"
+  real_replacement="$(printf '%s' "$real_gh" | sed 's/[&|\\]/\\&/g')"
+  tmp="$target.tmp.$$"
+  sed \
+    -e "s|__AGMSG_GH_GUARD_SCRIPT__|$guard_replacement|g" \
+    -e "s|__AGMSG_REAL_GH__|$real_replacement|g" \
+    "$launcher_template" > "$tmp"
+  chmod +x "$tmp"
+  mv -f "$tmp" "$target"
+  echo "  + installed gh owner guard (~/.agents/bin/gh; real gh: $real_gh)"
+}
+
 # --- Parse args ---
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -317,6 +379,7 @@ if [ "$UPDATE_ONLY" = true ]; then
   fi
   cp "$SCRIPT_DIR/openai.yaml" "$SKILL_DIR/agents/openai.yaml" 2>/dev/null || true
   chmod +x "$SKILL_DIR/scripts/"*.sh
+  chmod +x "$SKILL_DIR/scripts/guards/"*.sh 2>/dev/null || true
   chmod +x "$SKILL_DIR/scripts/drivers/types/codex/"*.sh 2>/dev/null || true
   # Refresh the Codex monitor shim (~/.agents/bin/codex) if it's ours. --update
   # cp's the new codex-shim-install.sh but does not re-run it, so a shim from an
@@ -330,6 +393,7 @@ if [ "$UPDATE_ONLY" = true ]; then
       && echo "  + refreshed Codex monitor shim (~/.agents/bin/codex)"
   fi
   install_windows_helpers
+  install_gh_owner_guard
   INSTALLED_VERSION="$(agmsg_source_version)"
   printf '%s\n' "$INSTALLED_VERSION" > "$SKILL_DIR/VERSION"
   echo "  + updated scripts, templates, and SKILL.md (version $INSTALLED_VERSION)"
@@ -394,6 +458,7 @@ cp "$SCRIPT_DIR/uninstall.sh" "$SKILL_DIR/uninstall.sh" 2>/dev/null && chmod +x 
 
 cp "$SCRIPT_DIR/openai.yaml" "$SKILL_DIR/agents/openai.yaml" 2>/dev/null || true
 chmod +x "$SKILL_DIR/scripts/"*.sh
+chmod +x "$SKILL_DIR/scripts/guards/"*.sh 2>/dev/null || true
 chmod +x "$SKILL_DIR/scripts/drivers/types/codex/"*.sh 2>/dev/null || true
 # Re-point an existing Codex monitor shim at the new path on a reinstall over an
 # older layout (no-op when no agmsg shim is present). See the --update block above.
@@ -403,6 +468,7 @@ if [ -x "$CODEX_SHIM" ] && AGMSG_CODEX_SHIM_INSTALL_QUIET=1 "$CODEX_SHIM" status
     && echo "  + refreshed Codex monitor shim (~/.agents/bin/codex)"
 fi
 install_windows_helpers
+install_gh_owner_guard
 
 # Marker file for uninstall detection
 touch "$SKILL_DIR/.agmsg"
