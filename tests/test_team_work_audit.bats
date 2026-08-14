@@ -96,7 +96,7 @@ if (input !== JSON.stringify(sort(value))) process.exit(1);
 
   [ "$status" -eq 0 ]
   [ "$(json_value "$output" classificationBasis.status)" = "ready" ]
-  [ "$(json_value "$output" readyCount)" = "1" ]
+  [ "$(json_value "$output" classificationBasis.readyCount)" = "1" ]
   [ "$(json_value "$output" ready[0].workItemId)" = "issue:42" ]
 }
 
