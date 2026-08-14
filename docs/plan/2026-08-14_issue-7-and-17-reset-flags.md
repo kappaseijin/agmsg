@@ -73,6 +73,15 @@ Issue #7 の send 用 PR と Issue #17 の reset 用 PR は分ける。
 5. required CI、対象 bats、shellcheck、負の対照を実測してから Issue #17 PR を merge する。
 6. Issue #17 の実装 PR merge 後に旧 PR #6 を説明付きで close する。旧 PR のブランチは変更せず、main と作業ブランチを同期・整理する。
 
+## 実測結果
+
+2026-08-14T13:48:02+09:00 時点の実測結果を記録する。
+
+- Issue #7 は Codex 作成の PR #26 で merge 済みであり、`origin/main` に共通 parser と send の修正が含まれる。
+- #7 の旧 parser を一時的に戻した対照では、先頭・中間・末尾の `--force` 試験と未知 option 試験が失敗した。現行実装では `tests/test_messaging.bats` が 29/29 pass し、対象回帰は `KILLED` となった。
+- Issue #17 の unmodified reset 相当では、プロセス marker による path のすり替わり再現試験は pass した一方、exact path の `--no-resolve` 削除試験と検索 path 診断試験は失敗した。現行実装では `tests/test_resolve_project.bats` が 36/36 pass し、両方の修正対照は `KILLED` となった。
+- 追加の `SURVIVED` はなく、Bash スクリプトのため TSC 判定は対象外である。
+
 ## 運用制約
 
 - `agmsg_owner_codex` 単独で実施する。
