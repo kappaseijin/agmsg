@@ -7,7 +7,7 @@ tags:
   - security
   - owner-allowlist
   - issue-10
-status: proposed
+status: implemented
 timestamp: "2026-08-11T19:26:14+09:00"
 ---
 
@@ -22,6 +22,14 @@ guard は実行者の GitHub account、クローンの登録状態、`pr-account
 保護対象は、ユーザー決定で明示された `issue create`、`issue comment`、`pr create`、`pr comment`、`pr review` を含む。
 既知の読み取り操作だけを pass-through し、それ以外の操作、任意の `gh` alias / extension 呼出し、非 GET の `gh api` は宛先を静かに推測して通さず fail-closed とする。
 この形なら新しい `gh` の書込みサブコマンドが追加されても、分類を更新するまで素通りしない。
+
+## 実装前の確定事項
+
+- `gh api` の非 GET 判定は `--field` / `-f`、`--raw-field` / `-F`、`--input` の分離形・結合形を同じ書込み扱いにする。
+- repository resolver は `GH_PROMPT_DISABLED=true` を付けた非対話呼出しに固定する。非 0、空、複数行、形式不正、出力不一致はすべて拒否し、元の writer を起動しない。
+- `gh repo set-default --view` は書込みではなくローカル設定の読み取りとして通すが、その出力は後続の宛先 resolver の入力として毎回再検査する。
+- 通常の運用で必要な `gh pr merge`、`gh issue close` / `reopen` / `edit`、`gh pr close` / `reopen` / `edit` は、五操作と同じ宛先検査を通す。これら以外の未分類 writer は、所有者が許可されていても拒否する。
+- allowlist guard は account policy を読まず、固定した実 `gh` の前段で host / owner だけを検査する。既存の account guard を別途併用する場合も、owner guard の許可を緩める経路にはしない。
 
 ```mermaid
 flowchart TD
@@ -73,8 +81,8 @@ flowchart TD
 読み取り allowlist は version 管理する静的表に置く。
 少なくとも `help`、`version`、`completion`、`status`、`search`、`issue list/view/status`、`pr list/view/status/diff/checks`、`repo list/view/clone/set-default`、`run list/view/watch`、`workflow list/view`、`release list/view/download`、`gist list/view`、`label list`、`project list/view`、`gh api --method GET` を含める。
 
-`auth`、`config`、`alias` の管理操作は、認証情報またはローカル設定を変えても外部 repository へ書き込まないため pass-through してよい。
-ただし alias / extension が展開・実行する任意 command はこの分類に含めない。
+`auth`、`config`、`alias list/set/delete`、`extension list` の管理操作は、認証情報またはローカル設定を変えても外部 repository へ書き込まないため pass-through してよい。
+ただし定義済み alias の実行、`extension exec`、`extension install` など任意 command を展開・実行する操作はこの分類に含めず拒否する。
 
 `gh api` は method 省略かつ field / input が無い場合だけ GET として扱う。
 `--method` / `-X` の別綴り、`--method=<value>`、`-X<value>` を正規化し、明示 GET は query field を含んでも通す。
@@ -94,6 +102,9 @@ POST、PUT、PATCH、DELETE、method 不明、method 省略で request body を�
 | `gh pr create` | 同上 | 同上 |
 | `gh pr comment` | 同上 | 同上 |
 | `gh pr review` | 同上 | 同上 |
+| `gh pr merge` | 同上 | 同上 |
+| `gh issue close` / `reopen` / `edit` | 同上 | 同上 |
+| `gh pr close` / `reopen` / `edit` | 同上 | 同上 |
 
 これ以外の組込み書込み操作（`issue edit`、`pr merge`、`release create`、`repo` の変更操作など）を素通りさせない。
 実装時の静的表で「読み取り」または「宛先検査可能な書込み」のどちらにも分類されていない操作は拒否する。
@@ -117,7 +128,7 @@ argv parser は `--` 以降を flag と見なさない。
 `--repo` の欠値、空値、二件以上、未対応の短縮結合表記、解析不能な host / repository は、実 `gh` を起動せず拒否する。
 許可のために「最後の `--repo` を採る」や「全候補が許可なら通す」をしてはならない。
 
-明示 repository は、固定絶対 path の実 `gh` で次を読む。
+明示 repository は、インストール時に固定した絶対 path の実 `gh` で次を読む。
 
 ```bash
 "$REAL_GH" repo view "$repo" --json nameWithOwner,url \
@@ -131,12 +142,12 @@ default が無いときだけ、引数なしの `repo view --json nameWithOwner,
 
 いずれの経路も、最終的に `url` の host と `nameWithOwner` の先頭 segment を ASCII lowercase の完全一致で照合する。
 `GH_HOST` が指定されている場合も、解決後の URL が `github.com` でなければ拒否する。
-resolver のネットワーク / 認証失敗、JSON / template 出力不正、空出力、複数行は拒否であり、元の書込みを試行しない。
+resolver のネットワーク / 認証失敗、JSON / template 出力不正、空出力、複数行は拒否であり、元の書込みを試行しない。resolver は対話入力を無効にして実行する。
 
 ## 実装境界
 
 - リポジトリで version 管理する source は `scripts/guards/gh-write-owner-guard.sh`、`scripts/guards/gh-write-owner-guard-launcher.sh`、試験は `tests/test_gh_write_owner_guard.bats` とする。
-- installer は launcher を `~/.agents/bin/gh` に配置し、inner script と実 `gh` の絶対 path をインストール時に固定する。PATH 再探索で後段の decoy `gh` を起動しない。
+- installer は launcher を `~/.agents/bin/gh` に配置し、inner script と実 `gh` の絶対 path をインストール時に固定する。PATH 再探索で後段の decoy `gh` を起動しない。既存の非 agmsg `gh` は上書きしない。
 - launcher は `/bin/sh` 固定 shebang とし、Bash を起動する前に `BASH_ENV`、`ENV`、exported `BASH_FUNC_*`、`SHELLOPTS`、`BASHOPTS`、`CDPATH`、`GLOBIGNORE` を除去する。inner script でも allowlist は readonly 代入し、代入不能なら拒否する。
 - allowlist は source の `readonly` リテラルだけに置く。`PR_ACCOUNT_POLICY` を source / read しない。
 - current wrapper の `GUARD_ROOT`、audit 上の `unchecked`、および policy 未登録時の `exec` 経路を owner guard から削除する。audit を残すなら allow / reject だけを記録し、記録失敗は認可判断を緩めない。
@@ -168,6 +179,8 @@ fake `gh` は resolver 用の read-only 応答を返し、元の書込み argv �
 | GHG-16 | `BASH_ENV` と exported function で allowlist helper を上書きして GHG-01 | 非 0、marker なし | shell startup による認可器の改変。 |
 | GHG-17 | PATH 後段に decoy `gh` を置いて GHG-02 | 正当な fake 実 `gh` だけが一回起動 | PATH 再探索で判定 / 実行先がすり替わる。 |
 | GHG-18 | 新規 clone 相当の scratch cwd で GHG-01 / 02 | それぞれ拒否 / 許可 | clone 固有の設定に依存する。 |
+| GHG-19 | `pr merge --repo kappaseijin/fixture` | 0、marker は一回、元 argv を保持 | 運用上必要な merge を未分類 writer として全遮断する。 |
+| GHG-20 | resolver が非 0 / 空 / 複数行 / 不正形式、または prompt を要求 | 非 0、writer marker なし | resolver の失敗を fail-open にする。 |
 
 GHG-01、03、04、09、10、14 は「不許可なのに real writer が起動しない」ことを marker で示す必須の負のコントロールである。
 GHG-02 と GHG-15 は正しい状態を通し、常時拒否を成功扱いしない対照である。

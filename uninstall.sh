@@ -213,6 +213,16 @@ if [ "$REMOVED_SQLITE_SHIM" = true ] && [ -f "$SQLITE_SHIM_CACHE" ]; then
   REMOVED=true
 fi
 
+# Remove only the agmsg-generated GitHub CLI owner guard. A user-owned gh
+# executable, including an older non-agmsg wrapper, is never touched.
+GH_OWNER_GUARD="$AGENTS_DIR/bin/gh"
+if [ -f "$GH_OWNER_GUARD" ] && [ ! -L "$GH_OWNER_GUARD" ] \
+    && grep -q '^# agmsg gh owner guard launcher$' "$GH_OWNER_GUARD" 2>/dev/null; then
+  rm -f "$GH_OWNER_GUARD"
+  echo "  - removed $GH_OWNER_GUARD"
+  REMOVED=true
+fi
+
 # --- 3. Remove skill directories ---
 for SKILL_DIR in "${SKILL_DIRS[@]}"; do
   SKILL_NAME="$(basename "$SKILL_DIR")"
