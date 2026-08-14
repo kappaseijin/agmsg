@@ -419,6 +419,7 @@ See [docs/opencode.md](docs/opencode.md) for full setup instructions.
 ~/.agents/skills/<cmd>/scripts/history.sh <team> [agent_id] [limit]
 ~/.agents/skills/<cmd>/scripts/join.sh <team> <agent_id> <type> <project_path> [--role <role>] [--kind <seat|human|service>] [--force]
 ~/.agents/skills/<cmd>/scripts/team.sh <team> [--format human|json]
+~/.agents/skills/<cmd>/scripts/team-work.sh <validate|self-check> <team> <contract-pack.json>
 ~/.agents/skills/<cmd>/scripts/whoami.sh <project_path> [type] [--format human|json]
 ~/.agents/skills/<cmd>/scripts/delivery.sh set <mode> <type> <project_path>
 ~/.agents/skills/<cmd>/scripts/delivery.sh status [<type> <project_path>] [--format human|json]
@@ -483,6 +484,69 @@ never makes them dispatchable.
 The nested `receipt` records queued, claimed, handed-off, and legacy-unknown
 messages. `handedOff` acknowledges delivery to the receiver only. It does not
 mean the role finished the task, closed an Issue, or merged a PR.
+### Read-only work-state contract check
+
+`team-work.sh` validates a versioned work-state contract pack before later
+commands claim work, query GitHub, or deliver a message. It requires `node` on
+`PATH`, reads the selected team's `team.sh --format json` roster, and never
+modifies the pack, team config, GitHub, messages, leases, or agents.
+
+```bash
+~/.agents/skills/<cmd>/scripts/team-work.sh validate demo .team-work.json
+~/.agents/skills/<cmd>/scripts/team-work.sh self-check demo .team-work.json
+```
+
+The pack is JSON with `schemaVersion: 1`, the exact `team`, and a non-empty
+`workItems` array. Each item requires a unique `workItem.id`, an issue source,
+an `ownerSeat`, one or more `workKinds`, a `revision`, a
+`classificationBasis`, and boolean `writebackRequired`. `ownerSeat` must be an
+existing roster member with `kind: "seat"`; human and service identities are
+not valid owners. Supported work kinds are `implementation`, `writeback`,
+`inventory`, `closeout`, and `reconciliation`.
+
+```json
+{
+  "schemaVersion": 1,
+  "team": "demo",
+  "workItems": [{
+    "schemaVersion": 1,
+    "workItem": {
+      "id": "issue:40",
+      "source": {"kind": "issue", "repository": "kappaseijin/agmsg", "number": 40}
+    },
+    "ownerSeat": "architect",
+    "workKinds": ["implementation"],
+    "relations": [{
+      "kind": "pull_request",
+      "repository": "kappaseijin/agmsg",
+      "number": 46,
+      "relation": "contributes"
+    }],
+    "revision": 1,
+    "classificationBasis": {
+      "contentDigest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "refs": [{"kind": "issue", "repository": "kappaseijin/agmsg", "number": 40}]
+    },
+    "writebackRequired": false
+  }]
+}
+```
+
+`relations` may be empty before a PR exists. A `contributes` PR relation needs
+its repository and positive number. A `closes` relation additionally needs a
+`closingIssue` object with the same repository and number as `workItem.source`;
+otherwise validation fails. `classificationBasis` needs a lowercase
+`sha256:` digest and at least one issue, pull request, commit, or evidence
+reference.
+
+`validate` prints compact JSON such as
+`{"schemaVersion":1,"valid":true,"team":"demo","workItemCount":1}`.
+`self-check` adds a canonical JSON representation plus `contractDigest` and
+per-item `envelopeDigest` values. Object key order and whitespace do not change
+these SHA-256 digests; array order remains significant. Invalid packs return
+exit code 2 with `schema error:` on stderr. Usage errors, a missing pack, a
+missing Node runtime, or an unavailable roster return nonzero without treating
+the contract as empty or valid.
 
 ### Message delivery state
 
