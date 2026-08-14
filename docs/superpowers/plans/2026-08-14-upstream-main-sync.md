@@ -123,7 +123,7 @@ Expected: `git diff --name-only --diff-filter=U` が空になり、各競合フ�
 - Consumes: merge commit と Bats suite。
 - Produces: #35だけを閉じるPRと、mainへの取り込み証跡。
 
-- [ ] **Step 1: 差分と祖先関係を検証する**
+- [x] **Step 1: 差分と祖先関係を検証する**
 
 Run:
 
@@ -135,7 +135,7 @@ git merge-base --is-ancestor upstream/main HEAD
 
 Expected: whitespace errorなし、双方のmainが merge result の祖先。
 
-- [ ] **Step 2: Bats全件を実行する**
+- [x] **Step 2: Bats全件を実行する**
 
 Run:
 
@@ -145,6 +145,14 @@ bats tests/
 ```
 
 Expected: count と実行成功件数が一致し、失敗なし。
+
+## 検証結果（PR作成前）
+
+- `git diff --check origin/main...HEAD`: 成功（whitespace errorなし）。
+- `git merge-base --is-ancestor origin/main HEAD`: 成功。
+- `git merge-base --is-ancestor upstream/main HEAD`: 成功。
+- `bats --count tests/`: 990件。
+- `bats tests/`: 990/990成功。
 
 - [ ] **Step 3: 1 Issue / 1 PR を作成してmainへ取り込む**
 
