@@ -42,7 +42,7 @@ timestamp: "2026-08-14T21:57:38+09:00"
 - Consumes: `origin` (`kappaseijin/agmsg`) と `upstream` (`fujibee/agmsg`) の `main` ref。
 - Produces: `issue/35-upstream-main-sync` と、PRに記録する両ref SHA。
 
-- [ ] **Step 1: origin と upstream を最新化する**
+- [x] **Step 1: origin と upstream を最新化する**
 
 Run:
 
@@ -55,7 +55,7 @@ git rev-parse upstream/main
 
 Expected: 2つのSHAを取得し、以後のマージ元・先を確定できる。
 
-- [ ] **Step 2: 分岐状態を確認する**
+- [x] **Step 2: 分岐状態を確認する**
 
 Run:
 
@@ -77,7 +77,7 @@ Expected: fast-forward可否と、両系統の固有commitを記録できる。
 - Consumes: `upstream/main`。
 - Produces: `upstream/main` と開始時 `origin/main` を両方の祖先に持つ merge commit。
 
-- [ ] **Step 1: 通常マージを実行する**
+- [x] **Step 1: 通常マージを実行する**
 
 Run:
 
@@ -87,7 +87,7 @@ git merge --no-ff --no-edit upstream/main
 
 Expected: 無競合ならmerge commitを作成する。競合時は未解決ファイル一覧を取得して次の手順へ進む。
 
-- [ ] **Step 2: 実際に競合したファイルだけを upstream 優先で解決する**
+- [x] **Step 2: 実際に競合したファイルだけを upstream 優先で解決する（競合なしのため不要）**
 
 Run:
 
@@ -100,9 +100,18 @@ git commit --no-edit
 
 Expected: `git diff --name-only --diff-filter=U` が空になり、各競合ファイルは upstream の内容と一致する。競合が無い場合はこの手順を実行しない。
 
-- [ ] **Step 3: merge result を記録する**
+- [x] **Step 3: merge result を記録する**
 
 本計画書の完了記録へ、開始時の2 SHA、merge commit、競合の有無、競合があった場合のファイル名と upstream 優先解決を追記する。
+
+## 実施結果（マージ時点）
+
+- 開始時 `origin/main`: `e6e5d7c20d90e729192ac3ea5ba2e82a8935903c`
+- 取り込み元 `upstream/main`: `f271cd45242ce1cca4b94f69084e6217e0eb6b48`
+- 計画書コミット: `473bd382d9fb14c3e4d93a26408291fbc75f0d20`
+- マージコミット: `1ddb8d23e722ebe7f42b43b5283eab0e056e45a0`
+- 競合: なし。`tests/test_codex_bridge_launcher.bats` と `tests/test_resolve_project.bats` はGitにより自動マージされ、未解決ファイルは残らなかった。
+- マージ前ベースライン: `bats --count tests/` は943件、`bats tests/` は943/943成功。
 
 ### Task 3: 完全検証、専用PR、取り込み確認
 
