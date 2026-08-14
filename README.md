@@ -353,6 +353,27 @@ See [docs/opencode.md](docs/opencode.md) for full setup instructions.
 
 `reset.sh` normally resolves `<project_path>` to the registered project associated with the current session or an ancestor/worktree. When the argument is already the exact stored path (for example, while cleaning up an orphaned registration), pass `--no-resolve`; the flag may appear before, between, or after the positional arguments. If no registration is removed, the command prints both the searched path and the argument path, and suggests `--no-resolve` when they differ.
 
+### Read-only JSON API
+
+External tools should read agmsg through `api.sh`, not through `db/` or
+`teams/` files:
+
+```bash
+~/.agents/skills/<cmd>/scripts/api.sh get teams <team> members
+~/.agents/skills/<cmd>/scripts/api.sh get teams <team> registrations
+~/.agents/skills/<cmd>/scripts/api.sh get teams <team> messages
+```
+
+The `registrations` resource emits one JSONL object per registration, so each
+agent/type/project pair stays associated:
+
+```json
+{"team":"agsuite","agent":"alice","type":"claude-code","project":"/work/agmsg"}
+```
+
+The existing `members` resource remains unchanged for compatibility; it is an
+agent-level aggregate and may return only one project.
+
 ## FAQ / Design notes
 
 **Is this MCP? Do I need an MCP server?**

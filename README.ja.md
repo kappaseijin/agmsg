@@ -339,6 +339,24 @@ $agmsg
 
 `reset.sh` は通常、`<project_path>` を現在のセッションに紐づく登録済みプロジェクト、または親ディレクトリ・worktree へ解決する。孤立登録の後片付けなど、引数が保存済みの正確な path だと分かっている場合は `--no-resolve` を渡す。フラグは位置引数の前・間・後のどこに置いてもよい。登録を削除できなかった場合は、検索した path と引数の path を両方表示し、異なる場合は `--no-resolve` を案内する。
 
+### 読み取り専用 JSON API
+
+外部ツールは `db/` や `teams/` のファイルを直接読まず、`api.sh` を使うこと:
+
+```bash
+~/.agents/skills/<cmd>/scripts/api.sh get teams <team> members
+~/.agents/skills/<cmd>/scripts/api.sh get teams <team> registrations
+~/.agents/skills/<cmd>/scripts/api.sh get teams <team> messages
+```
+
+`registrations` resource は登録 1 件につき JSONL 1 行を返すため、agent・type・project の対応を保持できる:
+
+```json
+{"team":"agsuite","agent":"alice","type":"claude-code","project":"/work/agmsg"}
+```
+
+既存の `members` resource は後方互換のため変更しない。agent 単位に集約されたビューであり、project は 1 件だけ返る場合がある。
+
 ## FAQ / 設計メモ
 
 **これはMCPか? MCPサーバーが必要か?**

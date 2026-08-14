@@ -26,6 +26,7 @@ set -euo pipefail
 # Usage:
 #   api.sh get teams
 #   api.sh get teams <team> members
+#   api.sh get teams <team> registrations
 #   api.sh get teams <team> messages [--agent <name>] [--limit N] [--before-id <id>]
 #
 # Output is always JSONL — one JSON object per line, UTF-8, no
@@ -94,6 +95,33 @@ get_members() {
   "
 }
 
+get_registrations() {
+  local team="$1"
+  local config="$SCRIPT_DIR/../teams/$team/config.json"
+  [ -f "$config" ] || return 0
+  local path_sql team_sql
+  path_sql="$(agmsg_sql_readfile_path "$config")"
+  team_sql="$(_agmsg_sqlesc "$team")"
+  # Keep each type/project pair intact. Unlike get_members, this resource
+  # deliberately does not aggregate an agent's registrations or choose one
+  # project with LIMIT 1 (#19).
+  agmsg_sqlite_mem "
+    WITH cfg AS (SELECT CAST(readfile('$path_sql') AS TEXT) AS json)
+    SELECT json_object(
+      'team', '$team_sql',
+      'agent', a.key,
+      'type', json_extract(r.value, '\$.type'),
+      'project', json_extract(r.value, '\$.project')
+    )
+    FROM cfg,
+         json_each(json_extract(cfg.json, '\$.agents')) AS a,
+         json_each(json_extract(a.value, '\$.registrations')) AS r
+    ORDER BY a.key,
+             json_extract(r.value, '\$.type'),
+             json_extract(r.value, '\$.project');
+  "
+}
+
 get_messages() {
   local team="$1"
   shift
@@ -151,7 +179,7 @@ get_messages() {
 }
 
 route_get() {
-  local resource="${1:?Usage: api.sh get teams [<team> members|messages ...]}"
+  local resource="${1:?Usage: api.sh get teams [<team> members|registrations|messages ...]}"
   shift
   case "$resource" in
     teams)
@@ -165,10 +193,11 @@ route_get() {
       # unvalidated at this entry point (#87 cluster / F13-F15).
       agmsg_validate_team_name "$team" || exit 1
       shift
-      local sub="${1:?Usage: api.sh get teams <team> members|messages ...}"
+      local sub="${1:?Usage: api.sh get teams <team> members|registrations|messages ...}"
       shift
       case "$sub" in
         members) get_members "$team" ;;
+        registrations) get_registrations "$team" ;;
         messages) get_messages "$team" "$@" ;;
         *) echo "Unknown resource: teams $team $sub" >&2; exit 1 ;;
       esac
