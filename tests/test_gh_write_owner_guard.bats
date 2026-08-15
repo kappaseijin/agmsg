@@ -278,6 +278,15 @@ DECOY
   grep -Fq 'pr merge 31 --repo kappaseijin/fixture --squash --delete-branch' "$FAKE_WRITE_LOG"
 }
 
+@test "GHG-22: allows pr ready only for an allowed owner" {
+  run_guard pr ready 58 --repo kappaseijin/fixture
+  [ "$status" -eq 0 ]
+  grep -Fq 'pr ready 58 --repo kappaseijin/fixture' "$FAKE_WRITE_LOG"
+
+  : > "$FAKE_WRITE_LOG"
+  assert_rejected pr ready 58 --repo thirdparty/fixture
+}
+
 @test "GHG-20: resolver failures and malformed output fail closed" {
   for mode in fail empty multiline invalid; do
     export FAKE_DEFAULT_MODE="$mode"
