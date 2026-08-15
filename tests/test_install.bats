@@ -69,7 +69,7 @@ teardown() {
 @test "install: git push owner guard fixes the inner script and real git to absolute paths" {
   local real_bin="$FAKE_HOME/real-bin" guard="$FAKE_HOME/.agents/bin/git"
   local real_git
-  real_git="$(command -v git)"
+  real_git="$(agmsg_test_real_git)"
   mkdir -p "$real_bin"
   ln -s "$real_git" "$real_bin/git"
 
@@ -87,7 +87,7 @@ teardown() {
 @test "install: git push owner guard refuses to overwrite a non-agmsg git" {
   local real_bin="$FAKE_HOME/real-bin" guard="$FAKE_HOME/.agents/bin/git"
   local real_git
-  real_git="$(command -v git)"
+  real_git="$(agmsg_test_real_git)"
   mkdir -p "$real_bin" "${guard%/*}"
   printf '#!/bin/sh\nprintf user-owned\n' > "$guard"
   chmod +x "$guard"
@@ -102,7 +102,7 @@ teardown() {
 @test "uninstall: removes only the installed Git and gh owner guards" {
   local real_bin="$FAKE_HOME/real-bin" gh_guard="$FAKE_HOME/.agents/bin/gh" git_guard="$FAKE_HOME/.agents/bin/git"
   local real_git
-  real_git="$(command -v git)"
+  real_git="$(agmsg_test_real_git)"
   mkdir -p "$real_bin"
   printf '#!/bin/sh\nexit 0\n' > "$real_bin/gh"
   chmod +x "$real_bin/gh"
