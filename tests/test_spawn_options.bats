@@ -289,6 +289,53 @@ YAML
   [ "$status" -eq 0 ]
 }
 
+@test "required_role_overlay capability: consumer can detect the literal public definition" {
+  run grep -E '^[[:space:]]*agmsg_spawn_options_requires_role_overlay[[:space:]]*\(\)[[:space:]]*\{' \
+    "$SCRIPTS/lib/spawn-options.sh"
+  [ "$status" -eq 0 ]
+}
+
+@test "required_role_overlay capability: true reports the public contract" {
+  local file="$TEST_SKILL_DIR/spawn_options.yaml"
+  cat > "$file" <<'YAML'
+agmsg.require-role-overlay:
+  claude-code: true
+YAML
+  export AGMSG_SPAWN_OPTIONS_FILE="$file"
+
+  run agmsg_spawn_options_requires_role_overlay claude-code
+  [ "$status" -eq 0 ]
+}
+
+@test "required_role_overlay capability: only true reports enabled policy" {
+  local file="$TEST_SKILL_DIR/spawn_options.yaml"
+
+  cat > "$file" <<'YAML'
+agmsg.require-role-overlay:
+  claude-code: false
+YAML
+  export AGMSG_SPAWN_OPTIONS_FILE="$file"
+  run agmsg_spawn_options_requires_role_overlay claude-code
+  [ "$status" -eq 1 ]
+
+  cat > "$file" <<'YAML'
+agmsg.require-role-overlay:
+  codex: true
+YAML
+  run agmsg_spawn_options_requires_role_overlay claude-code
+  [ "$status" -eq 1 ]
+
+  cat > "$file" <<'YAML'
+agmsg.require-role-overlay:
+  claude-code: yes
+YAML
+  run agmsg_spawn_options_requires_role_overlay claude-code
+  [ "$status" -eq 1 ]
+
+  run agmsg_spawn_options_requires_role_overlay
+  [ "$status" -eq 2 ]
+}
+
 @test "required_role_overlay: true rejects a missing role section" {
   local file="$TEST_SKILL_DIR/spawn_options.yaml"
   cat > "$file" <<'YAML'

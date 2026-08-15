@@ -142,6 +142,25 @@ agmsg_spawn_options_section_value() {
   ' "$file"
 }
 
+# Public query for consumers that need to gate role-overlay provisioning on
+# agmsg's fail-closed metadata contract. It reports enabled only for an
+# explicit true value; callers that need a diagnostic for malformed metadata
+# use agmsg_spawn_options_validate_required_role_overlay instead.
+agmsg_spawn_options_requires_role_overlay() {
+  local type="${1:-}" policy
+  [ "$#" -eq 1 ] || return 2
+
+  if ! agmsg_spawn_options_section_exists 'agmsg.require-role-overlay' \
+      >/dev/null 2>&1; then
+    return 1
+  fi
+  if ! policy="$(agmsg_spawn_options_section_value \
+      'agmsg.require-role-overlay' "$type" 2>/dev/null)"; then
+    return 1
+  fi
+  [ "$policy" = true ]
+}
+
 # Emit raw key/value pairs as tab-separated records. Required profile
 # validation must inspect keys that an overlay would suppress with false.
 agmsg_spawn_options_section_entries() {
