@@ -145,7 +145,7 @@ set_push_destination() {
 
 push_bool_option() {
   case "$1" in
-    -u|-f|-d|--all|--atomic|--delete|--dry-run|--follow-tags|--force|\
+    -u|-q|-f|-d|--all|--atomic|--delete|--dry-run|--follow-tags|--force|\
     --force-with-lease|--mirror|--no-verify|--no-thin|--no-tags|--no-signed|\
     --porcelain|--prune|--progress|--quiet|--set-upstream|--signed|--stdin|\
     --tags|--thin|--verbose|--ipv4|--ipv6|--no-force|--no-progress|\
