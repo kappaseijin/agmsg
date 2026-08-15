@@ -1,6 +1,30 @@
 # Shared setup/teardown for agmsg BATS tests.
 # Each test gets an isolated skill directory with its own DB and teams.
 
+# Return a concrete Git executable for test fixtures. A production agmsg install
+# puts its push owner-guard launcher first in PATH; fixture setup must bypass
+# that launcher only while creating local bare repositories, otherwise a seed
+# push is rejected before the test can exercise the launcher under test.
+agmsg_test_real_git() {
+  local search_path="${1:-${PATH:-}}" path_entry candidate candidate_dir name
+  local -a path_entries=() names=(git git.exe)
+
+  IFS=':' read -r -a path_entries <<< "$search_path"
+  for path_entry in "${path_entries[@]}"; do
+    [ -n "$path_entry" ] || path_entry='.'
+    for name in "${names[@]}"; do
+      candidate="$path_entry/$name"
+      [ -x "$candidate" ] && [ ! -d "$candidate" ] || continue
+      candidate_dir="$(cd "$(dirname "$candidate")" 2>/dev/null && pwd -P)" || continue
+      candidate="$candidate_dir/$(basename "$candidate")"
+      grep -Fqx '# agmsg git push owner guard launcher' "$candidate" 2>/dev/null && continue
+      printf '%s\n' "$candidate"
+      return 0
+    done
+  done
+  return 1
+}
+
 setup_test_env() {
   export TEST_SKILL_DIR="$(mktemp -d)"
   mkdir -p "$TEST_SKILL_DIR"/{scripts,db,teams}

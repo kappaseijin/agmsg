@@ -5,7 +5,7 @@ load test_helper
 setup() {
   setup_test_env
 
-  export REAL_GIT="$(command -v git)"
+  export REAL_GIT="$(agmsg_test_real_git)"
   export GUARD="$SCRIPTS/guards/git-push-owner-guard.sh"
   export LAUNCHER_TEMPLATE="$SCRIPTS/guards/git-push-owner-guard-launcher.sh"
   export LAUNCHER="$TEST_SKILL_DIR/git-launcher"
