@@ -189,6 +189,15 @@ assert_rejected() {
     --config-env=remote.origin.pushurl=AGMSG_PUSHURL push origin HEAD:main
 }
 
+@test "GPG-15: accepts short quiet without weakening owner enforcement" {
+  run_guard -C "$WORK" push -q origin HEAD:main
+  [ "$status" -eq 0 ]
+  [ -s "$SSH_LOG" ]
+  [ -s "$PUSH_MARKER" ]
+
+  assert_rejected -C "$WORK" push -q git@github.com:thirdparty/fixture.git HEAD:main
+}
+
 @test "GPG-14: fixed Git execution ignores a PATH decoy" {
   local decoy_dir decoy marker
   decoy_dir="$TEST_SKILL_DIR/decoy"
