@@ -472,7 +472,7 @@ is_read_only_operation() {
 is_destination_checked_write() {
   case "$SUBCOMMAND" in
     'issue create'|'issue comment'|'issue close'|'issue reopen'|'issue edit'|'issue lock'|'issue unlock'|\
-    'pr create'|'pr comment'|'pr review'|'pr merge'|'pr close'|'pr reopen'|'pr edit'|'pr lock'|'pr unlock')
+    'pr create'|'pr comment'|'pr review'|'pr ready'|'pr merge'|'pr close'|'pr reopen'|'pr edit'|'pr lock'|'pr unlock')
       return 0
       ;;
     *)
