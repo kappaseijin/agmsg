@@ -58,6 +58,13 @@ json_value() {
   sqlite_mem "SELECT json_extract('$escaped', '$path');"
 }
 
+assert_json_object() {
+  local document="$1" escaped
+  escaped=$(printf '%s' "$document" | sed "s/'/''/g")
+  [ "$(sqlite_mem "SELECT json_valid('$escaped');")" = "1" ]
+  [ "$(sqlite_mem "SELECT json_type('$escaped');")" = "object" ]
+}
+
 # --- set <mode> ---
 
 @test "delivery set monitor: installs SessionStart, no Stop" {
@@ -2349,6 +2356,13 @@ JSON
 }
 
 # --- Codex monitor bridge (#41) ---
+@test "session-start.sh for codex emits a JSON no-op without identities" {
+  run bash "$SCRIPTS/session-start.sh" codex "$TEST_PROJECT"
+  [ "$status" -eq 0 ]
+  [ "$output" = "{}" ]
+  assert_json_object "$output"
+}
+
 @test "session-start.sh for codex starts bridge when monitor launcher env is present" {
   bash "$SCRIPTS/join.sh" team alice codex "$TEST_PROJECT" >/dev/null
   _seed_role_record team alice thread-123 "$TEST_PROJECT" codex
@@ -2381,7 +2395,7 @@ EOF
   grep -q -- "--inline-inbox" "$log"
 }
 
-@test "session-start.sh for codex stays quiet without monitor launcher env" {
+@test "session-start.sh for codex emits a JSON no-op without monitor launcher env" {
   bash "$SCRIPTS/join.sh" team alice codex "$TEST_PROJECT" >/dev/null
   local fake="$TEST_SKILL_DIR/fake-codex-bridge"
   local log="$TEST_SKILL_DIR/fake-codex-bridge.log"
@@ -2391,10 +2405,71 @@ printf '%s\n' "$*" >> "$AGMSG_TEST_LOG"
 EOF
   chmod +x "$fake"
 
-  AGMSG_CODEX_BRIDGE_CMD="$fake" AGMSG_TEST_LOG="$log" CODEX_THREAD_ID="thread-123" \
-    bash "$SCRIPTS/session-start.sh" codex "$TEST_PROJECT" >/dev/null
+  run env AGMSG_CODEX_BRIDGE_CMD="$fake" AGMSG_TEST_LOG="$log" CODEX_THREAD_ID="thread-123" \
+    bash "$SCRIPTS/session-start.sh" codex "$TEST_PROJECT"
 
+  [ "$status" -eq 0 ]
+  [ "$output" = "{}" ]
+  assert_json_object "$output"
   [ ! -f "$log" ]
+}
+
+@test "codex SessionStart wraps legacy text as hookSpecificOutput JSON" {
+  local legacy=$'AGMSG monitor mode: "quoted" directive\npath=\\tmp\\agmsg'
+  run bash -c 'source "$1"; agmsg_codex_normalize_output "$2"' _ \
+    "$SCRIPTS/drivers/types/codex/_session-start.sh" "$legacy"
+  [ "$status" -eq 0 ]
+  assert_json_object "$output"
+  [ "$(json_value "$output" '$.hookSpecificOutput.hookEventName')" = "SessionStart" ]
+  [ "$(json_value "$output" '$.hookSpecificOutput.additionalContext')" = "$legacy" ]
+}
+
+@test "codex SessionStart JSON escaping works without Node" {
+  local legacy=$'line 1\nline "2" \\ path'
+  run env PATH=/usr/bin:/bin bash -c 'source "$1"; agmsg_codex_emit_context "$2"' _ \
+    "$SCRIPTS/drivers/types/codex/_session-start.sh" "$legacy"
+  [ "$status" -eq 0 ]
+  assert_json_object "$output"
+  [ "$(json_value "$output" '$.hookSpecificOutput.additionalContext')" = "$legacy" ]
+}
+
+@test "codex dispatcher wraps captured legacy text as JSON" {
+  bash "$SCRIPTS/join.sh" team alice codex "$TEST_PROJECT" >/dev/null
+  local driver="$SCRIPTS/drivers/types/codex/_session-start.sh"
+  local original="$TEST_SKILL_DIR/codex-driver.original"
+  cp "$driver" "$original"
+  {
+    printf 'source %q\n' "$original"
+    printf '%s\n' 'agmsg_session_start() { printf "%s\\n" "legacy Codex directive"; }'
+  } > "$driver"
+
+  run bash "$SCRIPTS/session-start.sh" codex "$TEST_PROJECT"
+  [ "$status" -eq 0 ]
+  assert_json_object "$output"
+  [ "$(json_value "$output" '$.hookSpecificOutput.hookEventName')" = "SessionStart" ]
+  [ "$(json_value "$output" '$.hookSpecificOutput.additionalContext')" = "legacy Codex directive" ]
+}
+
+@test "codex SessionStart failure keeps JSON stdout and stderr diagnostic separate" {
+  bash "$SCRIPTS/join.sh" team alice codex "$TEST_PROJECT" >/dev/null
+  local driver="$SCRIPTS/drivers/types/codex/_session-start.sh"
+  local original="$TEST_SKILL_DIR/codex-driver.original"
+  local stdout_file="$TEST_SKILL_DIR/codex-hook.stdout"
+  local stderr_file="$TEST_SKILL_DIR/codex-hook.stderr"
+  cp "$driver" "$original"
+  {
+    printf 'source %q\n' "$original"
+    printf '%s\n' 'agmsg_session_start() { printf "%s\\n" "synthetic Codex hook failure" >&2; return 7; }'
+  } > "$driver"
+
+  run bash -c "bash '$SCRIPTS/session-start.sh' codex '$TEST_PROJECT' >'$stdout_file' 2>'$stderr_file'"
+  [ "$status" -eq 7 ]
+  local stdout
+  stdout=$(cat "$stdout_file")
+  assert_json_object "$stdout"
+  [ "$stdout" = "{}" ]
+  grep -Fq 'synthetic Codex hook failure' "$stderr_file"
+  grep -Fq 'agmsg Codex SessionStart hook failed (status 7)' "$stderr_file"
 }
 
 @test "delivery set monitor (codex): installs SessionStart and prints Codex shell function" {

@@ -39,6 +39,9 @@ API_ENDPOINT=''
 API_GRAPHQL_QUERY=''
 API_GRAPHQL_QUERY_COUNT=0
 API_HAS_INPUT=0
+RERUN_RUN_ID=''
+RERUN_JOB_ID=''
+RERUN_REPO=''
 
 die() {
   echo "error: gh-write-owner-guard: $*" >&2
@@ -473,13 +476,129 @@ is_read_only_operation() {
 is_destination_checked_write() {
   case "$SUBCOMMAND" in
     'issue create'|'issue comment'|'issue close'|'issue reopen'|'issue edit'|'issue lock'|'issue unlock'|\
-    'pr create'|'pr comment'|'pr review'|'pr ready'|'pr merge'|'pr close'|'pr reopen'|'pr edit'|'pr lock'|'pr unlock')
+    'pr create'|'pr comment'|'pr review'|'pr ready'|'pr merge'|'pr close'|'pr reopen'|'pr edit'|'pr lock'|'pr unlock'|\
+    'run rerun')
       return 0
       ;;
     *)
       return 1
       ;;
   esac
+}
+
+valid_positive_decimal() {
+  case "$1" in
+    ''|0|0*|*[!0-9]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+# Keep the rerun write intentionally narrower than `gh run rerun` itself. The
+# guard only permits one already-completed failed job, never a whole run or the
+# broader `--failed` selection. The destination resolver below still performs
+# the immutable owner/host check before this target is read.
+validate_rerun_arguments() {
+  local tok run_id='' job_id='' repo='' run_count=0 job_count=0 repo_count=0
+  local repo_owner repo_name extra
+
+  [ "$#" -ge 2 ] && [ "$1" = run ] && [ "$2" = rerun ] || \
+    die 'rerun command shape is invalid'
+  shift 2
+
+  while [ "$#" -gt 0 ]; do
+    tok="$1"
+    case "$tok" in
+      --repo)
+        [ "$#" -ge 2 ] || die 'rerun --repo value is missing'
+        repo_count=$((repo_count + 1))
+        [ "$repo_count" -eq 1 ] || die 'rerun --repo is ambiguous'
+        repo="$2"
+        shift 2
+        ;;
+      --repo=*)
+        repo_count=$((repo_count + 1))
+        [ "$repo_count" -eq 1 ] || die 'rerun --repo is ambiguous'
+        repo="${tok#*=}"
+        shift
+        ;;
+      --job)
+        [ "$#" -ge 2 ] || die 'rerun --job value is missing'
+        job_count=$((job_count + 1))
+        [ "$job_count" -eq 1 ] || die 'rerun --job is ambiguous'
+        job_id="$2"
+        shift 2
+        ;;
+      --job=*)
+        job_count=$((job_count + 1))
+        [ "$job_count" -eq 1 ] || die 'rerun --job is ambiguous'
+        job_id="${tok#*=}"
+        shift
+        ;;
+      --failed|--debug|-R|-R?*|-j|-j?*)
+        die 'only one explicit job rerun is permitted'
+        ;;
+      --*)
+        die "unsupported rerun option: $tok"
+        ;;
+      *)
+        run_count=$((run_count + 1))
+        [ "$run_count" -eq 1 ] || die 'rerun run target is ambiguous'
+        run_id="$tok"
+        shift
+        ;;
+    esac
+  done
+
+  [ "$repo_count" -eq 1 ] || die 'rerun requires one explicit --repo'
+  [ "$job_count" -eq 1 ] || die 'rerun requires one explicit --job'
+  valid_positive_decimal "$run_id" || die 'rerun run id is not a positive decimal'
+  valid_positive_decimal "$job_id" || die 'rerun job id is not a positive decimal'
+
+  IFS='/' read -r repo_owner repo_name extra <<< "$repo"
+  [ -n "$repo_owner" ] && [ -n "$repo_name" ] && [ -z "${extra:-}" ] || \
+    die 'rerun --repo must be OWNER/REPO'
+  valid_segment "$repo_owner" || die 'rerun repository owner is invalid'
+  valid_segment "$repo_name" || die 'rerun repository name is invalid'
+
+  RERUN_RUN_ID="$run_id"
+  RERUN_JOB_ID="$job_id"
+  RERUN_REPO="$repo"
+}
+
+verify_rerun_target() {
+  local output status first_line remainder candidate job_status job_conclusion extra
+  local found=0
+
+  set +e
+  output="$(GH_PROMPT_DISABLED=true "$REAL_GH" run view "$RERUN_RUN_ID" \
+    --repo "$RERUN_REPO" \
+    --json databaseId,jobs \
+    --jq '[((.databaseId | tostring)), (.jobs[] | [(.databaseId | tostring), .status, (.conclusion // "")] | @tsv)] | .[]' \
+    2>/dev/null)"
+  status=$?
+  set -e
+  [ "$status" -eq 0 ] || die 'rerun target run cannot be read'
+  [[ "$output" == *$'\n'* ]] || die 'rerun target output is invalid'
+
+  first_line="${output%%$'\n'*}"
+  [ "$first_line" = "$RERUN_RUN_ID" ] || die 'rerun target run id does not match'
+  remainder="${output#*$'\n'}"
+  while IFS=$'\t' read -r candidate job_status job_conclusion extra; do
+    [ -n "$candidate" ] || continue
+    [ -n "$job_status" ] && [ -n "$job_conclusion" ] && [ -z "${extra:-}" ] || \
+      die 'rerun target job output is invalid'
+    [ "$candidate" = "$RERUN_JOB_ID" ] || continue
+    [ "$found" -eq 0 ] || die 'rerun target job is ambiguous'
+    case "$job_status:$job_conclusion" in
+      completed:failure|completed:cancelled|completed:timed_out)
+        found=1
+        ;;
+      *)
+        die 'rerun target job is not a completed failure'
+        ;;
+    esac
+  done <<< "$remainder"
+  [ "$found" -eq 1 ] || die 'rerun target job does not belong to the run'
 }
 
 resolve_default_repository() {
@@ -555,7 +674,17 @@ if is_read_only_operation "$@"; then
 fi
 
 is_destination_checked_write || die "operation is not classified as a safe read or destination-checked write: ${SUBCOMMAND:-<empty>}"
+case "$SUBCOMMAND" in
+  'run rerun')
+    validate_rerun_arguments "$@"
+    ;;
+esac
 resolve_destination "$@"
+case "$SUBCOMMAND" in
+  'run rerun')
+    verify_rerun_target
+    ;;
+esac
 
 # Preserve the older optional account-role check for PR writers. This policy is
 # deliberately evaluated only after the immutable destination owner check; it
