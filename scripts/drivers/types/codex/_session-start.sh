@@ -24,6 +24,61 @@
 # is reported reliable there; do the mtime sort ourselves with the existing
 # portable compat_file_mtime, since `find -printf` is GNU-only (no
 # `-printf` on macOS/BSD find, which this repo also has to support). See #416.
+# Codex parses every SessionStart command's stdout as one JSON object. The
+# historical agmsg hook was written for Claude's text-oriented hook contract,
+# so its empty return and Monitor directive were both invalid for Codex. Keep
+# the bridge logic below unaware of that wire format and normalize its captured
+# result at the dispatcher boundary instead.
+agmsg_codex_json_quote() {
+  local value="$1" node_bin
+  if node_bin="$(command -v node 2>/dev/null)" && [ -n "$node_bin" ]; then
+    printf '%s' "$value" | "$node_bin" -e '
+      let value = "";
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", chunk => { value += chunk; });
+      process.stdin.on("end", () => process.stdout.write(JSON.stringify(value)));
+    '
+    return 0
+  fi
+
+  # Node is normally present for the Codex bridge, but the hook must still
+  # produce valid JSON when the bridge dependency is absent. This fallback
+  # covers JSON string escapes used by paths and directives without invoking a
+  # second runtime.
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//$'\b'/\\b}
+  value=${value//$'\f'/\\f}
+  value=${value//$'\n'/\\n}
+  value=${value//$'\r'/\\r}
+  value=${value//$'\t'/\\t}
+  printf '"%s"' "$value"
+}
+
+agmsg_codex_emit_noop() {
+  printf '{}\n'
+}
+
+agmsg_codex_emit_context() {
+  local context="$1" encoded
+  encoded="$(agmsg_codex_json_quote "$context")"
+  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":%s}}\n' "$encoded"
+}
+
+agmsg_codex_normalize_output() {
+  local raw="$1" compact
+  compact="$(printf '%s' "$raw" | tr -d '[:space:]')"
+  if [ -z "$compact" ]; then
+    agmsg_codex_emit_noop
+  else
+    # The current Codex driver has no intentional JSON-producing branch. Treat
+    # any future text output as context rather than allowing invalid plaintext
+    # to reach Codex. A future structured branch can return its own object
+    # through this same boundary after adding schema validation.
+    agmsg_codex_emit_context "$raw"
+  fi
+}
+
 agmsg_newest_rollout_files() {
   local dir="$1" limit="$2" f mtime
   # `head -n "$limit"` here would close its read end after $limit lines while
