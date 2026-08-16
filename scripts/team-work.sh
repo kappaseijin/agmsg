@@ -115,13 +115,13 @@ case "$COMMAND" in
     ;;
   observe|queue|audit)
     source "$SCRIPT_DIR/lib/storage.sh"
-    AGMSG_TEAM_WORK_DB="$(agmsg_db_path)"
+    AGMSG_TEAM_WORK_DB="$(agmsg_db_path "$TEAM")"
     export AGMSG_TEAM_WORK_DB
     printf '%s' "$ROSTER_JSON" | node "$SCRIPT_DIR/lib/team-work-audit.js" "$@"
     ;;
   reconcile|watchdog)
     source "$SCRIPT_DIR/lib/storage.sh"
-    AGMSG_TEAM_WORK_DB="$(agmsg_db_path)"
+    AGMSG_TEAM_WORK_DB="$(agmsg_db_path "$TEAM")"
     AGMSG_TEAM_WORK_SCRIPT_DIR="$SCRIPT_DIR"
     export AGMSG_TEAM_WORK_DB AGMSG_TEAM_WORK_SCRIPT_DIR
     printf '%s' "$ROSTER_JSON" | node "$SCRIPT_DIR/lib/team-work-reconciler.js" "$@"
@@ -129,7 +129,7 @@ case "$COMMAND" in
   dispatch|dispatch-ack)
     source "$SCRIPT_DIR/lib/storage.sh"
     agmsg_storage_ensure_initialized
-    AGMSG_TEAM_WORK_DB="$(agmsg_db_path)"
+    AGMSG_TEAM_WORK_DB="$(agmsg_db_path "$TEAM")"
     AGMSG_TEAM_WORK_SCRIPT_DIR="$SCRIPT_DIR"
     export AGMSG_TEAM_WORK_DB AGMSG_TEAM_WORK_SCRIPT_DIR
     printf '%s' "$ROSTER_JSON" | node "$SCRIPT_DIR/lib/team-work-reconciler.js" "$@"
@@ -137,7 +137,7 @@ case "$COMMAND" in
   *)
     source "$SCRIPT_DIR/lib/storage.sh"
     agmsg_storage_ensure_initialized
-    AGMSG_TEAM_WORK_DB="$(agmsg_db_path)"
+    AGMSG_TEAM_WORK_DB="$(agmsg_db_path "$TEAM")"
     export AGMSG_TEAM_WORK_DB
     printf '%s' "$ROSTER_JSON" | node "$SCRIPT_DIR/lib/team-work.js" "$@"
     ;;

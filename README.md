@@ -64,6 +64,8 @@ That's it. The slash command prompts you for a team name and an agent name on fi
 
 Prefer to inspect the code first, track the latest `main`, or pick a custom command name? See [Install](#install) below for the `setup.sh` one-liner, `git clone`, and the Claude Code plugin marketplace paths.
 
+To sync a team between two installs through the self-hosted reference server, follow [Remote setup](docs/remote-setup.md).
+
 ## How it works
 
 agmsg is a thin transport. Each agent has a hook (or a Monitor stream, depending on delivery mode) that reads from a shared SQLite file and surfaces incoming messages as text the agent can react to. `send.sh` queues a row; a receiver takes a short exclusive lease, hands its text to the host, then persists a receipt. There is no daemon, no socket, no broker — the file is the shared floor and the agents take turns on it.
@@ -731,7 +733,7 @@ pane, or spawns an agent.
 
 ### Message delivery state
 
-`send.sh` prints `Queued message #<id> … delivery not yet acknowledged.` That is intentionally not a delivery-success claim. Inspect one receiver's state with either the human default or JSON for automation:
+`send.sh` prints `Queued message #<opaque-id> … delivery not yet acknowledged.` The identifier is storage-driver-defined and is not necessarily numeric. That is intentionally not a delivery-success claim. Inspect one receiver's state with either the human default or JSON for automation:
 
 ```bash
 ~/.agents/skills/<cmd>/scripts/message-status.sh myteam alice

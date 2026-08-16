@@ -99,7 +99,7 @@ agmsg_delivery_capability_config_mode() {
   case "$type" in
     claude-code|codex)
       if [ -f "$hf" ]; then
-        sql_hf="$(sql_readfile_path "$hf")"
+        sql_hf="$(agmsg_sql_readfile_path "$hf")"
         has_ss="$(agmsg_sqlite_mem "
           SELECT EXISTS(
             SELECT 1 FROM json_each(json_extract(readfile('$sql_hf'), '\$.hooks.SessionStart')) AS s,

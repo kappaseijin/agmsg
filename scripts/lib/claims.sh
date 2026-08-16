@@ -3,11 +3,9 @@
 # Atomic reservation helpers for message receiver adapters. A claim keeps a
 # message unread until the owning receiver has handed it to its host and ACKed.
 
-if ! declare -F agmsg_db_path >/dev/null 2>&1; then
-  _agmsg_claims_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  # shellcheck disable=SC1091
-  source "$_agmsg_claims_dir/storage.sh"
-fi
+_agmsg_claims_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$_agmsg_claims_dir/storage.sh"
 
 _agmsg_claim_sql_quote() {
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
@@ -24,13 +22,24 @@ _agmsg_claim_initialize() {
   agmsg_storage_ensure_initialized
 }
 
+_agmsg_claim_db() {
+  local team="${1:-${AGMSG_CLAIM_TEAM:-}}"
+  if [ -n "$team" ]; then
+    agmsg_storage_load
+    storage_init "$team" >/dev/null || return 1
+    agmsg_db_path "$team"
+  else
+    _agmsg_runtime_db_path
+  fi
+}
+
 # stdout: id US from_agent US escaped_body US created_at. Empty stdout means
 # there is no unclaimed unread message for this receiver.
 agmsg_claim_next() {
   local team="$1" agent="$2" owner="$3" ttl db result
   ttl="$(_agmsg_claim_ttl "${4:-30}")"
   _agmsg_claim_initialize
-  db="$(agmsg_db_path)"
+  db="$(_agmsg_claim_db "$team")"
 
   result="$(agmsg_sqlite "$db" <<SQL
 BEGIN IMMEDIATE;
@@ -77,7 +86,7 @@ agmsg_claim_id() {
   esac
   ttl="$(_agmsg_claim_ttl "${3:-30}")"
   _agmsg_claim_initialize
-  db="$(agmsg_db_path)"
+  db="$(_agmsg_claim_db)"
 
   held="$(agmsg_sqlite "$db" <<SQL
 BEGIN IMMEDIATE;
@@ -115,7 +124,7 @@ agmsg_release_claim() {
     ''|*[!0-9]*) return 2 ;;
   esac
   _agmsg_claim_initialize
-  db="$(agmsg_db_path)"
+  db="$(_agmsg_claim_db)"
 
   changed="$(agmsg_sqlite "$db" <<SQL
 BEGIN IMMEDIATE;
@@ -136,7 +145,7 @@ agmsg_ack_claim() {
     ''|*[!0-9]*) return 2 ;;
   esac
   _agmsg_claim_initialize
-  db="$(agmsg_db_path)"
+  db="$(_agmsg_claim_db)"
 
   changed="$(agmsg_sqlite "$db" <<SQL
 BEGIN IMMEDIATE;
