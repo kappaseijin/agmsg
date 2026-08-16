@@ -53,7 +53,10 @@ source "$SCRIPT_DIR/lib/close-fds.sh"
 
 # Identity sanity check — no point launching a watcher with an empty pair set.
 PAIRS=$("$SCRIPT_DIR/identities.sh" "$PROJECT" "$TYPE" 2>/dev/null || true)
-[ -n "$PAIRS" ] || exit 0
+if [ -z "$PAIRS" ]; then
+  [ "$TYPE" = "codex" ] && printf '{}\n'
+  exit 0
+fi
 
 # Type-specific SessionStart behaviour (Template Method). A type may ship
 # scripts/drivers/types/<type>/_session-start.sh defining agmsg_session_start to override the
@@ -64,7 +67,31 @@ PAIRS=$("$SCRIPT_DIR/identities.sh" "$PROJECT" "$TYPE" 2>/dev/null || true)
 agmsg_session_start_default() { :; }
 
 _tdir="$(agmsg_type_dir "$TYPE" 2>/dev/null || true)"
-if [ -n "$_tdir" ] && [ -f "$_tdir/_session-start.sh" ]; then
+if [ "$TYPE" = "codex" ]; then
+  if [ -z "$_tdir" ] || [ ! -f "$_tdir/_session-start.sh" ]; then
+    printf '{}\n'
+    exit 0
+  fi
+  # The Codex type plug uses exit 0 to stop before the Claude-oriented
+  # Monitor-directive path below. Run it in command substitution so that an
+  # empty result, legacy plaintext, and a failure can all be normalized without
+  # changing its bridge lifecycle or its existing side effects.
+  # shellcheck disable=SC1090
+  . "$_tdir/_session-start.sh"
+  codex_output=""
+  codex_status=0
+  if codex_output="$(agmsg_session_start)"; then
+    codex_status=0
+  else
+    codex_status=$?
+  fi
+  agmsg_codex_normalize_output "$codex_output"
+  if [ "$codex_status" -ne 0 ]; then
+    printf 'error: agmsg Codex SessionStart hook failed (status %s)\n' "$codex_status" >&2
+    exit "$codex_status"
+  fi
+  exit 0
+elif [ -n "$_tdir" ] && [ -f "$_tdir/_session-start.sh" ]; then
   # shellcheck disable=SC1090
   . "$_tdir/_session-start.sh"
   agmsg_session_start
