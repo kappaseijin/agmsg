@@ -145,12 +145,13 @@ resolve_explicit_repository() {
   requested_owner="$PARSED_OWNER"
   requested_repo="$(ascii_lower "$PARSED_REPO")"
 
-  set +e
-  output="$(GH_PROMPT_DISABLED=true "$REAL_GH" repo view "$spec" \
+  if output="$(GH_PROMPT_DISABLED=true "$REAL_GH" repo view "$spec" \
     --json nameWithOwner,url \
-    --template '{{.nameWithOwner}}{{"\t"}}{{.url}}' 2>/dev/null)"
-  status=$?
-  set -e
+    --template '{{.nameWithOwner}}{{"\t"}}{{.url}}' 2>/dev/null)"; then
+    status=0
+  else
+    status=$?
+  fi
   [ "$status" -eq 0 ] || return 1
   [[ "$output" != *$'\n'* ]] || return 2
   IFS=$'\t' read -r name url extra <<< "$output"
@@ -483,10 +484,11 @@ is_destination_checked_write() {
 
 resolve_default_repository() {
   local output status
-  set +e
-  output="$(GH_PROMPT_DISABLED=true "$REAL_GH" repo set-default --view 2>/dev/null)"
-  status=$?
-  set -e
+  if output="$(GH_PROMPT_DISABLED=true "$REAL_GH" repo set-default --view 2>/dev/null)"; then
+    status=0
+  else
+    status=$?
+  fi
   [ "$status" -eq 0 ] || return 1
   [ -n "$output" ] || return 2
   [[ "$output" != *$'\n'* ]] || return 2
@@ -495,10 +497,11 @@ resolve_default_repository() {
 
 resolve_cwd_repository() {
   local output status name url extra
-  set +e
-  output="$(GH_PROMPT_DISABLED=true "$REAL_GH" repo view --json nameWithOwner,url --template '{{.nameWithOwner}}{{"\t"}}{{.url}}' 2>/dev/null)"
-  status=$?
-  set -e
+  if output="$(GH_PROMPT_DISABLED=true "$REAL_GH" repo view --json nameWithOwner,url --template '{{.nameWithOwner}}{{"\t"}}{{.url}}' 2>/dev/null)"; then
+    status=0
+  else
+    status=$?
+  fi
   [ "$status" -eq 0 ] || return 1
   [[ "$output" != *$'\n'* ]] || return 2
   IFS=$'\t' read -r name url extra <<< "$output"
@@ -530,10 +533,12 @@ resolve_destination() {
     return 0
   fi
 
-  set +e
-  resolve_default_repository
-  local default_status=$?
-  set -e
+  local default_status
+  if resolve_default_repository; then
+    default_status=0
+  else
+    default_status=$?
+  fi
   if [ "$default_status" -eq 0 ]; then
     return 0
   elif [ "$default_status" -eq 2 ]; then

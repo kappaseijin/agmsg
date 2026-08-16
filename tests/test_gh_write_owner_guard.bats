@@ -307,6 +307,21 @@ DECOY
   [ ! -s "$FAKE_PROMPT_LOG" ]
 }
 
+@test "GHG-23: resolver failures report a guard diagnostic" {
+  export FAKE_DEFAULT_MODE=fail
+  export FAKE_CWD_MODE=empty
+  run_guard issue close 10 --comment blocked
+  [ "$status" -ne 0 ]
+  printf '%s\n' "$output" | grep -Fq 'error: gh-write-owner-guard: cwd repository cannot be resolved or is not allowed'
+  [ ! -s "$FAKE_WRITE_LOG" ]
+
+  export FAKE_EXPLICIT_MODE=empty
+  run_guard issue close 10 --repo kappaseijin/fixture --comment blocked
+  [ "$status" -ne 0 ]
+  printf '%s\n' "$output" | grep -Fq 'error: gh-write-owner-guard: explicit repository cannot be resolved or is not allowed'
+  [ ! -s "$FAKE_WRITE_LOG" ]
+}
+
 @test "owner guard launcher rejects unresolved placeholders" {
   run "$LAUNCHER_TEMPLATE" issue view 10
   [ "$status" -ne 0 ]
