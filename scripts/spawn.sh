@@ -181,10 +181,15 @@ is_safe_spawn_role() {
 }
 
 derive_spawn_role() {
-  local candidate
+  local candidate vendor
   local -a name_parts
   IFS=_ read -r -a name_parts <<< "$NAME"
   [ "${#name_parts[@]}" -ge 3 ] || return 0
+  vendor="${name_parts[${#name_parts[@]} - 1]}"
+  case "$vendor" in
+    claude|codex) ;;
+    *) return 0 ;;
+  esac
   candidate="${name_parts[${#name_parts[@]} - 2]}"
   is_safe_spawn_role "$candidate" || return 0
   printf '%s' "$candidate"
@@ -194,6 +199,14 @@ if [ "$ROLE_EXPLICIT" -eq 1 ]; then
   is_safe_spawn_role "$ROLE" || die "--role must contain only letters, digits, '_' or '-'"
 else
   ROLE="$(derive_spawn_role)"
+fi
+
+# An explicit role is a caller assertion, not a best-effort hint. Require the
+# corresponding type@role section before any project resolution or pre-join so
+# a typo cannot silently launch with only the base options. Automatically
+# derived roles retain the historical missing-section fallback below.
+if [ "$ROLE_EXPLICIT" -eq 1 ]; then
+  agmsg_spawn_options_require_explicit_role_section "$AGENT_TYPE" "$ROLE" || exit 1
 fi
 
 # Resolve the terminal override for the non-tmux path:

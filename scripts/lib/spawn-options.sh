@@ -108,6 +108,20 @@ agmsg_spawn_options_section_exists() {
   ' "$file"
 }
 
+# Explicit --role selections must name a real type@role section. This is
+# intentionally separate from the automatic role path, whose missing section
+# remains a backward-compatible no-op.
+agmsg_spawn_options_require_explicit_role_section() {
+  local type="$1" role="${2:-}" section
+  [ -n "$role" ] || return 0
+  section="${type}@${role}"
+  if agmsg_spawn_options_section_exists "$section"; then
+    return 0
+  fi
+  printf 'spawn: explicit --role requires spawn-options section %s\n' "$section" >&2
+  return 1
+}
+
 # Read one scalar without passing it through the argv token emitter. Metadata
 # and CLI data share the same YAML dialect, but metadata must never become a
 # launch argument by accident.

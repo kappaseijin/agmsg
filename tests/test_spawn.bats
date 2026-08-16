@@ -551,6 +551,49 @@ YAML
   [ "$status" -ne 0 ]
 }
 
+@test "spawn: rejects an explicit role with no type-role section before pre-joining" {
+  bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
+  local opts="$TEST_SKILL_DIR/spawn_options.yaml"
+  local name="herdr-agent-monitor_architect_codex"
+  cat > "$opts" <<'YAML'
+codex:
+  --sandbox: workspace-write
+YAML
+
+  run env AGMSG_SPAWN_OPTIONS_FILE="$opts" \
+    bash "$SCRIPTS/spawn.sh" codex "$name" --role reviewer --project "$PROJ" --no-wait
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"explicit --role requires spawn-options section codex@reviewer"* ]]
+  [ ! -e "$CAPTURE" ]
+  run grep -R -F "$name" "$TEST_SKILL_DIR/teams"
+  [ "$status" -ne 0 ]
+}
+
+@test "spawn: only documented claude/codex suffixes enable automatic role derivation" {
+  bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
+  local opts="$TEST_SKILL_DIR/spawn_options.yaml"
+  cat > "$opts" <<'YAML'
+codex:
+  --sandbox: workspace-write
+codex@product:
+  -p: product
+codex@senior:
+  -p: senior
+YAML
+
+  local name boot
+  for name in codex_product_manager codex_senior_architect; do
+    run env AGMSG_SPAWN_OPTIONS_FILE="$opts" \
+      bash "$SCRIPTS/spawn.sh" codex "$name" --project "$PROJ" --no-wait
+    [ "$status" -eq 0 ]
+    boot="$(tail -n 1 "$CAPTURE")"
+    run cat "$boot"
+    [[ "$output" == *"codex --sandbox workspace-write"* ]]
+    [[ "$output" != *"-p product"* ]]
+    [[ "$output" != *"-p senior"* ]]
+  done
+}
+
 @test "spawn: missing role section degrades to the base spawn-options" {
   bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
   local opts="$TEST_SKILL_DIR/spawn_options.yaml"
