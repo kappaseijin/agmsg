@@ -657,6 +657,7 @@ herdr_json_str() {
 
 launch_in_herdr() {
   local new_id resp
+  local label="${ROLE:-$NAME}"
   if [ "$TMUX_TARGET" = "window" ]; then
     local ws="${HERDR_WORKSPACE_ID:-}"
     if [ -z "$ws" ]; then
@@ -665,7 +666,7 @@ launch_in_herdr() {
       launch_in_herdr
       return $?
     fi
-    resp="$(herdr tab create --workspace "$ws" --label "$NAME" --cwd "$PROJECT" 2>&1)" \
+    resp="$(herdr tab create --workspace "$ws" --label "$label" --cwd "$PROJECT" 2>&1)" \
       || die "herdr tab create failed: $resp"
     new_id="$(herdr_json_str "$resp" '$.result.root_pane.pane_id')"
     [ -n "$new_id" ] || die "herdr tab create: could not read result.root_pane.pane_id from response: $resp"
@@ -676,7 +677,7 @@ launch_in_herdr() {
     new_id="$(herdr_json_str "$resp" '$.result.pane.pane_id')"
     [ -n "$new_id" ] || die "herdr pane split: could not read result.pane.pane_id from response: $resp"
   fi
-  herdr pane rename "$new_id" "$NAME" >/dev/null 2>&1 || true
+  herdr pane rename "$new_id" "$label" >/dev/null 2>&1 || true
   herdr pane run "$new_id" "$BOOT" 2>/dev/null \
     || die "herdr pane run failed for pane $new_id"
   # Record placement with herdr: scheme tag. The herdr pane_id contains ":"
