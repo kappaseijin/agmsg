@@ -1142,6 +1142,24 @@ STUB
   [ "$rec_id" = "herdr:wT:pR" ]
 }
 
+@test "spawn: herdr uses the resolved role as the split label" {
+  _setup_fake_herdr
+  bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
+  run bash "$SCRIPTS/spawn.sh" claude-code herdr-agent-monitor_worker_claude --project "$PROJ" --no-wait
+  [ "$status" -eq 0 ]
+  grep -q "pane rename wT:pN worker" "$HERDR_CALL_LOG"
+  refute grep -q "pane rename wT:pN herdr-agent-monitor_worker_claude" "$HERDR_CALL_LOG"
+}
+
+@test "spawn: herdr uses the resolved role as the window label" {
+  _setup_fake_herdr
+  bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
+  run bash "$SCRIPTS/spawn.sh" claude-code herdr-agent-monitor_reviewer_claude --project "$PROJ" --no-wait --window
+  [ "$status" -eq 0 ]
+  grep -q "tab create --workspace wT --label reviewer" "$HERDR_CALL_LOG"
+  grep -q "pane rename wT:pR reviewer" "$HERDR_CALL_LOG"
+}
+
 @test "spawn: herdr --window falls back to split when HERDR_WORKSPACE_ID is unset" {
   _setup_fake_herdr
   unset HERDR_WORKSPACE_ID
