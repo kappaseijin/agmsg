@@ -563,7 +563,7 @@ YAML
   run env AGMSG_SPAWN_OPTIONS_FILE="$opts" \
     bash "$SCRIPTS/spawn.sh" codex "$name" --role reviewer --project "$PROJ" --no-wait
   [ "$status" -ne 0 ]
-  [[ "$output" == *"explicit --role requires spawn-options section codex@reviewer"* ]]
+  printf '%s\n' "$output" | grep -F -q 'explicit --role requires spawn-options section codex@reviewer'
   [ ! -e "$CAPTURE" ]
   run grep -R -F "$name" "$TEST_SKILL_DIR/teams"
   [ "$status" -ne 0 ]
