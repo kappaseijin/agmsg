@@ -81,6 +81,17 @@ if [ "${1:-}" = run ] && [ "${2:-}" = view ]; then
   printf '%s\n' "$*" >> "$FAKE_READ_LOG"
   case "${FAKE_RUN_MODE:-failed}" in
     failed) printf '%s\n%s\tcompleted\tfailure\n' "$FAKE_RUN_ID" "$FAKE_JOB_ID" ;;
+    scientific)
+      case " $* " in
+        *' --template '*)
+          printf '3.1950708068e+10\n9.5173637376e+10\tcompleted\tfailure\n'
+          ;;
+        *' --jq '*)
+          printf '%s\n%s\tcompleted\tfailure\n' "$FAKE_RUN_ID" "$FAKE_JOB_ID"
+          ;;
+        *) exit 9 ;;
+      esac
+      ;;
     cancelled) printf '%s\n%s\tcompleted\tcancelled\n' "$FAKE_RUN_ID" "$FAKE_JOB_ID" ;;
     timed_out) printf '%s\n%s\tcompleted\ttimed_out\n' "$FAKE_RUN_ID" "$FAKE_JOB_ID" ;;
     success) printf '%s\n%s\tcompleted\tsuccess\n' "$FAKE_RUN_ID" "$FAKE_JOB_ID" ;;
@@ -360,6 +371,30 @@ DECOY
   assert_rejected run rerun "$FAKE_RUN_ID" --job "$FAKE_JOB_ID"
   assert_rejected run rerun "$FAKE_RUN_ID" --job "$FAKE_JOB_ID" --repo thirdparty/fixture
   assert_rejected run cancel "$FAKE_RUN_ID" --repo kappaseijin/fixture
+}
+
+@test "GHG-28: preserves realistic 11-digit run and job IDs" {
+  export FAKE_RUN_MODE=scientific
+  export FAKE_RUN_ID=31950708068
+  export FAKE_JOB_ID=95173637376
+  run_guard run rerun "$FAKE_RUN_ID" --job "$FAKE_JOB_ID" --repo kappaseijin/fixture
+  [ "$status" -eq 0 ]
+  grep -Fq "run view $FAKE_RUN_ID --repo kappaseijin/fixture" "$FAKE_READ_LOG"
+  grep -Fq "run rerun $FAKE_RUN_ID --job $FAKE_JOB_ID --repo kappaseijin/fixture" "$FAKE_WRITE_LOG"
+}
+
+@test "GHG-29: treats large decimal IDs as opaque and rejects injection-shaped IDs" {
+  export FAKE_RUN_MODE=failed
+  export FAKE_RUN_ID=123456789012345678901234567890
+  export FAKE_JOB_ID=987654321098765432109876543210
+  run_guard run rerun "$FAKE_RUN_ID" --job "$FAKE_JOB_ID" --repo kappaseijin/fixture
+  [ "$status" -eq 0 ]
+  grep -Fq "run rerun $FAKE_RUN_ID --job $FAKE_JOB_ID --repo kappaseijin/fixture" "$FAKE_WRITE_LOG"
+  : > "$FAKE_WRITE_LOG"
+
+  for malicious_id in 1e3 +123 '123;touch /tmp/guard-should-not-run' '123$(id)'; do
+    assert_rejected run rerun "$malicious_id" --job "$FAKE_JOB_ID" --repo kappaseijin/fixture
+  done
 }
 
 @test "owner guard launcher rejects unresolved placeholders" {

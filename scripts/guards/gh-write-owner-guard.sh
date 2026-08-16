@@ -572,7 +572,7 @@ verify_rerun_target() {
   output="$(GH_PROMPT_DISABLED=true "$REAL_GH" run view "$RERUN_RUN_ID" \
     --repo "$RERUN_REPO" \
     --json databaseId,jobs \
-    --template '{{.databaseId}}{{"\n"}}{{range .jobs}}{{.databaseId}}{{"\t"}}{{.status}}{{"\t"}}{{.conclusion}}{{"\n"}}{{end}}' \
+    --jq '[((.databaseId | tostring)), (.jobs[] | [(.databaseId | tostring), .status, (.conclusion // "")] | @tsv)] | .[]' \
     2>/dev/null)"
   status=$?
   set -e

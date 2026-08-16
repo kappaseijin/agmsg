@@ -28,7 +28,7 @@ guard は実行前に次を read-only で確認する。
 
 - `run-id` と `job-database-id` は正の十進数で、各々一意である。
 - `--repo` は長形式で一度だけ指定され、GitHub の許可 owner/host に解決できる。
-- `gh run view <run-id> --repo <repo>` の結果で run ID が一致する。
+- `gh run view <run-id> --repo <repo>` を `--jq` の構造化 projection で取得し、run/job ID を十進文字列として比較する。
 - 指定 job がその run の jobs に存在し、status が `completed`、conclusion が `failure` / `cancelled` / `timed_out` のいずれかである。
 
 ## fail-closed 条件
@@ -37,7 +37,7 @@ run 全体の再実行、`--failed`、job のない rerun、run/job の欠落・
 
 ## 実装境界
 
-1. `scripts/guards/gh-write-owner-guard.sh` に最小 rerun の argv 検証と read-only target verification を追加する。
+1. `scripts/guards/gh-write-owner-guard.sh` に最小 rerun の argv 検証と、`--jq` による lossless read-only target verification を追加する。
 2. `tests/test_gh_write_owner_guard.bats` の fake gh に run/job fixture を追加し、許可形と各 fail-closed 条件を回帰検証する。
 3. 既存の read-only operation、issue/pr write、default/cwd/explicit destination resolution は変更しない。
 4. installed skill、shared config、global hook、spawn、live session、bridge/pidfile/request は変更しない。
@@ -52,10 +52,11 @@ run 全体の再実行、`--failed`、job のない rerun、run/job の欠落・
 
 ## 検証結果
 
-- `bats tests/test_gh_write_owner_guard.bats tests/test_enforced_assertions.bats`: 35/35 PASS
-- `bats tests/`: 1691/1691 PASS
+- `bats tests/test_gh_write_owner_guard.bats tests/test_enforced_assertions.bats`: 37/37 PASS
+- `bats tests/`: 1693/1693 PASS
 - `bash -n scripts/guards/gh-write-owner-guard.sh`: PASS
 - `git diff --check`: PASS
+- 実 run `31950708068` と failed job `95173637376` を `gh run view --jq` で read-only 確認し、十進 11 桁の projection を得た。
 - 実 GitHub Actions run/job の再実行、installed/shared/live の変更は未実施。
 
 ## 一次資料
