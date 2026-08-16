@@ -132,7 +132,7 @@ teardown() {
   [ "$output" -eq 1 ]
 }
 
-@test "install --update keeps a live installed watcher delivering after sync" {
+@test "install --update stops a live installed watcher after sync" {
   local project="$BATS_TEST_DIRNAME/.."
   local e2e_home="$WORK/e2e-home"
   local skill="$e2e_home/.agents/skills/agmsg"
@@ -164,18 +164,14 @@ teardown() {
 
   run env HOME="$e2e_home" bash "$project/install.sh" --cmd agmsg --update
   [ "$status" -eq 0 ]
-  kill -0 "$WATCHER_PID"
-
-  run env HOME="$e2e_home" bash "$skill/scripts/send.sh" e2e sender receiver post-update
-  [ "$status" -eq 0 ]
-
-  local delivered=false
+  local stopped=false
   for _ in $(seq 1 50); do
-    if grep -q "post-update" "$log"; then
-      delivered=true
+    if ! kill -0 "$WATCHER_PID" 2>/dev/null; then
+      stopped=true
       break
     fi
     sleep 0.1
   done
-  [ "$delivered" = true ]
+  [ "$stopped" = true ]
+  grep -q "installation was updated" "$log"
 }

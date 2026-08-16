@@ -14,69 +14,53 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/storage.sh"
-# shellcheck disable=SC1091
-source "$SCRIPT_DIR/lib/claims.sh"
-DB="$(agmsg_db_path)"
+agmsg_storage_load
 
-if [ ! -f "$DB" ]; then
-  if [ "$QUIET" = true ]; then exit 0; fi
-  echo "No messages (DB not initialized)"
-  exit 0
-fi
-
-_agmsg_sqlesc() { printf %s "$1" | sed "s/'/''/g"; }
-TEAM_SQL="$(_agmsg_sqlesc "$TEAM")"
-AGENT_SQL="$(_agmsg_sqlesc "$AGENT")"
-
-# Get unread candidates. Each is claimed before it enters the output buffer, so
-# another receiver cannot acknowledge it between selection and host handoff.
-# Escape newlines/tabs in body to keep one record per line.
-UNREAD=$(agmsg_sqlite "$DB" "
-  SELECT id || char(31) || from_agent || char(31) || replace(replace(body, char(10), '\n'), char(9), '\t') || char(31) || created_at
-  FROM messages WHERE team='$TEAM_SQL' AND to_agent='$AGENT_SQL' AND read_at IS NULL
-  ORDER BY created_at ASC;
-")
-
-# Keep every successfully claimed id until the process exits. The EXIT trap
-# releases leases when output fails, while a successful ACK removes each lease
-# before the trap runs.
-OWNER="inbox:$$"
-CLAIM_IDS=()
-release_claims() {
-  local id
-  [ "${#CLAIM_IDS[@]}" -gt 0 ] || return 0
-  for id in "${CLAIM_IDS[@]}"; do
-    agmsg_release_claim "$id" "$OWNER" >/dev/null 2>&1 || true
-  done
-}
-trap release_claims EXIT
-
-COUNT=0
-OUTPUT=""
-while IFS=$'\x1f' read -r id from body ts; do
-  case "$id" in
-    ''|*[!0-9]*) continue ;; # defensive: never claim an untrusted id
-  esac
-  if agmsg_claim_id "$id" "$OWNER" 30; then
-    CLAIM_IDS+=("$id")
-    COUNT=$((COUNT + 1))
-    OUTPUT+="  [$ts] $from: $body"$'\n'
-  fi
-done <<< "$UNREAD"
-
-if [ "$COUNT" -eq 0 ]; then
+# An inbox check must not create the store, so a team that has never been
+# written to has no file yet. Since the stores split per team that is the
+# ORDINARY state of a freshly joined team, not a broken install — before the
+# split one store was created for everyone at install time, so its absence
+# really did mean something was wrong. Report it as what it is: no messages.
+# Driver-level, so it covers jsonl's events.jsonl as well as sqlite's file.
+if ! storage_store_exists "$TEAM"; then
   if [ "$QUIET" = true ]; then exit 0; fi
   echo "No new messages."
   exit 0
 fi
 
-OUTPUT="$COUNT new message(s):"$'\n\n'"$OUTPUT"$'\n'
-if ! printf '%s' "$OUTPUT"; then
-  release_claims
-  trap - EXIT
-  printf '%s\n' "agmsg inbox: stdout handoff failed; released claimed messages." >&2 || true
-  exit 1
+# Unread comes from the storage facade (§2.1 storage_list_unread = the event log
+# UNION the legacy messages table), as one JSONL record per line in delivery
+# order. Parse it with sqlite's JSON funcs in a single pass — the repo idiom, no
+# jq dependency (cf. lib/hooks-json.sh).
+UNREAD_JSONL=$(storage_list_unread "$TEAM" "$AGENT")
+
+if [ -z "$UNREAD_JSONL" ]; then
+  if [ "$QUIET" = true ]; then exit 0; fi
+  echo "No new messages."
+  exit 0
 fi
+
+# JSONL -> JSON array -> "from \x1f body \x1f at \x1f id" rows (newlines/tabs in
+# the body escaped so each message stays one display line).
+_arr="[$(printf '%s' "$UNREAD_JSONL" | paste -sd, -)]"
+ROWS=$(agmsg_sqlite ':memory:' "
+  SELECT json_extract(value,'\$.from') || char(31) ||
+         replace(replace(json_extract(value,'\$.body'), char(10), '\n'), char(9), '\t') || char(31) ||
+         json_extract(value,'\$.at') || char(31) ||
+         json_extract(value,'\$.id')
+  FROM json_each('$(printf '%s' "$_arr" | sed "s/'/''/g")');
+")
+
+COUNT=$(printf '%s\n' "$ROWS" | wc -l | tr -d ' ')
+echo "$COUNT new message(s):"
+echo ""
+IDS=()
+while IFS=$'\x1f' read -r from body ts id; do
+  [ -n "$id" ] || continue
+  echo "  [$ts] $from: $body"
+  IDS+=("$id")
+done <<< "$ROWS"
+echo ""
 
 # Test seam: a two-file barrier that lets the race regression test land a
 # message deterministically between stdout handoff and acknowledgement. No-op
@@ -91,12 +75,15 @@ if [ -n "${AGMSG_TEST_MARK_BARRIER:-}" ]; then
   done
 fi
 
-# ACK is intentionally after the successful stdout write. An ACK failure does
-# not release the claim: the host already received the message, so immediate
-# release would create an avoidable duplicate. Its short lease makes it
-# recoverable if the receipt cannot be persisted.
-for id in "${CLAIM_IDS[@]}"; do
-  if ! agmsg_ack_claim "$id" "$OWNER" inbox_stdout; then
-    printf 'agmsg inbox: could not acknowledge message %s; it will reappear after its lease expires.\n' "$id" >&2
+# Mark read via the storage facade (§2.1 storage_mark_read_batch): recipient-
+# scoped and idempotent. For a legacy id it records a message_read event
+# without mutating the legacy row (§2.4). Only the ids collected from the
+# rows actually displayed above — never a blanket match — so a message that
+# arrives after the SELECT above can never be marked read unseen. Non-fatal —
+# may fail in sandboxed environments.
+if [ "${#IDS[@]}" -gt 0 ]; then
+  storage_mark_read_batch "$TEAM" "$AGENT" "${IDS[@]}" >/dev/null 2>&1 || true
+  if command -v storage_record_receipts >/dev/null 2>&1; then
+    storage_record_receipts "$TEAM" "$AGENT" inbox_stdout "${IDS[@]}" >/dev/null 2>&1 || true
   fi
-done
+fi

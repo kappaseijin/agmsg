@@ -54,8 +54,9 @@ source "$SCRIPT_DIR/lib/storage.sh"
 source "$SCRIPT_DIR/lib/validate.sh"
 
 agmsg_validate_team_name "$TEAM" || exit 1
-agmsg_storage_ensure_initialized
-DB="$(agmsg_db_path)"
+agmsg_storage_load
+storage_init "$TEAM" >/dev/null
+DB="$(agmsg_db_path "$TEAM")"
 
 _agmsg_sqlesc() { printf '%s' "$1" | sed "s/'/''/g"; }
 TEAM_SQL="$(_agmsg_sqlesc "$TEAM")"
