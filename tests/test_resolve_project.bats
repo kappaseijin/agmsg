@@ -369,6 +369,63 @@ JSON
   [[ "$output" =~ "carol" ]]
 }
 
+# --- join.sh explicit-target marker hijack (herdr-agent-monitor#63 AC-1 / #73) ---
+#
+# join.sh's PROJECT_PATH names a registration TARGET the caller chose, which is
+# often a different agent's project than the calling process's own (a manager
+# joining a freshly spawned peer's clone dir, for instance). Unlike
+# whoami/watch/actas-claim, join.sh has no business trusting the CALLING
+# process's own SessionStart marker for THAT target — see #73 for the full
+# writeup. Default (no explicit opt-out) must still resolve, so a nested
+# subdir/sibling worktree keeps canonicalizing (unlike AGMSG_RESOLVE_PROJECT=0,
+# which the "spawn path" test above uses and which disables that too).
+
+@test "join: an unrelated caller marker does not hijack the explicit target" {
+  skip_on_windows "process argv faking via exec -a (#349)"
+  reg T alice "$ROOT/main"
+
+  bash -c 'exec -a "2.1.199" sleep 5' 3>&- &
+  local agent_pid=$!
+  sleep 0.3
+  agmsg_write_project_marker "$agent_pid" "$ROOT/main"
+
+  run env AGMSG_AGENT_PID="$agent_pid" bash "$SKILL_DIR/scripts/join.sh" T bob claude-code "$ROOT/clone"
+  kill "$agent_pid" 2>/dev/null || true
+
+  [ "$status" -eq 0 ]
+  run bash "$SKILL_DIR/scripts/identities.sh" "$ROOT/clone" claude-code
+  [[ "$output" =~ "bob" ]]
+  run bash "$SKILL_DIR/scripts/identities.sh" "$ROOT/main" claude-code
+  [[ ! "$output" =~ "bob" ]]
+}
+
+@test "join: negative control — the same marker DOES win for a plain resolve call" {
+  # Proves the marker mechanism itself still works (agmsg_resolve_project is
+  # not disabled globally); join.sh alone opts out of step 1.
+  skip_on_windows "process argv faking via exec -a (#349)"
+  source "$SKILL_DIR/scripts/lib/resolve-project.sh"
+  mkdir -p "$ROOT/main"
+
+  bash -c 'exec -a "2.1.199" sleep 5' 3>&- &
+  local agent_pid=$!
+  sleep 0.3
+  agmsg_write_project_marker "$agent_pid" "$ROOT/main"
+
+  result="$(AGMSG_AGENT_PID="$agent_pid" agmsg_resolve_project "$ROOT/clone" claude-code)"
+  kill "$agent_pid" 2>/dev/null || true
+  [ "$result" = "$ROOT/main" ]
+}
+
+@test "join: still canonicalizes a nested subdir target (marker skip keeps steps 2/3)" {
+  reg T alice "$ROOT"
+  bash "$SKILL_DIR/scripts/join.sh" T dave claude-code "$ROOT/sub/deep"
+
+  run bash "$SKILL_DIR/scripts/identities.sh" "$ROOT" claude-code
+  [[ "$output" =~ "dave" ]]
+  run bash "$SKILL_DIR/scripts/identities.sh" "$ROOT/sub/deep" claude-code
+  [[ ! "$output" =~ "dave" ]]
+}
+
 # --- reset.sh vs identities.sh asymmetry (#63/#17) ---
 
 @test "reset: reproduces the explicit-path marker hijack without new diagnostics" {

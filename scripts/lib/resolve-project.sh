@@ -451,7 +451,20 @@ agmsg_resolve_project() {
   fi
   # 1) Per-process SessionStart marker (precise). Written only by session-start
   #    (cc monitor/both); codex never installs it, so codex relies on 2)/3).
-  if pid="$(agmsg_agent_pid "$type")" && [ -n "$pid" ]; then
+  #
+  #    This step answers "what project does MY OWN running session belong
+  #    to" — it is keyed off the calling process's ancestry, not off
+  #    <pwd_path>, so it is only sound when <pwd_path> IS that same session's
+  #    own context (whoami/watch/actas-claim: the caller passes its own cwd).
+  #    join.sh instead takes <pwd_path> as an explicit registration TARGET
+  #    that may name a different agent's project entirely (e.g. a manager
+  #    session registering a freshly spawned peer's clone directory); trusting
+  #    the manager's own marker there silently overwrites that target with
+  #    wherever the manager itself happens to be registered (#73). Callers in
+  #    that second category set AGMSG_RESOLVE_PROJECT_SKIP_MARKER=1 to keep
+  #    the git-aware canonicalization (steps 2/3 below) without this step.
+  if [ "${AGMSG_RESOLVE_PROJECT_SKIP_MARKER:-0}" != "1" ] \
+    && pid="$(agmsg_agent_pid "$type")" && [ -n "$pid" ]; then
     if marker="$(agmsg_read_project_marker "$pid" "$type")" && [ -n "$marker" ]; then
       printf '%s' "$marker"; return 0
     fi
