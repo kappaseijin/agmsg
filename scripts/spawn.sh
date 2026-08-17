@@ -691,6 +691,10 @@ launch_in_herdr() {
   # only in the one case where a tab genuinely cannot be created (no
   # workspace id — see the else branch below).
   if [ -n "$ws" ]; then
+    # Reflect the actual placement in TMUX_TARGET, not just the --window flag:
+    # place_and_launch()'s "spawned ... in herdr (${TMUX_TARGET})" message reads
+    # this after we return, and a workspace id means a tab either way now.
+    TMUX_TARGET="window"
     resp="$(herdr tab create --workspace "$ws" --label "$label" --cwd "$PROJECT" 2>&1)" \
       || die "herdr tab create failed: $resp"
     new_id="$(herdr_json_str "$resp" '$.result.root_pane.pane_id')"
@@ -699,6 +703,7 @@ launch_in_herdr() {
     if [ "$TMUX_TARGET" = "window" ]; then
       echo "spawn: --window requested but \$HERDR_WORKSPACE_ID is not set; falling back to split" >&2
     fi
+    TMUX_TARGET="pane"
     local dir="right"; [ "$SPLIT" = "v" ] && dir="down"
     resp="$(herdr pane split "$HERDR_PANE_ID" --direction "$dir" --no-focus --cwd "$PROJECT" 2>&1)" \
       || die "herdr pane split failed: $resp"

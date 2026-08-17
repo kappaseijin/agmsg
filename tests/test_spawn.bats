@@ -1147,7 +1147,9 @@ STUB
   bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
   run bash "$SCRIPTS/spawn.sh" claude-code alice --project "$PROJ" --no-wait
   [ "$status" -eq 0 ]
-  [[ "$output" == *"spawned claude-code 'alice' in herdr"* ]]
+  # The confirmation message reflects what actually happened (a tab), not
+  # just the --window flag that was never passed.
+  [[ "$output" == *"spawned claude-code 'alice' in herdr (window)"* ]]
 
   # herdr's "1 tab 1 agent" convention has no split exception for spawned
   # agents, so the default path (no --window) opens a tab too now, same as
