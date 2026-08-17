@@ -394,7 +394,7 @@ JSON
 
   [ "$status" -eq 0 ]
   run bash "$SKILL_DIR/scripts/identities.sh" "$ROOT/clone" claude-code
-  [[ "$output" =~ "bob" ]]
+  grep -q "bob" <<< "$output"
   run bash "$SKILL_DIR/scripts/identities.sh" "$ROOT/main" claude-code
   [[ ! "$output" =~ "bob" ]]
 }
@@ -421,7 +421,7 @@ JSON
   bash "$SKILL_DIR/scripts/join.sh" T dave claude-code "$ROOT/sub/deep"
 
   run bash "$SKILL_DIR/scripts/identities.sh" "$ROOT" claude-code
-  [[ "$output" =~ "dave" ]]
+  grep -q "dave" <<< "$output"
   run bash "$SKILL_DIR/scripts/identities.sh" "$ROOT/sub/deep" claude-code
   [[ ! "$output" =~ "dave" ]]
 }
