@@ -91,7 +91,21 @@ fi
 state="$(actas_lock_state "$TEAM" "$NAME" "" 2>/dev/null || echo free)"
 case "$state" in
   free)
-    echo "despawn: '$NAME' holds no live actas lock — nothing to confirm a teardown against (a codex member has no watcher; a tmux member may already be gone). If a window remains, use --force." >&2
+    # No live lock to wait on -- but that alone does not mean nothing needs
+    # cleaning up: actas_lock_state() reports "free" both when the role was
+    # never claimed AND when the recorded owner's session_id has since died,
+    # and the latter can leave a real pane/window and registration behind
+    # (herdr-agent-monitor#63 AC-5). If a placement record exists, do the same
+    # best-effort teardown --force would (kill the recorded pane/window, drop
+    # the registration) -- there is no live session whose work this could
+    # interrupt, since the lock is already free.
+    echo "despawn: '$NAME' holds no live actas lock — attempting best-effort placement/registration cleanup (a codex member has no watcher; a tmux member may already be gone)." >&2
+    if placement="$(kill_recorded_placement)"; then
+      IFS=$'\t' read -r _id _proj _type <<< "$placement"
+      if [ -n "${_proj:-}" ] && [ -n "${_type:-}" ]; then
+        "$SCRIPT_DIR/reset.sh" "$_proj" "$_type" "$NAME" >/dev/null 2>&1 || true
+      fi
+    fi
     rm -f "$SPAWN_REC" 2>/dev/null || true
     echo "status=ok name=$NAME team=$TEAM note=no-live-lock"
     exit 0
