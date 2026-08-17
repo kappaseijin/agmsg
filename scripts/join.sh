@@ -85,6 +85,14 @@ agmsg_validate_agent_name "$AGENT_ID" || exit 1
 # session lives in instead of minting a phantom record for the subdir.
 # Callers passing an explicit, deliberate path (e.g. spawn.sh's --project, which
 # may not be registered yet) set AGMSG_RESOLVE_PROJECT=0 to keep their path.
+#
+# PROJECT_PATH here is a registration TARGET the caller names explicitly —
+# often a different agent's project than the calling process's own (a manager
+# joining a freshly spawned peer, for instance) — not "what project am I
+# running in". The calling process's own SessionStart marker must not win
+# over that explicit target (#73), so the marker step is skipped here while
+# the git-aware ancestor/worktree canonicalization (steps 2/3) still applies.
+export AGMSG_RESOLVE_PROJECT_SKIP_MARKER=1
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/resolve-project.sh"
 # shellcheck disable=SC1091
