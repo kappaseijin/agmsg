@@ -98,3 +98,4 @@ case "$MESSAGE_ID" in
 esac
 
 printf 'Queued message #%s to %s in team %s; delivery not yet acknowledged.\n' "$MESSAGE_ID" "$TO" "$TEAM"
+printf 'Check delivery with: message-status.sh %s %s --id %s\n' "$TEAM" "$TO" "$MESSAGE_ID"
