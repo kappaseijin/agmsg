@@ -682,19 +682,23 @@ herdr_json_str() {
 launch_in_herdr() {
   local new_id resp
   local label="${ROLE:-$NAME}"
-  if [ "$TMUX_TARGET" = "window" ]; then
-    local ws="${HERDR_WORKSPACE_ID:-}"
-    if [ -z "$ws" ]; then
-      echo "spawn: --window requested but \$HERDR_WORKSPACE_ID is not set; falling back to split" >&2
-      TMUX_TARGET="pane"
-      launch_in_herdr
-      return $?
-    fi
+  local ws="${HERDR_WORKSPACE_ID:-}"
+  # herdr's "1 tab 1 agent" convention has no split-pane exception for spawned
+  # agents (the only sanctioned split use is the monitor panes the
+  # herdr-agent-monitor skill creates directly, outside spawn.sh). So the tab
+  # path is not gated on --window here: whenever a workspace is available,
+  # this always opens a tab, --window or not. --split is therefore meaningful
+  # only in the one case where a tab genuinely cannot be created (no
+  # workspace id — see the else branch below).
+  if [ -n "$ws" ]; then
     resp="$(herdr tab create --workspace "$ws" --label "$label" --cwd "$PROJECT" 2>&1)" \
       || die "herdr tab create failed: $resp"
     new_id="$(herdr_json_str "$resp" '$.result.root_pane.pane_id')"
     [ -n "$new_id" ] || die "herdr tab create: could not read result.root_pane.pane_id from response: $resp"
   else
+    if [ "$TMUX_TARGET" = "window" ]; then
+      echo "spawn: --window requested but \$HERDR_WORKSPACE_ID is not set; falling back to split" >&2
+    fi
     local dir="right"; [ "$SPLIT" = "v" ] && dir="down"
     resp="$(herdr pane split "$HERDR_PANE_ID" --direction "$dir" --no-focus --cwd "$PROJECT" 2>&1)" \
       || die "herdr pane split failed: $resp"
