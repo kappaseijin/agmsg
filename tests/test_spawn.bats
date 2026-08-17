@@ -1142,32 +1142,39 @@ STUB
   mkdir -p "$TEST_SKILL_DIR/run"
 }
 
-@test "spawn: herdr split — launches in a herdr pane with herdr: placement record" {
+@test "spawn: herdr default (no --window) now creates a tab too (issue57 AC-3)" {
   _setup_fake_herdr
   bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
   run bash "$SCRIPTS/spawn.sh" claude-code alice --project "$PROJ" --no-wait
   [ "$status" -eq 0 ]
   [[ "$output" == *"spawned claude-code 'alice' in herdr"* ]]
 
-  # herdr was called: pane split, pane rename, pane run.
-  grep -q "pane split wT:pSelf --direction right --no-focus" "$HERDR_CALL_LOG"
-  grep -q "pane rename wT:pN alice" "$HERDR_CALL_LOG"
-  grep -q "pane run wT:pN" "$HERDR_CALL_LOG"
+  # herdr's "1 tab 1 agent" convention has no split exception for spawned
+  # agents, so the default path (no --window) opens a tab too now, same as
+  # --window. A pane split with a workspace id available would be the old,
+  # now-removed default.
+  grep -q "tab create --workspace wT --label alice" "$HERDR_CALL_LOG"
+  grep -q "pane rename wT:pR alice" "$HERDR_CALL_LOG"
+  grep -q "pane run wT:pR" "$HERDR_CALL_LOG"
+  refute grep -q "pane split" "$HERDR_CALL_LOG"
 
   # Placement record uses herdr: scheme tag.
   local rec="$TEST_SKILL_DIR/run/spawn.myteam__alice"
   [ -f "$rec" ]
   local rec_id
   IFS=$'\t' read -r rec_id _ _ < "$rec"
-  [ "$rec_id" = "herdr:wT:pN" ]
+  [ "$rec_id" = "herdr:wT:pR" ]
 }
 
-@test "spawn: herdr split --split v maps to --direction down" {
+@test "spawn: herdr --split has no effect once a tab is available" {
   _setup_fake_herdr
   bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
   run bash "$SCRIPTS/spawn.sh" claude-code alice --project "$PROJ" --no-wait --split v
   [ "$status" -eq 0 ]
-  grep -q "pane split wT:pSelf --direction down --no-focus" "$HERDR_CALL_LOG"
+  # --split only affects the pane-split fallback (no workspace id, see
+  # below); with a workspace id available a tab is created regardless.
+  grep -q "tab create --workspace wT --label alice" "$HERDR_CALL_LOG"
+  refute grep -q "pane split" "$HERDR_CALL_LOG"
 }
 
 @test "spawn: herdr --window uses tab create and extracts root_pane pane_id" {
@@ -1185,8 +1192,12 @@ STUB
   [ "$rec_id" = "herdr:wT:pR" ]
 }
 
-@test "spawn: herdr uses the resolved role as the split label" {
+@test "spawn: herdr uses the resolved role as the split-fallback label" {
+  # Only the no-workspace-id fallback still splits (see the falls-back-to-split
+  # test below); label resolution needs its own coverage on that path now that
+  # the default (workspace id available) always creates a tab instead.
   _setup_fake_herdr
+  unset HERDR_WORKSPACE_ID
   bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
   run bash "$SCRIPTS/spawn.sh" claude-code herdr-agent-monitor_worker_claude --project "$PROJ" --no-wait
   [ "$status" -eq 0 ]
@@ -1254,7 +1265,11 @@ _spawn_recorded_id() {
 }
 
 @test "spawn: herdr split picks result.pane.pane_id even when another pane object follows it" {
+  # The split path is only reachable now via the no-workspace-id fallback
+  # (see the falls-back-to-split test below) — it still has to parse its
+  # response correctly on that path.
   _setup_fake_herdr
+  unset HERDR_WORKSPACE_ID
   # A second pane object after the target: a trailing-match reader takes
   # wT:pWRONG and would drive the wrong pane.
   export HERDR_SPLIT_RESPONSE='{"id":"cli:pane:split","result":{"pane":{"pane_id":"wT:pRIGHT"},"neighbor":{"pane_id":"wT:pWRONG"}},"type":"pane_info"}'
@@ -1268,6 +1283,7 @@ _spawn_recorded_id() {
 
 @test "spawn: herdr split tolerates reordered keys in the pane object" {
   _setup_fake_herdr
+  unset HERDR_WORKSPACE_ID
   export HERDR_SPLIT_RESPONSE='{"result":{"type":"pane_info","pane":{"tab_id":"wT:tA","cwd":"/x","pane_id":"wT:pLAST"}},"id":"cli:pane:split"}'
   bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
   run bash "$SCRIPTS/spawn.sh" claude-code alice --project "$PROJ" --no-wait
@@ -1297,6 +1313,7 @@ _spawn_recorded_id() {
               '{"id":"cli:pane:split","result":{"type":"ok"}}' \
               '{"result":{"pane":{"pane_id":42}}}'; do
     _setup_fake_herdr
+    unset HERDR_WORKSPACE_ID
     export HERDR_SPLIT_RESPONSE="$body"
     run bash "$SCRIPTS/spawn.sh" claude-code alice --project "$PROJ" --no-wait
     [ "$status" -ne 0 ]
