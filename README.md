@@ -740,12 +740,19 @@ pane, or spawns an agent.
 ~/.agents/skills/<cmd>/scripts/message-status.sh myteam alice --format json
 ```
 
+`send.sh`'s own output names the exact follow-up command for the message it just queued, so you don't have to eyeball aggregate counts or scan `history.sh` for it:
+
+```bash
+~/.agents/skills/<cmd>/scripts/message-status.sh myteam alice --id <the-id-send.sh-printed>
+```
+
 | State | Meaning |
 | --- | --- |
 | `queued` | No receiver currently holds the message. |
 | `claimed` | A receiver has a short exclusive lease while preparing host handoff. |
 | `handedOff` | A durable receipt records host handoff. This is **not** LLM task completion. |
 | `unknown` | A legacy row has `read_at` but no receipt, so handoff cannot be proven. |
+| `notFound` (`--id` only) | No message with that id exists for this team/agent — check the id, team, and recipient you passed. |
 
 `history.sh` uses the same distinction: `●` queued, `○` receiver handoff acknowledged, and `?` legacy/unknown receipt. If a receiver exits before acknowledging, its lease expires and the message remains eligible for another receive attempt.
 
@@ -813,6 +820,16 @@ Yes. Messages live in SQLite and survive sessions. `history.sh <team>` replays t
 **Can I re-seed a fresh agent from an old room?**
 
 The message store is effectively a replay log. There's no one-shot "rehydrate from room X" command yet, but `history.sh` gives you the transcript and you can prompt a new agent with it. Treat persistence as the unlock that makes that possible.
+
+**A receiving session isn't picking up messages — is there another way to reach it?**
+
+No, and that's by design: agmsg has exactly one delivery path, the SQLite queue plus whichever delivery mode (`monitor`/`turn`/`both`) is configured for the receiving session — there's no daemon or side channel that can push text into a specific terminal/pane for you (see "Is this MCP?" above; the same "no server, no daemon" boundary applies here). A terminal multiplexer's own text-injection commands, where available, are outside agmsg's scope and are not guaranteed to reliably submit a full turn to every CLI.
+
+The message itself is never lost — it stays queued in the store regardless of whether the receiving session is currently consuming it — so the fix is getting that session to consume, not finding an alternate transport:
+
+1. Check the session actually has a delivery mode configured: `/agmsg mode` (or `message-status.sh`/`delivery.sh status` from the shell) — `off` means nothing will arrive until `/agmsg` is run manually. This is the most common cause: a session that joined via a path other than `/agmsg actas <name>` (a script calling `actas-claim.sh` directly, for instance) can end up with no delivery hook installed at all.
+2. In `monitor` mode, remember Monitor priming (above): a session that hasn't taken a turn yet this session won't react to what's already queued — nudge it with any short message.
+3. If the session's process itself is gone, there's nothing left to nudge — restart/respawn it. The undelivered messages are still in the queue and `history.sh`/`inbox.sh` will hand them to the new session.
 
 **How do you pronounce it?**
 

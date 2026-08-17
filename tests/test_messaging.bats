@@ -160,6 +160,56 @@ teardown() {
   [[ "$output" == *'"ackSemantics":"receiver_handoff_not_task_completion"'* ]]
 }
 
+# --- message-status.sh --id: single-message lookup (herdr-agent-monitor#63 AC-2) ---
+#
+# "Sent to ..." is not evidence of delivery -- a sender needs a way to check
+# the ONE message send.sh just printed an id for, not just aggregate counts.
+
+@test "message-status --id: reports queued for a just-sent message" {
+  bash "$SCRIPTS/send.sh" testteam alice bob "queued payload" >/dev/null
+  local id
+  id="$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT id FROM messages WHERE body='queued payload';")"
+
+  run bash "$SCRIPTS/message-status.sh" testteam bob --id "$id" --format json
+  [ "$status" -eq 0 ]
+  grep -q "\"state\":\"queued\"" <<< "$output"
+  [[ "$output" == *"\"id\":\"$id\""* ]]
+}
+
+@test "message-status --id: reports claimed and handedOff distinctly" {
+  bash "$SCRIPTS/send.sh" testteam alice bob "claimed payload" >/dev/null
+  bash "$SCRIPTS/send.sh" testteam alice bob "handed-off payload" >/dev/null
+  local claimed_id handed_off_id
+  claimed_id="$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT id FROM messages WHERE body='claimed payload';")"
+  handed_off_id="$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT id FROM messages WHERE body='handed-off payload';")"
+  bash "$SCRIPTS/claim.sh" claim "$claimed_id" status-daemon 60
+  bash "$SCRIPTS/claim.sh" claim "$handed_off_id" status-daemon 60
+  bash "$SCRIPTS/claim.sh" ack "$handed_off_id" status-daemon test_handoff
+
+  run bash "$SCRIPTS/message-status.sh" testteam bob --id "$claimed_id" --format json
+  grep -q "\"state\":\"claimed\"" <<< "$output"
+
+  run bash "$SCRIPTS/message-status.sh" testteam bob --id "$handed_off_id" --format json
+  grep -q "\"state\":\"handedOff\"" <<< "$output"
+}
+
+@test "message-status --id: an unknown id reports notFound rather than an empty aggregate" {
+  run bash "$SCRIPTS/message-status.sh" testteam bob --id "no-such-id" --format json
+  [ "$status" -eq 0 ]
+  grep -q "\"state\":\"notFound\"" <<< "$output"
+}
+
+@test "message-status --id: human format names the state without aggregate counts" {
+  bash "$SCRIPTS/send.sh" testteam alice bob "queued payload" >/dev/null
+  local id
+  id="$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT id FROM messages WHERE body='queued payload';")"
+
+  run bash "$SCRIPTS/message-status.sh" testteam bob --id "$id"
+  [ "$status" -eq 0 ]
+  grep -q "state: queued" <<< "$output"
+  [[ "$output" != *"queued: "* ]]
+}
+
 # --- inbox.sh ---
 
 @test "inbox: shows no messages when empty" {
