@@ -177,6 +177,43 @@ _control_row_exists_for_alice() {
   [[ "$output" == *"no-live-lock"* ]]
 }
 
+# herdr-agent-monitor#63 AC-5 / agmsg#73: the reported debris condition was not
+# "was this member launched via spawn.sh" -- kill_recorded_placement() and the
+# registration reset used to be called only from the --force branch above,
+# never from the graceful path. What actually determines whether debris
+# survives a graceful despawn is whether actas_lock_state() finds a LIVE
+# owner: a lock whose recorded owner session_id has since died reads as
+# "free" (same as "never claimed"), so despawn used to take the no-op branch
+# and report ok while a placement record's pane/window was never asked to
+# close and the registration was never dropped (unlike --force, which does
+# both). A member that happened to be spawned via spawn.sh was not protected
+# from this: only whether its lock was still live at the moment despawn.sh
+# ran mattered. Fixed by giving the free branch the same best-effort
+# kill+reset --force does when a placement record exists.
+@test "despawn: graceful no-op with a stale (dead-owner) lock still cleans up the placement and registration" {
+  bash "$SCRIPTS/join.sh" team alice claude-code "$PROJ" >/dev/null
+  printf '%s\t%s\t%s\n' '%99' "$PROJ" claude-code > "$RUN/spawn.team__alice"
+  printf 'sid-dead\n' > "$RUN/actas.team__alice.session"
+
+  run bash "$SCRIPTS/despawn.sh" team leader alice
+  [ "$status" -eq 0 ]
+  grep -q "status=ok" <<< "$output"
+  grep -q "no-live-lock" <<< "$output"
+  [ ! -f "$RUN/spawn.team__alice" ]
+
+  run bash "$SCRIPTS/identities.sh" "$PROJ" claude-code
+  [[ "$output" != *alice* ]]
+}
+
+@test "despawn: graceful no-op with a stale lock and NO placement record still reports ok without a registration to drop" {
+  bash "$SCRIPTS/join.sh" team alice codex "$PROJ" >/dev/null
+  printf 'sid-dead\n' > "$RUN/actas.team__alice.session"
+
+  run bash "$SCRIPTS/despawn.sh" team leader alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no-live-lock"* ]]
+}
+
 @test "despawn --force: kills a herdr: placement via herdr pane close" {
   bash "$SCRIPTS/join.sh" team alice claude-code "$PROJ" >/dev/null
   # Record a herdr-tagged placement (herdr: scheme prefix).
