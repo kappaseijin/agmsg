@@ -180,16 +180,27 @@ is_safe_spawn_role() {
   [[ "$1" =~ ^[A-Za-z0-9_-]+$ ]]
 }
 
+# 0 if <token> is a vendor DECLARED by some known type's `vendor=` manifest key.
+# Data-driven on purpose: a per-vendor branch here would re-introduce exactly the
+# hardcoded type knowledge the registry exists to remove.
+is_declared_vendor() {
+  local want="$1" t
+  [ -n "$want" ] || return 1
+  while IFS= read -r t; do
+    [ "$(agmsg_type_get "$t" vendor)" = "$want" ] && return 0
+  done <<EOF
+$(agmsg_known_types | sort -u)
+EOF
+  return 1
+}
+
 derive_spawn_role() {
   local candidate vendor
   local -a name_parts
   IFS=_ read -r -a name_parts <<< "$NAME"
   [ "${#name_parts[@]}" -ge 3 ] || return 0
   vendor="${name_parts[${#name_parts[@]} - 1]}"
-  case "$vendor" in
-    claude|codex) ;;
-    *) return 0 ;;
-  esac
+  is_declared_vendor "$vendor" || return 0
   candidate="${name_parts[${#name_parts[@]} - 2]}"
   is_safe_spawn_role "$candidate" || return 0
   printf '%s' "$candidate"
