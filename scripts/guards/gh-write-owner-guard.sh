@@ -609,8 +609,17 @@ resolve_default_repository() {
     status=$?
   fi
   [ "$status" -eq 0 ] || return 1
-  [ -n "$output" ] || return 2
-  [[ "$output" != *$'\n'* ]] || return 2
+  # A project that never ran `gh repo set-default` gets exit 0 with empty
+  # stdout here -- the "No default remote repository has been set" notice
+  # goes to stderr, which is discarded above. That reads the same as "gh
+  # itself failed" (return 1, caller falls through to resolve_cwd_repository)
+  # rather than "a default IS set, but to something we can't use" (return 2,
+  # caller dies). Empty/multi-line output means there is no single repo name
+  # to evaluate at all, so there is nothing here to authorize or reject yet --
+  # only a default that resolved cleanly and then failed authorization (below)
+  # represents an actual answer worth dying on.
+  [ -n "$output" ] || return 1
+  [[ "$output" != *$'\n'* ]] || return 1
   authorize_repo_spec "$output" "$REQUEST_HOST" || return 2
 }
 
