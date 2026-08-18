@@ -41,6 +41,13 @@ if [ "${1:-}" = repo ] && [ "${2:-}" = set-default ] && [ "${3:-}" = --view ]; t
     thirdparty) printf 'thirdparty/fixture\n' ;;
     multiline) printf 'kappaseijin/fixture\nthirdparty/fixture\n' ;;
     invalid) printf 'not-a-repository\n' ;;
+    # Real `gh repo set-default --view` shape when nothing has been set:
+    # exit 0, empty stdout, the "No default remote repository..." notice on
+    # stderr (herdr-agent-monitor#63-adjacent report, verified against a real
+    # `gh` in an unset scratch repo). "empty" below is misleadingly named --
+    # it actually simulates gh itself FAILING (exit 1), not gh succeeding
+    # with nothing to report.
+    unset) : ;;
     empty) exit 1 ;;
     fail) exit 9 ;;
   esac
@@ -201,6 +208,42 @@ assert_rejected() {
 
 @test "GHG-08: cwd repository resolver is checked after an absent default" {
   export FAKE_CWD_MODE=thirdparty
+  assert_rejected issue comment 10 --body "blocked"
+}
+
+# `gh repo set-default --view` on a project that never ran `gh repo
+# set-default` exits 0 with an empty stdout (the "No default remote
+# repository has been set" notice goes to stderr, which the guard discards).
+# resolve_default_repository() used to treat that shape the same as "the
+# default IS set, but to something unauthorized" (both returned 2, which the
+# caller dies on) instead of the same as "gh itself failed" (return 1, which
+# falls through to resolve_cwd_repository -- the correct behavior for a
+# project that simply never configured a default). Reported independently by
+# herdr-agent-monitor and scale_exporter; reproduced directly against a real
+# `gh` in an unset scratch repo before writing this fixture.
+@test "GHG-08b: an unset default (gh exits 0, empty output) falls through to cwd, not a die" {
+  export FAKE_DEFAULT_MODE=unset
+  export FAKE_CWD_MODE=allowed
+  run_guard issue comment 10 --body "allowed"
+  [ "$status" -eq 0 ]
+  grep -Fq 'issue comment 10 --body allowed' "$FAKE_WRITE_LOG"
+}
+
+@test "GHG-08c: a multi-line default view falls through to cwd, not a die" {
+  export FAKE_DEFAULT_MODE=multiline
+  export FAKE_CWD_MODE=allowed
+  run_guard issue comment 10 --body "allowed"
+  [ "$status" -eq 0 ]
+  grep -Fq 'issue comment 10 --body allowed' "$FAKE_WRITE_LOG"
+}
+
+# A default that DID resolve cleanly (single line, non-empty) but names a
+# disallowed owner must still die -- unlike GHG-08b/08c, there is a real
+# answer here and it says no, so falling through to cwd would let a
+# same-directory project silently override an explicit unauthorized default.
+@test "GHG-08d: a cleanly-resolved but disallowed default still dies (does not fall through)" {
+  export FAKE_DEFAULT_MODE=thirdparty
+  export FAKE_CWD_MODE=allowed
   assert_rejected issue comment 10 --body "blocked"
 }
 
