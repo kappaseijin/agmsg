@@ -36,7 +36,7 @@ AGENTS_DIR="$HOME/.agents"
 # uncommitted changes. Non-git (tarball via setup.sh/npx, no .git): fall back to
 # the canonical VERSION file. See #117.
 agmsg_source_version() {
-  local v top
+  local v top native
   # Only describe when SCRIPT_DIR is ITS OWN git checkout. `git describe`
   # searches ancestors for a .git, so a non-git copy unpacked under some other
   # git repo would otherwise record that PARENT repo's describe instead of
@@ -51,7 +51,34 @@ agmsg_source_version() {
   # app's own version comparison (agmsg_core_version_status in agmsg.rs)
   # can't parse as semver, which it then treats as "outdated" unconditionally.
   top="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
-  if [ -n "$top" ] && [ "$top" = "$SCRIPT_DIR" ] \
+  # THE TWO SIDES ARE IN DIFFERENT PATH SPACES ON WINDOWS, so the equality was
+  # always false there and every Git Bash install recorded the VERSION file
+  # instead of the describe string (#830):
+  #
+  #   $SCRIPT_DIR            /tmp/tmp.XXXX/agmsg        MSYS form, from bash
+  #   git --show-toplevel    C:/Users/.../tmp.XXXX/agmsg  native form, from git
+  #
+  # `cygpath -m` is the mixed form git reports — the same second chance this
+  # file already takes for the writable paths below, and the same one
+  # `agmsg_cmdline_names_path` takes in compat.sh, where the identical mismatch
+  # made four watcher-ownership checks answer "not ours" on Windows.
+  #
+  # The condition below is a CAPABILITY, not an operating system: where cygpath
+  # is not on PATH, `native` stays empty and this is the plain comparison and
+  # nothing else. Saying "off Windows" instead would be wider than the code —
+  # this file's own test drives the second branch on macOS and Linux by putting
+  # a cygpath stub on PATH.
+  #
+  # Where cygpath is absent, fails, returns nothing, or returns a path unequal
+  # to git's toplevel, the recorded value is the fallback, exactly as before.
+  # A wrong answer that happened to equal the toplevel would still take the
+  # describe branch, so this is a set of conditions and not a guarantee that
+  # the worst case is the old behaviour.
+  native=""
+  if command -v cygpath >/dev/null 2>&1; then
+    native="$(cygpath -m "$SCRIPT_DIR" 2>/dev/null || true)"
+  fi
+  if [ -n "$top" ] && { [ "$top" = "$SCRIPT_DIR" ] || { [ -n "$native" ] && [ "$top" = "$native" ]; }; } \
       && v="$(git -C "$SCRIPT_DIR" describe --tags --always --dirty --abbrev=7 --match 'v[0-9]*' 2>/dev/null)" \
       && [ -n "$v" ]; then
     printf '%s' "$v"
@@ -67,6 +94,18 @@ CMD_NAME=""
 UPDATE_ONLY=false
 INTERACTIVE=true
 AGENT_TYPE=""  # claude-code, codex, gemini, antigravity — passed via --agent-type, or empty for auto/default
+
+# Types the installer renders their OWN shared SKILL.md for (their template.md
+# differs from codex's). Everything else -- codex itself, plus claude-code and
+# copilot, which keep separate dedicated copies elsewhere -- gets the codex-
+# typed shared SKILL.md. One list, read by three call sites below (fresh
+# install's template pick, --update's template pick, and --update's type
+# re-detection from the SKILL.md already on disk): before #846, the third site
+# hardcoded its own, narrower copy of this same set (missing opencode/hermes/
+# cursor) that had already drifted from the other two -- re-detecting one of
+# those three types as "codex" and then, via the template pick, overwriting
+# the SKILL.md the installer itself had written with the wrong flavor.
+AGMSG_SHARED_SKILL_TPL_TYPES="gemini antigravity opencode hermes cursor grok-build"
 
 configure_codex_sandbox() {
   # --- Configure Codex sandbox (if Codex is installed) ---
@@ -380,22 +419,28 @@ if [ "$UPDATE_ONLY" = true ]; then
   CMD_NAME="$SKILL_NAME"
   echo "  Updating $SKILL_NAME..."
   if [ -z "$AGENT_TYPE" ]; then
-    if grep -q "whoami.sh.*antigravity" "$SKILL_DIR/SKILL.md" 2>/dev/null; then
-      AGENT_TYPE="antigravity"
-    elif grep -q "whoami.sh.*gemini" "$SKILL_DIR/SKILL.md" 2>/dev/null; then
-      AGENT_TYPE="gemini"
-    elif grep -q "whoami.sh.*grok-build" "$SKILL_DIR/SKILL.md" 2>/dev/null; then
-      AGENT_TYPE="grok-build"
-    else
-      AGENT_TYPE="codex"
-    fi
+    # Re-detect the type this install's shared SKILL.md was last rendered for,
+    # from the whoami.sh line its own template prints (#846) -- every
+    # renderable type's line is unambiguous against every other's; see the
+    # cross-grep this list is built from, noted alongside
+    # AGMSG_SHARED_SKILL_TPL_TYPES above. codex is not grepped for: it is the
+    # default a match against this list falls back to.
+    AGENT_TYPE="codex"
+    for _agmsg_t in $AGMSG_SHARED_SKILL_TPL_TYPES; do
+      if grep -q "whoami.sh.*$_agmsg_t" "$SKILL_DIR/SKILL.md" 2>/dev/null; then
+        AGENT_TYPE="$_agmsg_t"
+        break
+      fi
+    done
+    unset _agmsg_t
   fi
-  # The shared SKILL.md uses the codex template by default; gemini/antigravity/
-  # opencode get their own. (claude-code and copilot reuse the codex-typed
-  # shared SKILL.md; their dedicated copies are dropped separately below.)
+  # The shared SKILL.md uses the codex template by default; the types in
+  # AGMSG_SHARED_SKILL_TPL_TYPES get their own. (claude-code and copilot reuse
+  # the codex-typed shared SKILL.md; their dedicated copies are dropped
+  # separately below.)
   TPL_TYPE="codex"
-  case "$AGENT_TYPE" in
-    gemini|antigravity|opencode|hermes|cursor|grok-build) TPL_TYPE="$AGENT_TYPE" ;;
+  case " $AGMSG_SHARED_SKILL_TPL_TYPES " in
+    *" $AGENT_TYPE "*) TPL_TYPE="$AGENT_TYPE" ;;
   esac
   sed "s/__SKILL_NAME__/$SKILL_NAME/g" "$(agmsg_type_template_path "$TPL_TYPE")" > "$SKILL_DIR/SKILL.md"
   # Recursive sync so nested helper dirs (scripts/lib/, scripts/drivers/types/)
@@ -536,10 +581,10 @@ mkdir -p "$SKILL_DIR"/{scripts,types,db,agents}
 
 # SKILL.md is generated from the agent-specific command template, resolved from
 # the type manifest (scripts/drivers/types/<type>/template.md). The shared SKILL.md uses the
-# codex template by default; gemini/antigravity/opencode get their own.
+# codex template by default; the types in AGMSG_SHARED_SKILL_TPL_TYPES get their own.
 TPL_TYPE="codex"
-case "$AGENT_TYPE" in
-  gemini|antigravity|opencode|hermes|cursor|grok-build) TPL_TYPE="$AGENT_TYPE" ;;
+case " $AGMSG_SHARED_SKILL_TPL_TYPES " in
+  *" $AGENT_TYPE "*) TPL_TYPE="$AGENT_TYPE" ;;
 esac
 sed "s/__SKILL_NAME__/$CMD_NAME/g" "$(agmsg_type_template_path "$TPL_TYPE")" > "$SKILL_DIR/SKILL.md"
 # Recursive sync so nested helper dirs (scripts/lib/, scripts/drivers/types/) ship
