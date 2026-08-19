@@ -18,16 +18,35 @@ setup() {
   export FAKE_RUN_MODE=failed
   export FAKE_RUN_ID=12345
   export FAKE_JOB_ID=67890
+  export FAKE_ENV_LOG="$TEST_SKILL_DIR/fake-env.log"
+  export FAKE_AUTH_TOKEN_MODE=fail
   mkdir -p "$FAKE_BIN" "$TEST_SKILL_DIR/scratch"
   : > "$FAKE_WRITE_LOG"
   : > "$FAKE_READ_LOG"
   : > "$FAKE_PROMPT_LOG"
+  : > "$FAKE_ENV_LOG"
 
   cat > "$REAL_GH" <<'FAKE_GH'
 #!/usr/bin/env bash
 set -euo pipefail
 
 : "${FAKE_WRITE_LOG:?}"
+printf 'GH_TOKEN=%s argv=%s\n' "${GH_TOKEN:-}" "$*" >> "${FAKE_ENV_LOG:-/dev/null}"
+
+if [ "${1:-}" = auth ] && [ "${2:-}" = token ] && [ "${3:-}" = --user ]; then
+  case "${FAKE_AUTH_TOKEN_MODE:-fail}" in
+    known)
+      case "${4:-}" in
+        kappaseijin4claude) printf 'tok-claude\n' ;;
+        kappaseijin4codex) printf 'tok-codex\n' ;;
+        *) exit 1 ;;
+      esac
+      ;;
+    empty) printf '\n' ;;
+    fail) exit 1 ;;
+  esac
+  exit 0
+fi
 : "${FAKE_READ_LOG:?}"
 : "${FAKE_PROMPT_LOG:?}"
 
@@ -154,6 +173,19 @@ assert_rejected() {
   : > "$FAKE_WRITE_LOG"
 }
 
+# Writes a fake whoami.sh printing a fixed line, and points
+# AGMSG_WHOAMI_SCRIPT at it. Mirrors the real script's plain-text contract
+# (`agent=... teams=... type=...`, optionally ` multiple=true`).
+fake_whoami() {
+  local line="$1" path="$TEST_SKILL_DIR/fake-whoami.sh"
+  cat > "$path" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' '$line'
+EOF
+  chmod +x "$path"
+  export AGMSG_WHOAMI_SCRIPT="$path"
+}
+
 @test "GHG-01: rejects an issue writer targeting a third-party owner" {
   assert_rejected issue create --repo thirdparty/fixture --title "blocked"
 }
@@ -245,6 +277,79 @@ assert_rejected() {
   export FAKE_DEFAULT_MODE=thirdparty
   export FAKE_CWD_MODE=allowed
   assert_rejected issue comment 10 --body "blocked"
+}
+
+# --- Proactive account selection (agmsg#83) ---
+#
+# whoami.sh already disambiguates "which agmsg seat is THIS calling process"
+# far better than a bare cwd (a single cwd routinely hosts more than one
+# vendor's registration -- e.g. this repo's own agmsg_owner_claude and
+# agmsg_owner_codex are both registered at the same project path, which is
+# exactly why the withdrawn herdr-agent-monitor resolve_roster_vendor()
+# design, keyed on cwd alone, could not have resolved this repo's own
+# directory). These tests exercise the new proactively_select_account(),
+# gated so it only ever fills in a credential the caller left unset -- never
+# overriding an explicit choice, never turning a working call into a failure.
+
+@test "GHG-P1: proactively selects the claude-code account when identity resolves cleanly" {
+  fake_whoami 'agent=agmsg_owner_claude teams=agmsg type=claude-code project=/work'
+  export FAKE_AUTH_TOKEN_MODE=known
+  run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
+  [ "$status" -eq 0 ]
+  grep -q 'argv=auth token --user kappaseijin4claude' "$FAKE_ENV_LOG"
+  grep -q '^GH_TOKEN=tok-claude argv=pr create' "$FAKE_ENV_LOG"
+}
+
+@test "GHG-P2: proactively selects the codex account when identity resolves cleanly" {
+  fake_whoami 'agent=agmsg_owner_codex teams=agmsg type=codex project=/work'
+  export FAKE_AUTH_TOKEN_MODE=known
+  run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
+  [ "$status" -eq 0 ]
+  grep -q '^GH_TOKEN=tok-codex argv=pr create' "$FAKE_ENV_LOG"
+}
+
+@test "GHG-P3: an explicit GH_CONFIG_DIR is never overridden" {
+  fake_whoami 'agent=agmsg_owner_claude teams=agmsg type=claude-code project=/work'
+  export FAKE_AUTH_TOKEN_MODE=known
+  run env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR=/somewhere "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
+  [ "$status" -eq 0 ]
+  run grep -q 'auth token' "$FAKE_ENV_LOG"
+  [ "$status" -ne 0 ]
+}
+
+@test "GHG-P4: an ambiguous identity (multiple=true) is not proactively selected" {
+  fake_whoami 'agent=alice teams=myteam type=claude-code multiple=true project=/work'
+  export FAKE_AUTH_TOKEN_MODE=known
+  run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
+  [ "$status" -eq 0 ]
+  run grep -q 'auth token' "$FAKE_ENV_LOG"
+  [ "$status" -ne 0 ]
+}
+
+@test "GHG-P5: a not-joined identity is not proactively selected" {
+  fake_whoami 'status=not_joined available_teams=myteam'
+  export FAKE_AUTH_TOKEN_MODE=known
+  run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
+  [ "$status" -eq 0 ]
+  run grep -q 'auth token' "$FAKE_ENV_LOG"
+  [ "$status" -ne 0 ]
+}
+
+@test "GHG-P6: a command outside the PR-account scope is not proactively selected" {
+  fake_whoami 'agent=agmsg_owner_claude teams=agmsg type=claude-code project=/work'
+  export FAKE_AUTH_TOKEN_MODE=known
+  run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" issue create --repo kappaseijin/fixture --title allowed
+  [ "$status" -eq 0 ]
+  run grep -q 'auth token' "$FAKE_ENV_LOG"
+  [ "$status" -ne 0 ]
+}
+
+@test "GHG-P7: a failed token lookup falls through without failing the call" {
+  fake_whoami 'agent=agmsg_owner_claude teams=agmsg type=claude-code project=/work'
+  export FAKE_AUTH_TOKEN_MODE=fail
+  run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
+  [ "$status" -eq 0 ]
+  grep -q '^GH_TOKEN= argv=pr create' "$FAKE_ENV_LOG"
 }
 
 @test "GHG-09: parses the equals form of --repo" {

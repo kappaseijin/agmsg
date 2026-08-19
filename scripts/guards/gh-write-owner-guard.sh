@@ -741,5 +741,55 @@ enforce_optional_pr_account_guard() {
     die "account policy rejected role '$role' (expected $expected, got ${actual:-<unresolvable>})"
 }
 
+# Proactive account selection (agmsg#83, and the withdrawn herdr-agent-monitor
+# resolve_roster_vendor() from Issue #110/PR #173 -- see that project's git
+# history commit a1015ff for the reference design this draws on).
+#
+# A cwd->role static map (pr-account-policy.conf, above) cannot express "which
+# agmsg seat is THIS calling process" -- a single cwd routinely hosts more than
+# one vendor's registration (e.g. both agmsg_owner_claude and agmsg_owner_codex
+# are registered at this very directory), so a cwd-keyed lookup alone cannot
+# tell them apart. whoami.sh already solves exactly that disambiguation for its
+# own purpose (session-start markers, ancestor-pid walk, actas locks), so this
+# reuses it rather than re-deriving process identity from scratch.
+#
+# Deliberately narrow: harness-vendor granularity only (claude-code vs codex),
+# not the full producer/reviewer role split pr-account-policy.conf's role map
+# encodes -- that static map continues to own role-level policy unchanged.
+# This only removes the "remember to type GH_CONFIG_DIR=..." step for the
+# common case where the caller hasn't already chosen an account.
+#
+# Every failure mode (whoami.sh missing or ambiguous/absent identity, no
+# matching gh-logged-in account) falls through silently, unchanged from
+# today's behavior -- this never overrides an explicit caller-set credential
+# and never turns a currently-working call into a failing one.
+proactively_select_account() {
+  case "$SUBCOMMAND" in
+    'pr create'|'pr comment'|'pr review') ;;
+    *) return 0 ;;
+  esac
+  [ -z "${GH_CONFIG_DIR:-}" ] || return 0
+  { [ -z "${GH_TOKEN:-}" ] && [ -z "${GITHUB_TOKEN:-}" ]; } || return 0
+  local whoami_script="${AGMSG_WHOAMI_SCRIPT:-$HOME/.agents/skills/agmsg/scripts/whoami.sh}"
+  [ -x "$whoami_script" ] || return 0
+  local out type expected token
+  out="$(bash "$whoami_script" "$CURRENT_CWD" 2>/dev/null)" || return 0
+  case "$out" in
+    agent=*' teams='*' type='*) ;;
+    *) return 0 ;;
+  esac
+  case "$out" in *' multiple=true'*) return 0 ;; esac
+  type="${out#*type=}"; type="${type%% *}"
+  case "$type" in
+    claude-code) expected=kappaseijin4claude ;;
+    codex) expected=kappaseijin4codex ;;
+    *) return 0 ;;
+  esac
+  token="$("$REAL_GH" auth token --user "$expected" 2>/dev/null)" || return 0
+  [ -n "$token" ] || return 0
+  export GH_TOKEN="$token"
+}
+
+proactively_select_account
 enforce_optional_pr_account_guard
 exec "$REAL_GH" "$@"
