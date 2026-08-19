@@ -60,3 +60,25 @@ AskUserQuestion で提示した3択（Codex 復帰まで待つ／ユーザー自
 `herdr-agent-monitor_owner_codex`（現 `herdr-agent-monitor_owner_claude`）へ agmsg 経由で
 本方針を通知した（2026-08-17T06 台）。対向チームも独立に同様の fail-closed 方針へ到達しており、
 今回のユーザー決定と矛盾しない。
+
+## 適用の限定: 根の深い調査は Codex 復帰まで保留（2026-08-19 ユーザー決定）
+
+- 事象: PR #87（Issue #85 の修正、`team-work.sh` 未初期化store問題）が、無関係な既存テスト
+  （`tests/test_remote_status_liveness.bats` の `sync start` 系、macOS runner限定）の
+  ハングにより、guarded single-job rerunを**5回連続**で阻まれた。shard実行順の解析により
+  PR #87 の差分がこのハングの原因ではないことは確定的に示せたが（ハング発生箇所は
+  PR #87 の変更を経由するテストより shard 内で先に実行される）、ハング自体の根本原因は
+  未解明のまま。詳細は agmsg Issue #88。
+- AskUserQuestion で3択（間隔を空けて再試行継続／しばらく待って再試行／admin merge で
+  必須チェックを回避）を提示したところ、ユーザーはいずれでもなく
+  **「codexが戻ってくるまで調査させる」**と回答した。
+- **解釈:** 「PRがCI cleanならマージ」という本決定書の基本方針そのものは維持されるが、
+  **原因不明で持続的なCIインフラ相当の問題（今回のような繰り返しハング）の根本調査は
+  Claude単独では行わず、Codex復帰（2026-08-20T12:37+09:00 予定）を待つ。**
+  日常的な「flaky testを1回guarded rerunすれば通る」程度の対応は本決定書の範囲内で
+  Claude単独のまま継続する。今回のように単発rerunで解消しない・原因が本差分に無いと
+  確定した後も繰り返す場合は、admin mergeのような不可逆/例外的な回避策に自分で
+  踏み込まず、いったん保留してユーザー・Codexの判断を待つ。
+- **適用:** PR #87 は現時点で merge せず open のまま保持する。Issue #88 に本決定への
+  参照と現状（5回連続ハング、shard実行順による原因除外の証跡）を記録済み。Codex復帰後、
+  Issue #88 の調査を依頼する。
