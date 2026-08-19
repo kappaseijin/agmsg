@@ -683,6 +683,14 @@ role is reported for remediation; it is not started automatically.
 `findings`, `remediation`, the G2 `sourceDigest`/`auditDigest`, and a
 `reconcileDigest`. It detects `expired_lease`, `upstream_closed`,
 `orphan_ready`, `writeback_required`, and `stale_state` independently.
+`orphan_ready` means the audit already classified the item as `ready` (see the
+table above -- an open source with no live matching lease) but its packed
+`ownerSeat` does not currently resolve to exactly one live, deliverable
+roster registration. This is the PM/owner liveness signal: it fires exactly
+as designed against an isolated or test roster with no matching registered
+seat, not only against a real owner who has stopped running, so seeing it in
+a sandboxed dry run is expected and is not evidence of a lease or dispatch
+defect.
 It changes no SQLite state unless an explicit heartbeat path is supplied; the
 parent directory must already exist. The heartbeat records `cycleId`,
 `startedAt`, `finishedAt`, `result`, and `sourceDigest` in canonical JSON.
