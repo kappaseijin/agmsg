@@ -109,7 +109,7 @@ _stub_ps_printing() {
   esac
 
   # The real ps hands us a path with a space -- the premise of the stub above.
-  [[ "$raw" == *"Application Support"* ]]
+  grep -q "Application Support" <<< "$raw"
 
   run compat_get_comm "$_PROC_PID"
   [ "$status" -eq 0 ]
