@@ -100,6 +100,19 @@ if (input !== JSON.stringify(sort(value))) process.exit(1);
   [ "$(json_value "$output" ready[0].workItemId)" = "issue:42" ]
 }
 
+@test "team-work queue: an uninitialized store is ready, not unknown" {
+  local pack="$BATS_TEST_TMPDIR/open.json"
+  write_pack "$pack"
+  rm -f "$DBPATH"
+
+  run_team_work "$AUDIT_FIXTURES/open.json" queue "$pack"
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" classificationBasis.status)" = "ready" ]
+  [ "$(json_value "$output" classificationBasis.readyCount)" = "1" ]
+  [ "$(json_value "$output" ready[0].workItemId)" = "issue:42" ]
+}
+
 @test "team-work audit: records fully allocated basis for a live lease" {
   local pack="$BATS_TEST_TMPDIR/allocated.json"
   write_pack "$pack"

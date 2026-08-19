@@ -204,6 +204,18 @@ INSERT INTO team_work_current(
   assert_finding "$output" stale_state
 }
 
+@test "team-work reconcile: an uninitialized store reports healthy, not stale_state" {
+  local pack="$BATS_TEST_TMPDIR/uninitialized.json"
+  write_pack "$pack"
+  rm -f "$DBPATH"
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" reconcile "$pack" TEAM_WORK_NOW=101 TEAM_WORK_FAKE_DELIVERY=true
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" result)" = "healthy" ]
+  [ "$(json_value "$output" findings)" = "[]" ]
+}
+
 @test "team-work reconcile: emits canonical JSON and does not mutate the local store" {
   local pack="$BATS_TEST_TMPDIR/read-only.json"
   local database="$TEST_SKILL_DIR/db/messages.db"
