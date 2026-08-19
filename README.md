@@ -609,8 +609,11 @@ commands do not modify the contract pack, team configuration, `messages`,
 Use these commands to compare the pack and its local lease rows with live
 GitHub Issue / PR state. They require `node` and use authenticated `gh` plus
 `sqlite3` when those live sources are available on `PATH`; an unavailable live
-source becomes an `unknown` result. They read the existing local store but do
-**not** initialize or write it.
+source becomes an `unknown` result. They idempotently ensure the local
+store's schema exists -- a team's first-ever `observe`/`queue`/`audit` call
+sees a genuinely empty store and classifies packed work normally rather than
+reporting `unknown` for lack of a store -- but never write a lease, dispatch,
+or message row.
 
 ```bash
 # See every packed item's observed GitHub/local state.
