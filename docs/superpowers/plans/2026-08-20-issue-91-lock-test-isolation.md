@@ -57,7 +57,7 @@ sequenceDiagram
 
 - [x] **Step 1: Confirm the current tree and root cause.** The isolated diagnostic observed `pidfile=yes lock_at_pidfile=present`, while the source shows `agmsg_lock_release` occurs after pidfile creation and before readiness polling.
 
-- [ ] **Step 2: Commit only this plan and push the branch.**
+- [x] **Step 2: Commit only this plan and push the branch.**
 
 ```bash
 git add -- docs/superpowers/plans/2026-08-20-issue-91-lock-test-isolation.md
@@ -65,7 +65,7 @@ git commit -m "docs: plan issue 91 lock test isolation"
 git push -u origin issue-91-test-isolation
 ```
 
-- [ ] **Step 3: Create one draft PR as `kappaseijin4codex`.** Link Issue #91 and state that the implementation is intentionally not yet included; the draft exists for early cross-vendor review. Do not create a second PR if a matching PR already exists.
+- [x] **Step 3: Create one draft PR as `kappaseijin4codex`.** Link Issue #91 and state that the implementation is intentionally not yet included; the draft exists for early cross-vendor review. Do not create a second PR if a matching PR already exists. Draft PR: [#95](https://github.com/kappaseijin/agmsg/pull/95).
 
 ---
 
@@ -79,7 +79,7 @@ git push -u origin issue-91-test-isolation
 - Consumes: `lock`, `starter`, and the existing `wait_for_missing` helper.
 - Produces: a test that takes the lock only after the starter has released it, while still requiring the starter to be alive for the retake-failure scenario.
 
-- [ ] **Step 1: Write the failing/diagnostic assertion before the fix.** Insert a temporary assertion immediately after the pidfile wait:
+- [x] **Step 1: Write the failing/diagnostic assertion before the fix.** Insert a temporary assertion immediately after the pidfile wait:
 
 ```bash
 [ ! -d "$lock" ]
@@ -87,9 +87,9 @@ git push -u origin issue-91-test-isolation
 
 Run: `bats --filter 'cleanup that cannot retake' tests/test_remote_engine_start_refusal.bats`
 
-Expected: on the measured scheduling path, this assertion fails because `pidfile` visibility precedes the parent's `agmsg_lock_release`.
+Observed: the assertion failed on the measured scheduling path because `pidfile` visibility precedes the parent's `agmsg_lock_release`; it was removed after the observation.
 
-- [ ] **Step 2: Replace the timing assertion with a bounded condition wait.** Use the existing helper and check that the starter remains alive before taking the lock:
+- [x] **Step 2: Replace the timing assertion with a bounded condition wait.** Use the existing helper and check that the starter remains alive before taking the lock:
 
 ```bash
 wait_for_missing "$lock"
@@ -99,7 +99,7 @@ mkdir "$lock"
 
 This waits for the actual condition, keeps the test bounded by the helper's ten-second ceiling, and fails if the starter exits before the test can exercise cleanup.
 
-- [ ] **Step 3: Run the focused test and verify GREEN.**
+- [x] **Step 3: Run the focused test and verify GREEN.**
 
 Run: `bats --print-output-on-failure --filter 'cleanup that cannot retake' tests/test_remote_engine_start_refusal.bats`
 
@@ -112,17 +112,17 @@ Expected: the test passes and still asserts the diagnostic plus both preserved r
 **Files:**
 - Test: `tests/test_remote_engine_start_refusal.bats`
 
-- [ ] **Step 1: Run the full target file.**
+- [x] **Step 1: Run the full target file.**
 
 Run: `bats --print-output-on-failure tests/test_remote_engine_start_refusal.bats`
 
-Expected: all nine tests pass.
+Observed: 8/9 passed. The existing writable-run-dir control failed both before and after this change because the sandbox blocks signals to the engine; the clean parent worktree reproduced the same failure.
 
-- [ ] **Step 2: Run the negative control for the synchronization.** Temporarily remove the `wait_for_missing "$lock"` line while retaining the `kill -0` assertion, run the focused test repeatedly, and capture a run where the immediate lock assertion fails on the measured path. Restore the wait immediately.
+- [x] **Step 2: Run the negative control for the synchronization.** The temporary immediate `[ ! -d "$lock" ]` assertion failed while the pidfile was already visible, and the diagnostic observed `lock_at_pidfile=present`; the assertion was removed and the bounded wait restored.
 
-- [ ] **Step 3: Run the stale-lock control.** Temporarily change the wait target to a path that is never created, run the focused test, and verify it fails at the bounded wait rather than reaching the record assertions. Restore the correct `$lock` target.
+- [x] **Step 3: Run the stale-lock control.** Temporarily changed the wait target to the persistent `TEST_SKILL_DIR`, and the focused test failed at the bounded wait with `sync starter did not release the registry lock before the retake setup`; restored the correct `$lock` target.
 
-- [ ] **Step 4: Run relevant repository checks.**
+- [x] **Step 4: Run relevant repository checks.** `test_team.bats` reached 88 tests with one unrelated concurrent-join failure at line 157; both target-file and parent-worktree evidence identify environment/race failures outside this diff. Both shell syntax checks and `git diff --check` passed.
 
 ```bash
 bats tests/test_remote_engine_start_refusal.bats tests/test_team.bats
@@ -130,7 +130,7 @@ bash -n scripts/remote.sh scripts/lib/registry-lock.sh
 git diff --check
 ```
 
-- [ ] **Step 5: Inspect the final diff.** Confirm only the plan and the target test changed; no production lock code or unrelated work is staged.
+- [x] **Step 5: Inspect the final diff.** Only this plan and `tests/test_remote_engine_start_refusal.bats` are intended to change; production lock code is untouched.
 
 ---
 
