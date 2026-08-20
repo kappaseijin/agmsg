@@ -1,7 +1,8 @@
 ---
 type: ArchitectureAssessment
 title: "Issue #9: scale_exporter live work queue の共通 tooling 境界"
-status: proposed
+status: superseded
+superseded_by: "2026-08-20T170319_issue-92-team-work-rollout.md"
 issue: "https://github.com/kappaseijin/agmsg/issues/9"
 timestamp: "2026-08-11T12:47:20+09:00"
 ---
