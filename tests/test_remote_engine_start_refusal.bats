@@ -372,6 +372,14 @@ skip_if_root() {
 
   # Somebody else takes the lock and keeps it. Held with mkdir directly, the way
   # the library takes it, so no helper of ours has to survive the wait.
+  if ! wait_for_missing "$lock"; then
+    echo "sync starter did not release the registry lock before the retake setup" >&2
+    return 1
+  fi
+  if ! kill -0 "$starter" 2>/dev/null; then
+    echo "sync starter exited before the retake setup could take the lock" >&2
+    return 1
+  fi
   mkdir "$lock"
   printf '%s\n' "KEPT-CYCLE-STATE" > "$cycles"
 
