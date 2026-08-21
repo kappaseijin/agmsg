@@ -1,0 +1,34 @@
+{
+  "responses": {
+    "issue:kappaseijin/agmsg#42:": {
+      "data": {
+        "repository": {
+          "issue": {
+            "number": 42,
+            "state": "OPEN",
+            "closedByPullRequestsReferences": {
+              "totalCount": 0,
+              "nodes": [],
+              "pageInfo": {"hasNextPage": false, "endCursor": null}
+            }
+          }
+        }
+      }
+    },
+    "issue:kappaseijin/agmsg#43:": {
+      "data": {
+        "repository": {
+          "issue": {
+            "number": 43,
+            "state": "OPEN",
+            "closedByPullRequestsReferences": {
+              "totalCount": 0,
+              "nodes": [],
+              "pageInfo": {"hasNextPage": false, "endCursor": null}
+            }
+          }
+        }
+      }
+    }
+  }
+}

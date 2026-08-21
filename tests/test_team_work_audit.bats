@@ -24,6 +24,10 @@ write_pack() {
   printf '%s\n' '{"schemaVersion":1,"team":"demo","workItems":[{"schemaVersion":1,"workItem":{"id":"issue:42","source":{"kind":"issue","repository":"kappaseijin/agmsg","number":42}},"ownerSeat":"owner","workKinds":["implementation"],"relations":[],"revision":1,"classificationBasis":{"contentDigest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","refs":[{"kind":"issue","repository":"kappaseijin/agmsg","number":42}]},"writebackRequired":false}]}' > "$1"
 }
 
+write_mixed_pack() {
+  printf '%s\n' '{"schemaVersion":1,"team":"demo","workItems":[{"schemaVersion":1,"workItem":{"id":"issue:42","source":{"kind":"issue","repository":"kappaseijin/agmsg","number":42}},"ownerSeat":"owner","workKinds":["implementation"],"relations":[],"revision":1,"classificationBasis":{"contentDigest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","refs":[{"kind":"issue","repository":"kappaseijin/agmsg","number":42}]},"writebackRequired":false},{"schemaVersion":1,"workItem":{"id":"issue:43","source":{"kind":"issue","repository":"kappaseijin/agmsg","number":43}},"ownerSeat":"owner","workKinds":["implementation"],"relations":[],"revision":1,"classificationBasis":{"contentDigest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","refs":[{"kind":"issue","repository":"kappaseijin/agmsg","number":43}]},"writebackRequired":false}]}' > "$1"
+}
+
 write_closing_pack() {
   printf '%s\n' '{"schemaVersion":1,"team":"demo","workItems":[{"schemaVersion":1,"workItem":{"id":"issue:42","source":{"kind":"issue","repository":"kappaseijin/agmsg","number":42}},"ownerSeat":"owner","workKinds":["implementation"],"relations":[{"kind":"pull_request","repository":"kappaseijin/agmsg","number":777,"relation":"closes","closingIssue":{"repository":"kappaseijin/agmsg","number":42}}],"revision":1,"classificationBasis":{"contentDigest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","refs":[{"kind":"issue","repository":"kappaseijin/agmsg","number":42}]},"writebackRequired":false}]}' > "$1"
 }
@@ -55,6 +59,14 @@ assert_reason() {
   JSON_INPUT="$json" EXPECTED="$expected" node -e '
 const value = JSON.parse(process.env.JSON_INPUT);
 if (!value.classificationBasis.reasons.some((reason) => reason.code === process.env.EXPECTED)) process.exit(1);
+'
+}
+
+assert_no_reason() {
+  local json="$1" unexpected="$2"
+  JSON_INPUT="$json" UNEXPECTED="$unexpected" node -e '
+const value = JSON.parse(process.env.JSON_INPUT);
+if (value.classificationBasis.reasons.some((reason) => reason.code === process.env.UNEXPECTED)) process.exit(1);
 '
 }
 
@@ -111,6 +123,114 @@ if (input !== JSON.stringify(sort(value))) process.exit(1);
   [ "$(json_value "$output" classificationBasis.status)" = "ready" ]
   [ "$(json_value "$output" classificationBasis.readyCount)" = "1" ]
   [ "$(json_value "$output" ready[0].workItemId)" = "issue:42" ]
+}
+
+@test "team-work queue: an expired blocked item is unknown and not ready" {
+  local pack="$BATS_TEST_TMPDIR/expired-blocked.json"
+  local queue_output
+  write_pack "$pack"
+  run env TEAM_WORK_NOW=4102444800 bash "$SCRIPTS/team-work.sh" claim demo "$pack" issue:42 owner 0
+  [ "$status" -eq 0 ]
+  run env TEAM_WORK_NOW=4102444800 bash "$SCRIPTS/team-work.sh" set-state demo "$pack" issue:42 dispatch blocked
+  [ "$status" -eq 0 ]
+
+  export TEAM_WORK_NOW=4102444800
+  run_team_work "$AUDIT_FIXTURES/open.json" queue "$pack"
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" classificationBasis.status)" = "unknown" ]
+  [ "$(json_value "$output" classificationBasis.readyCount)" = "0" ]
+  [ "$(json_value "$output" ready)" = "[]" ]
+  [ "$(json_value "$output" items[0].localState.workflowState)" = "blocked" ]
+  assert_reason "$output" blocked_work_item
+
+  queue_output="$output"
+  run_team_work "$AUDIT_FIXTURES/open.json" audit "$pack"
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$queue_output" ready)" = "[]" ]
+  [ "$(json_value "$output" violations)" = "[]" ]
+  assert_reason "$output" blocked_work_item
+}
+
+@test "team-work queue: an active blocked item remains fully allocated" {
+  local pack="$BATS_TEST_TMPDIR/active-blocked.json"
+  write_pack "$pack"
+  run env TEAM_WORK_NOW=101 bash "$SCRIPTS/team-work.sh" claim demo "$pack" issue:42 owner 3600
+  [ "$status" -eq 0 ]
+  run env TEAM_WORK_NOW=101 bash "$SCRIPTS/team-work.sh" set-state demo "$pack" issue:42 dispatch blocked
+  [ "$status" -eq 0 ]
+
+  export TEAM_WORK_NOW=101
+  run_team_work "$AUDIT_FIXTURES/open.json" queue "$pack"
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" classificationBasis.status)" = "fully_allocated" ]
+  [ "$(json_value "$output" classificationBasis.readyCount)" = "0" ]
+  [ "$(json_value "$output" ready)" = "[]" ]
+  [ "$(json_value "$output" items[0].localState.status)" = "active" ]
+  [ "$(json_value "$output" items[0].localState.workflowState)" = "blocked" ]
+  assert_no_reason "$output" blocked_work_item
+}
+
+@test "team-work queue: only expired blocked items explain a mixed blocked queue" {
+  local pack="$BATS_TEST_TMPDIR/mixed-blocked-reasons.json" now
+  write_mixed_pack "$pack"
+  now="$(date +%s)"
+  run env TEAM_WORK_NOW="$now" bash "$SCRIPTS/team-work.sh" claim demo "$pack" issue:42 owner 3600
+  [ "$status" -eq 0 ]
+  run env TEAM_WORK_NOW="$now" bash "$SCRIPTS/team-work.sh" claim demo "$pack" issue:43 owner 0
+  [ "$status" -eq 0 ]
+  run env TEAM_WORK_NOW="$now" bash "$SCRIPTS/team-work.sh" set-state demo "$pack" issue:42 dispatch blocked
+  [ "$status" -eq 0 ]
+  run env TEAM_WORK_NOW="$now" bash "$SCRIPTS/team-work.sh" set-state demo "$pack" issue:43 dispatch blocked
+  [ "$status" -eq 0 ]
+
+  export TEAM_WORK_NOW="$((now + 1))"
+  run_team_work "$AUDIT_FIXTURES/open-two.json" queue "$pack"
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" classificationBasis.status)" = "unknown" ]
+  [ "$(json_value "$output" ready)" = "[]" ]
+  [ "$(json_value "$output" classificationBasis.reasons)" = '[{"code":"blocked_work_item","workItemId":"issue:43"}]' ]
+}
+
+@test "team-work queue: acknowledged state clears a blocked item" {
+  local pack="$BATS_TEST_TMPDIR/acknowledged-blocked.json"
+  write_pack "$pack"
+  run env TEAM_WORK_NOW=4102444800 bash "$SCRIPTS/team-work.sh" claim demo "$pack" issue:42 owner 0
+  [ "$status" -eq 0 ]
+  run env TEAM_WORK_NOW=4102444800 bash "$SCRIPTS/team-work.sh" set-state demo "$pack" issue:42 dispatch blocked
+  [ "$status" -eq 0 ]
+  run env TEAM_WORK_NOW=4102444800 bash "$SCRIPTS/team-work.sh" set-state demo "$pack" issue:42 dispatch acknowledged
+  [ "$status" -eq 0 ]
+
+  export TEAM_WORK_NOW=4102444800
+  run_team_work "$AUDIT_FIXTURES/open.json" queue "$pack"
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" classificationBasis.status)" = "ready" ]
+  [ "$(json_value "$output" classificationBasis.readyCount)" = "1" ]
+  [ "$(json_value "$output" ready[0].workItemId)" = "issue:42" ]
+  [ "$(json_value "$output" items[0].localState.workflowState)" = "acknowledged" ]
+}
+
+@test "team-work queue: mixed blocked and unleased items stays ready" {
+  local pack="$BATS_TEST_TMPDIR/mixed-blocked.json"
+  write_mixed_pack "$pack"
+  run env TEAM_WORK_NOW=4102444800 bash "$SCRIPTS/team-work.sh" claim demo "$pack" issue:42 owner 0
+  [ "$status" -eq 0 ]
+  run env TEAM_WORK_NOW=4102444800 bash "$SCRIPTS/team-work.sh" set-state demo "$pack" issue:42 dispatch blocked
+  [ "$status" -eq 0 ]
+
+  export TEAM_WORK_NOW=4102444800
+  run_team_work "$AUDIT_FIXTURES/open-two.json" queue "$pack"
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" classificationBasis.status)" = "ready" ]
+  [ "$(json_value "$output" classificationBasis.readyCount)" = "1" ]
+  [ "$(json_value "$output" ready[0].workItemId)" = "issue:43" ]
+  [ "$(json_value "$output" items[0].localState.workflowState)" = "blocked" ]
 }
 
 @test "team-work audit: records fully allocated basis for a live lease" {
