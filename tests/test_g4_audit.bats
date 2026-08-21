@@ -205,7 +205,7 @@ if (input !== JSON.stringify(sort(value))) process.exit(1);
   [ "$(json_value "$output" coverage[0].number)" = "42" ]
   [ "$(json_value "$output" coverage[1].number)" = "43" ]
   [ "$(json_value "$output" entries[0].entryDigest)" != "" ]
-  [[ "$(json_value "$output" coverageDigest)" =~ ^sha256:[0-9a-f]{64}$ ]]
+  printf '%s\n' "$(json_value "$output" coverageDigest)" | grep -Eq '^sha256:[0-9a-f]{64}$'
   [ "$(json_value "$output" classificationBasis.reasons)" = "[]" ]
   assert_canonical_json "$output"
 }
@@ -243,13 +243,13 @@ if (input !== JSON.stringify(sort(value))) process.exit(1);
   [ "$status" -eq 0 ]
   [ "$(json_value "$output" classificationBasis.status)" = "unknown" ]
   [ "$(json_value "$output" ready)" = "[]" ]
-  [[ "$output" == *'"code":"coverage_mismatch"'* ]]
+  grep -Fq '"code":"coverage_mismatch"' <<<"$output"
 
   run_g4_audit "$G4_FIXTURES/error.json" "$pack"
   [ "$status" -eq 0 ]
   [ "$(json_value "$output" classificationBasis.status)" = "unknown" ]
   [ "$(json_value "$output" ready)" = "[]" ]
-  [[ "$output" == *'"code":"coverage_source_unavailable"'* ]]
+  grep -Fq '"code":"coverage_source_unavailable"' <<<"$output"
 }
 
 @test "g4-audit: duplicate or incomplete pagination never becomes ready" {
@@ -278,7 +278,7 @@ if (input !== JSON.stringify(sort(value))) process.exit(1);
   [ "$(json_value "$output" entries[0].state)" = "blocked" ]
   [ "$(json_value "$output" entries[0].releasePredicate.status)" = "false" ]
   [ "$(json_value "$output" ready)" = "[]" ]
-  [[ "$output" == *'"code":"blocked_predicate_false"'* ]]
+  grep -Fq '"code":"blocked_predicate_false"' <<<"$output"
 
   write_g4_pack "$pack"
   G4_PREDICATE_AT="2020-01-01T00:00:00+09:00" mutate_g4_pack "$pack" blocked-predicate
@@ -298,19 +298,19 @@ if (input !== JSON.stringify(sort(value))) process.exit(1);
   mutate_g4_pack "$pack" ready-blocker
   run_g4_audit "$G4_FIXTURES/two-open.json" "$pack"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"ready entry must not have blocker"* ]]
+  grep -Fq 'ready entry must not have blocker' <<<"$output"
 
   write_g4_pack "$pack"
   mutate_g4_pack "$pack" blocked-no-predicate
   run_g4_audit "$G4_FIXTURES/two-open.json" "$pack"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"blocked entry requires blocker.reasonCode and blocker.releasePredicate"* ]]
+  grep -Fq 'blocked entry requires blocker.reasonCode and blocker.releasePredicate' <<<"$output"
 
   write_g4_pack "$pack"
   mutate_g4_pack "$pack" bad-scope-digest
   run_g4_audit "$G4_FIXTURES/two-open.json" "$pack"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"scopes[0].basis contentDigest does not match"* ]]
+  grep -Fq 'scopes[0].basis contentDigest does not match' <<<"$output"
 }
 
 @test "g4-audit: rejects unknown owner kind, invalid refs, and quiescent entries" {
@@ -320,13 +320,13 @@ if (input !== JSON.stringify(sort(value))) process.exit(1);
   G4_OWNER_SEAT=human write_g4_pack "$pack"
   run_g4_audit "$G4_FIXTURES/two-open.json" "$pack"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"owner must be an exact kind: seat"* ]]
+  grep -Fq 'owner must be an exact kind: seat' <<<"$output"
 
   write_g4_pack "$pack"
   mutate_g4_pack "$pack" invalid-ref
   run_g4_audit "$G4_FIXTURES/two-open.json" "$pack"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"scopes[0].basis.refs must be a non-empty array"* ]]
+  grep -Fq 'scopes[0].basis.refs must be a non-empty array' <<<"$output"
 
   write_g4_pack "$pack"
   mutate_g4_pack "$pack" quiescent-entry
@@ -352,6 +352,6 @@ if (input !== JSON.stringify(sort(value))) process.exit(1);
   for command in g4-bootstrap g4-transition g4-pull; do
     run bash "$SCRIPTS/team-work.sh" "$command" demo "$pack"
     [ "$status" -ne 0 ]
-    [[ "$output" == *"unknown team-work command"* ]]
+    grep -Fq 'unknown team-work command' <<<"$output"
   done
 }
