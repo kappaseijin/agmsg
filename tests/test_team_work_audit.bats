@@ -50,7 +50,7 @@ sha256_file() {
 
 run_team_work() {
   local fixture="$1" command="$2" pack="$3"
-  run env PATH="$FAKE_GH_BIN:$PATH" TEAM_WORK_GH_FIXTURE="$fixture" TEAM_WORK_GH_LOG="$TEAM_WORK_GH_LOG" \
+  run env PATH="$FAKE_GH_BIN:$PATH" TEAM_WORK_NOW="${TEAM_WORK_NOW:-}" TEAM_WORK_GH_FIXTURE="$fixture" TEAM_WORK_GH_LOG="$TEAM_WORK_GH_LOG" \
     bash "$SCRIPTS/team-work.sh" "$command" demo "$pack"
 }
 
