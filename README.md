@@ -421,6 +421,7 @@ See [docs/opencode.md](docs/opencode.md) for full setup instructions.
 ~/.agents/skills/<cmd>/scripts/history.sh <team> [agent_id] [limit]
 ~/.agents/skills/<cmd>/scripts/join.sh <team> <agent_id> <type> <project_path> [--role <role>] [--kind <seat|human|service>] [--force]
 ~/.agents/skills/<cmd>/scripts/team.sh <team> [--format human|json]
+~/.agents/skills/<cmd>/scripts/roster-normalize.sh <team> --check|--apply
 ~/.agents/skills/<cmd>/scripts/team-work.sh <validate|self-check|observe|queue|audit|reconcile|watchdog|dispatch|dispatch-ack|claim|ack|renew|release|set-state|link-pr|writeback> <team> <contract-pack.json> ...
 ~/.agents/skills/<cmd>/scripts/whoami.sh <project_path> [type] [--format human|json]
 ~/.agents/skills/<cmd>/scripts/delivery.sh set <mode> <type> <project_path>
@@ -457,6 +458,48 @@ They report roster structure only: use `message-status.sh` or
 Existing team configs remain usable through the human default output. JSON
 mode does not guess missing fields: a legacy or incomplete matching config
 returns exit code 2 with `schema error:` on stderr and no JSON on stdout.
+
+#### Normalize a legacy roster
+
+If a team's JSON roster predates the versioned contract and is missing only the
+root `schemaVersion`, use the normalizer. It adds the integer `1` after the
+complete candidate passes the same roster validator used by `team.sh`; it does
+not infer or change member roles, kinds, or registrations.
+
+Test against a disposable copy first. The copy must contain the installed
+script tree and the target team's config at the matching paths:
+
+```bash
+skill="$HOME/.agents/skills/agmsg"
+team=demo
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/agmsg-roster.XXXXXX")"
+mkdir -p "$scratch/scripts" "$scratch/teams/$team"
+cp -R "$skill/scripts/." "$scratch/scripts/"
+cp "$skill/teams/$team/config.json" "$scratch/teams/$team/config.json"
+
+bash "$scratch/scripts/roster-normalize.sh" "$team" --check
+bash "$scratch/scripts/roster-normalize.sh" "$team" --apply
+bash "$scratch/scripts/team.sh" "$team" --format json
+```
+
+When the copy reports `status: "ready"` without changing its config and then
+reports `status: "applied"`, run the same apply command on the installed team:
+
+```bash
+bash "$skill/scripts/roster-normalize.sh" "$team" --apply
+bash "$skill/scripts/team.sh" "$team" --format json
+```
+
+`--check` never writes the config or acquires the registry lock. `--apply`
+re-reads under the per-team lock and publishes the validated candidate with an
+atomic replacement. A current roster returns
+`status: "already_current"`; invalid JSON or incomplete member metadata exits
+with code `2`, prints a `schema error:` on stderr, emits no JSON on stdout, and
+leaves the config unchanged. If the error names a missing role, kind, or
+registration field, update that member through `join.sh` with explicit
+`--role` and `--kind` (and `--force` only when the existing registration is
+intentionally being updated); do not hand-edit `config.json`. Remove the
+disposable copy after verification if it contains sensitive roster data.
 
 ### Delivery capability JSON
 

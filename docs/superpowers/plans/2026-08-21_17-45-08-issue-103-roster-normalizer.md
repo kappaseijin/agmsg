@@ -2,7 +2,7 @@
 type: ImplementationPlan
 title: "Issue #103 roster schema v1 正規化コマンドの実装計画"
 description: "legacy roster の root schemaVersion を、shared validation と atomic write を通して正規化する。"
-status: proposed
+status: in_progress
 issue: "https://github.com/kappaseijin/agmsg/issues/103"
 timestamp: "2026-08-21T17:45:08+09:00"
 ---
@@ -43,7 +43,7 @@ timestamp: "2026-08-21T17:45:08+09:00"
 - Consumes: `$SCRIPTS`, `$TEST_SKILL_DIR`, `sqlite_mem`, `rf`（`tests/test_helper.bash` で提供）
 - Produces: `scripts/roster-normalize.sh <team> --check|--apply` の stdout / stderr / exit contract
 
-- [ ] **Step 1: normalizable legacy fixture と Bats helper を追加する**
+- [x] **Step 1: normalizable legacy fixture と Bats helper を追加する**
 
 `tests/test_team.bats` に次の helper を追加する。member はすでに `kind`、`role`、`registrations` を持つので、失敗原因は root `schemaVersion` の欠落だけになる。
 
@@ -61,7 +61,7 @@ config_sha256() {
 }
 ```
 
-- [ ] **Step 2: normalizable fixture が normalizer 前に schema error となる負の対照を書く**
+- [x] **Step 2: normalizable fixture が normalizer 前に schema error となる負の対照を書く**
 
 ```bash
 @test "roster-normalize: known missing schemaVersion fails team json before normalization" {
@@ -74,7 +74,7 @@ config_sha256() {
 }
 ```
 
-- [ ] **Step 3: `--check` の read-only contract を RED にする**
+- [x] **Step 3: `--check` の read-only contract を RED にする**
 
 ```bash
 @test "roster-normalize: check reports a ready candidate without changing config" {
@@ -90,7 +90,7 @@ config_sha256() {
 }
 ```
 
-- [ ] **Step 4: `--apply`、no-op、schema failure、input failure の RED cases を追加する**
+- [x] **Step 4: `--apply`、no-op、schema failure、input failure の RED cases を追加する**
 
 追加する case は以下の実行結果を一件ずつ assertion する。
 
@@ -102,7 +102,7 @@ missing member role  => rc 2, stdout empty, config SHA-256 unchanged
 invalid team ../bad  => rc 2, config outside $TEST_SKILL_DIR is absent
 ```
 
-- [ ] **Step 5: RED を確認する**
+- [x] **Step 5: RED を確認する**
 
 Run: `bats tests/test_team.bats`
 
@@ -130,7 +130,7 @@ PM がこの clone で Git 操作を代理する。programmer は commit 前に 
 - Consumes: `agmsg_validate_team_name`, `agmsg_lock_acquire`, `agmsg_lock_release`, `agmsg_write_atomic`, `agmsg_roster_contract_team_json`
 - Produces: `roster-normalize.sh <team> --check|--apply` with compact JSON stdout
 
-- [ ] **Step 1: parse exactly one mode and validate the team before resolving its path**
+- [x] **Step 1: parse exactly one mode and validate the team before resolving its path**
 
 Implement this public shape. Unknown / missing mode must exit 2 before any config read or lock acquisition.
 
@@ -143,7 +143,7 @@ source "$SCRIPT_DIR/lib/validate.sh"
 agmsg_validate_team_name "$TEAM" || exit 2
 ```
 
-- [ ] **Step 2: create one candidate builder with explicit version states**
+- [x] **Step 2: create one candidate builder with explicit version states**
 
 The helper takes a config path and requested team, returns the candidate JSON on stdout, and never writes. It must reject invalid JSON, missing team config, name mismatch, a present non-integer `schemaVersion`, or any candidate that `agmsg_roster_contract_team_json` rejects.
 
@@ -157,7 +157,7 @@ esac
 
 Write the candidate to a private sibling temporary file only for shared validator input, delete that file on every return path, and call `agmsg_roster_contract_team_json "$candidate_path" "$TEAM" >/dev/null` before reporting success. Its schema error must remain the command's stderr and stdout must remain empty.
 
-- [ ] **Step 3: implement `--check` without acquiring a mutation lock or writing config**
+- [x] **Step 3: implement `--check` without acquiring a mutation lock or writing config**
 
 `--check` calls the builder once and prints exactly:
 
@@ -168,7 +168,7 @@ printf '{"schemaVersion":1,"team":%s,"status":"ready","changed":%s}\n' \
 
 Use a local JSON quoting helper implemented with SQLite `json_quote`; do not splice unescaped team input into JSON.
 
-- [ ] **Step 4: implement `--apply` as one locked read-build-validate-publish transaction**
+- [x] **Step 4: implement `--apply` as one locked read-build-validate-publish transaction**
 
 Acquire `agmsg_lock_acquire "$TEAM_DIR"`; install a `trap` that releases the lock exactly once on `EXIT`, `INT`, and `TERM`; rebuild the candidate after lock acquisition; then call `agmsg_write_atomic "$CONFIG" "$candidate"` only if `changed=true`.
 
@@ -185,13 +185,13 @@ printf '{"schemaVersion":1,"team":%s,"status":"%s","changed":%s}\n' \
 
 The command does not call `join.sh`, edit journal files, mutate remote state, or infer metadata.
 
-- [ ] **Step 5: run the focused test until all roster-normalize cases pass**
+- [x] **Step 5: run the focused test until all roster-normalize cases pass**
 
 Run: `bats tests/test_team.bats`
 
 Expected: all existing tests and every new normalizer case PASS.
 
-- [ ] **Step 6: run shell syntax and diff checks**
+- [x] **Step 6: run shell syntax and diff checks**
 
 Run: `bash -n scripts/roster-normalize.sh && git diff --check`
 
@@ -218,7 +218,7 @@ PM performs the Git operation in this clone after receiving the exact paths and 
 - Consumes: `scripts/roster-normalize.sh <team> --check|--apply`
 - Produces: self-contained documentation of command, isolated validation, result, and recovery boundary
 
-- [ ] **Step 1: command reference に CLI を追加する**
+- [x] **Step 1: command reference に CLI を追加する**
 
 `README.md` の scripts command list へ次の一行を追加する。
 
@@ -226,11 +226,11 @@ PM performs the Git operation in this clone after receiving the exact paths and 
 ~/.agents/skills/<cmd>/scripts/roster-normalize.sh <team> --check|--apply
 ```
 
-- [ ] **Step 2: Machine-readable team roster 節に safety sequence を追加する**
+- [x] **Step 2: Machine-readable team roster 節に safety sequence を追加する**
 
 既存の `join.sh` / `team.sh --format json` の説明直後へ、scratch copy で `--apply` と `team.sh --format json` を成功させてから live `--apply` を一度実行する四行の command block を追加する。missing role / kind の場合は `join.sh --role --kind --force` を使い、config を手編集しないことを明記する。
 
-- [ ] **Step 3: documentation と functional path を確認する**
+- [x] **Step 3: documentation と functional path を確認する**
 
 Run: `rg -n 'roster-normalize\.sh|--check|--apply|direct.*edit' README.md && bats tests/test_team.bats`
 
@@ -257,11 +257,11 @@ PM が Git 操作を代理する場合も、programmer は staged paths、HEAD�
 - Consumes: scratch skill copy, candidate `team.sh --format json` result, feature head
 - Produces: Issue #103 evidence packet and independent Claude review request
 
-- [ ] **Step 1: scratch copy の normalizer を実行する**
+- [x] **Step 1: scratch copy の normalizer を実行する**
 
 Create a disposable copy outside the installed skill, run `roster-normalize.sh agmsg --apply` in that copy, then run its `team.sh agmsg --format json`. Do not run `--apply` in the real install during this test.
 
-- [ ] **Step 2: capture the required negative control**
+- [x] **Step 2: capture the required negative control**
 
 In the same scratch copy, remove only the root `schemaVersion` from a known-valid fixture, verify `team.sh --format json` returns exit 2, run normalizer `--apply`, then verify `team.sh --format json` returns exit 0. Record command, exit values, and feature HEAD without secret config contents.
 
