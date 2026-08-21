@@ -248,10 +248,12 @@ _agmsg_runtime_lock_resource_sql() {
 }
 
 agmsg_storage_ensure_initialized() {
-  local lib_dir init_script
+  local lib_dir init_script migration_script
   lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   init_script="$lib_dir/../internal/init-db.sh"
-  AGMSG_STORAGE_PATH="$(agmsg_storage_dir)" bash "$init_script" >/dev/null
+  migration_script="$lib_dir/../internal/migrate-team-work-dispatch.sh"
+  AGMSG_STORAGE_PATH="$(agmsg_storage_dir)" bash "$migration_script"
+  AGMSG_STORAGE_PATH="$(agmsg_storage_dir)" AGMSG_DISPATCH_MIGRATION_DONE=1 bash "$init_script" >/dev/null
 }
 
 agmsg_runtime_lock_acquire() {

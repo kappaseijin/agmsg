@@ -50,7 +50,7 @@ sha256_file() {
 
 run_team_work() {
   local fixture="$1" command="$2" pack="$3"
-  run env PATH="$FAKE_GH_BIN:$PATH" TEAM_WORK_GH_FIXTURE="$fixture" TEAM_WORK_GH_LOG="$TEAM_WORK_GH_LOG" \
+  run env PATH="$FAKE_GH_BIN:$PATH" TEAM_WORK_NOW="${TEAM_WORK_NOW:-}" TEAM_WORK_GH_FIXTURE="$fixture" TEAM_WORK_GH_LOG="$TEAM_WORK_GH_LOG" \
     bash "$SCRIPTS/team-work.sh" "$command" demo "$pack"
 }
 
@@ -186,7 +186,7 @@ if (input !== JSON.stringify(sort(value))) process.exit(1);
   run env TEAM_WORK_NOW="$now" bash "$SCRIPTS/team-work.sh" set-state demo "$pack" issue:43 dispatch blocked
   [ "$status" -eq 0 ]
 
-  export TEAM_WORK_NOW="$((now + 1))"
+  export TEAM_WORK_NOW="$((now + 2))"
   run_team_work "$AUDIT_FIXTURES/open-two.json" queue "$pack"
 
   [ "$status" -eq 0 ]
