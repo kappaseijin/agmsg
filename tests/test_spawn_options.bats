@@ -16,7 +16,8 @@ AGMSG_SPAWN_OPTIONS_FILE_WAS_SET="${AGMSG_SPAWN_OPTIONS_FILE+x}"
 
 agmsg_model_orchestration_sync() {
   local policy_file="${1:-}" options_file="${2:-}" rows
-  local role harness expected_model expected_effort section actual_model actual_effort
+  local role harness expected_model expected_effort section section_role
+  local actual_model actual_effort
   local checked=0
 
   [ "$#" -eq 2 ] || {
@@ -70,7 +71,14 @@ agmsg_model_orchestration_sync() {
 
   while IFS="$(printf '\t')" read -r role harness expected_model expected_effort; do
     [ "$harness" = "claude-code" ] || continue
-    section="${harness}@${role}"
+    # The policy table uses the conceptual role name `manager`, while the
+    # runtime roster/spawn overlay slot is `pm`. Keep this one alias in the
+    # test so it checks the live slot instead of inventing a dead YAML section.
+    case "$role" in
+      manager) section_role=pm ;;
+      *) section_role="$role" ;;
+    esac
+    section="${harness}@${section_role}"
     if ! actual_model="$(AGMSG_SPAWN_OPTIONS_FILE="$options_file" \
       agmsg_spawn_options_section_value "$section" --model 2>/dev/null)"; then
       printf 'model sync: missing --model in %s (expected %s)\n' \
@@ -124,7 +132,7 @@ teardown() { teardown_test_env; }
 | programmer | **codex** | `gpt-5.6-terra` | medium |
 MARKDOWN
   cat > "$options_file" <<'YAML'
-claude-code@manager:
+claude-code@pm:
   --model: claude-opus-5
   --effort: low
 claude-code@reviewer:
