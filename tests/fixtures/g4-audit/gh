@@ -1,0 +1,65 @@
+#!/usr/bin/env node
+"use strict";
+
+const fs = require("fs");
+
+const args = process.argv.slice(2);
+const fixturePath = process.env.G4_GH_FIXTURE;
+const logPath = process.env.G4_GH_LOG;
+
+function fail(message, code) {
+  process.stderr.write(`${message}\n`);
+  process.exit(code);
+}
+
+if (!fixturePath || !logPath) fail("G4 fixture environment is missing", 97);
+
+const methodFlag = args.findIndex((arg) => arg === "-X" || arg === "--method" || arg.startsWith("--method="));
+if (methodFlag >= 0 || args[0] !== "api" || args[1] !== "graphql") {
+  fs.appendFileSync(logPath, `${JSON.stringify({kind: "write", args})}\n`);
+  fail("G4 audit fixture received a non-read-only gh call", 96);
+}
+
+function fieldsFrom(argv) {
+  const fields = {};
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (["-f", "-F", "--field", "--raw-field"].includes(arg)) {
+      const value = argv[++index] || "";
+      const separator = value.indexOf("=");
+      if (separator <= 0) fail(`malformed field: ${value}`, 95);
+      fields[value.slice(0, separator)] = value.slice(separator + 1);
+      continue;
+    }
+    const compact = /^-[fF](.+)$/.exec(arg);
+    const long = /^--(?:field|raw-field)=(.*)$/.exec(arg);
+    if (compact) fields[compact[1].slice(0, compact[1].indexOf("="))] = compact[1].slice(compact[1].indexOf("=") + 1);
+    if (long) fields[long[1].slice(0, long[1].indexOf("="))] = long[1].slice(long[1].indexOf("=") + 1);
+  }
+  return fields;
+}
+
+const fields = fieldsFrom(args);
+const query = fields.query || "";
+if (!/^\s*query\s+G4ScopeIssues\b/.test(query) || /\b(?:mutation|subscription)\b/.test(query)) {
+  fs.appendFileSync(logPath, `${JSON.stringify({kind: "write", args})}\n`);
+  fail("G4 fixture received an unsafe GraphQL document", 94);
+}
+
+let fixture;
+try {
+  fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
+} catch (error) {
+  fail(`cannot read G4 fixture: ${error.message}`, 93);
+}
+if (fixture.error) fail(fixture.error, 70);
+
+const owner = fields.owner || "";
+const name = fields.name || "";
+const after = fields.after || "";
+const key = `scope:${owner}/${name}:${after}`;
+const response = fixture.responses && fixture.responses[key];
+if (!response) fail(`missing G4 fixture response: ${key}`, 92);
+
+fs.appendFileSync(logPath, `${JSON.stringify({kind: "read", operation: "G4ScopeIssues", owner, name, after})}\n`);
+process.stdout.write(`${JSON.stringify(response)}\n`);
