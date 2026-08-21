@@ -421,3 +421,131 @@ INSERT INTO team_work_current(
   [ "$before" = "$(sha256_file "$database")" ]
   [ "$(sqlite3 "$database" "SELECT count(*) FROM team_work_current WHERE team = 'demo' AND work_item_id = 'issue:42';")" = "0" ]
 }
+
+@test "team-work dispatch-abandon: requires the complete recovery command" {
+  local pack="$BATS_TEST_TMPDIR/dispatch-abandon-usage.json"
+  write_pack "$pack"
+
+  run bash "$SCRIPTS/team-work.sh" dispatch-abandon demo "$pack" issue:42 dispatch epoch-1
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Usage: team-work.sh dispatch-abandon"* ]]
+}
+
+@test "team-work dispatch recovery: abandons, replaces, and rejects the old epoch" {
+  local pack="$BATS_TEST_TMPDIR/dispatch-recovery.json"
+  local database="$TEST_SKILL_DIR/db/messages.db"
+  local old_epoch new_epoch before
+  write_pack "$pack"
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch "$pack" TEAM_WORK_NOW=100 TEAM_WORK_FAKE_DELIVERY=true TEAM_WORK_DISPATCH_ALLOWLIST='["owner"]' -- issue:42 dispatch 1
+  [ "$status" -eq 0 ]
+  old_epoch="$(json_value "$output" leaseEpoch)"
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch-abandon "$pack" TEAM_WORK_NOW=101 TEAM_WORK_FAKE_DELIVERY=true -- issue:42 dispatch "$old_epoch" timeout-recovery
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" abandoned)" = "true" ]
+  [ "$(json_value "$output" state)" = "abandoned" ]
+  [ "$(sqlite3 "$database" "SELECT state || ':' || lease_epoch || ':' || last_action FROM team_work_dispatch_current WHERE team = 'demo' AND work_item_id = 'issue:42';")" = "abandoned:$old_epoch:dispatch-abandon" ]
+  [ "$(sqlite3 "$database" "SELECT group_concat(revision || ':' || state || ':' || lease_epoch || ':' || action, '|') FROM team_work_dispatch_revisions WHERE team = 'demo' AND work_item_id = 'issue:42' ORDER BY revision;")" = "1:dispatching:$old_epoch:dispatch|2:abandoned:$old_epoch:dispatch-abandon" ]
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch "$pack" TEAM_WORK_NOW=102 TEAM_WORK_FAKE_DELIVERY=true TEAM_WORK_DISPATCH_ALLOWLIST='["owner"]' -- issue:42 dispatch 120
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" dispatched)" = "true" ]
+  [ "$(json_value "$output" state)" = "dispatching" ]
+  new_epoch="$(json_value "$output" leaseEpoch)"
+  [ "$new_epoch" != "$old_epoch" ]
+  [ "$(sqlite3 "$database" "SELECT state || ':' || lease_epoch || ':' || last_action FROM team_work_dispatch_current WHERE team = 'demo' AND work_item_id = 'issue:42';")" = "dispatching:$new_epoch:dispatch-replace" ]
+  [ "$(sqlite3 "$database" "SELECT count(*) FROM team_work_dispatch_revisions WHERE team = 'demo' AND work_item_id = 'issue:42';")" = "3" ]
+
+  before="$(sha256_file "$database")"
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch-ack "$pack" TEAM_WORK_NOW=102 TEAM_WORK_FAKE_DELIVERY=true -- issue:42 owner "$old_epoch" stale-epoch
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" acknowledged)" = "false" ]
+  JSON_INPUT="$output" node -e 'if (JSON.parse(process.env.JSON_INPUT).remediation[0].code !== "dispatch_epoch_invalid") process.exit(1);'
+  [ "$before" = "$(sha256_file "$database")" ]
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch-ack "$pack" TEAM_WORK_NOW=102 TEAM_WORK_FAKE_DELIVERY=true -- issue:42 owner "$new_epoch" current-epoch
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" acknowledged)" = "true" ]
+  [ "$(sqlite3 "$database" "SELECT state FROM team_work_dispatch_current WHERE team = 'demo' AND work_item_id = 'issue:42';")" = "claimed" ]
+}
+
+@test "team-work dispatch recovery: active claim blocks abandon and replace" {
+  local pack="$BATS_TEST_TMPDIR/dispatch-recovery-active-claim.json"
+  local database="$TEST_SKILL_DIR/db/messages.db"
+  local epoch before
+  write_pack "$pack"
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch "$pack" TEAM_WORK_NOW=100 TEAM_WORK_FAKE_DELIVERY=true TEAM_WORK_DISPATCH_ALLOWLIST='["owner"]' -- issue:42 dispatch 1
+  [ "$status" -eq 0 ]
+  epoch="$(json_value "$output" leaseEpoch)"
+
+  run env TEAM_WORK_NOW=101 bash "$SCRIPTS/team-work.sh" claim demo "$pack" issue:42 owner 3600
+  [ "$status" -eq 0 ]
+  before="$(sha256_file "$database")"
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch-abandon "$pack" TEAM_WORK_NOW=102 TEAM_WORK_FAKE_DELIVERY=true -- issue:42 dispatch "$epoch" active-claim
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" abandoned)" = "false" ]
+  [ "$before" = "$(sha256_file "$database")" ]
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch "$pack" TEAM_WORK_NOW=102 TEAM_WORK_FAKE_DELIVERY=true TEAM_WORK_DISPATCH_ALLOWLIST='["owner"]' -- issue:42 dispatch 120
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" dispatched)" = "false" ]
+  [ "$before" = "$(sha256_file "$database")" ]
+}
+
+@test "team-work dispatch-abandon: rejects a non-manager and an unexpired epoch without mutation" {
+  local pack="$BATS_TEST_TMPDIR/dispatch-recovery-negative.json"
+  local database="$TEST_SKILL_DIR/db/messages.db"
+  local epoch before
+  write_pack "$pack"
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch "$pack" TEAM_WORK_NOW=100 TEAM_WORK_FAKE_DELIVERY=true TEAM_WORK_DISPATCH_ALLOWLIST='["owner"]' -- issue:42 dispatch 120
+  [ "$status" -eq 0 ]
+  epoch="$(json_value "$output" leaseEpoch)"
+  before="$(sha256_file "$database")"
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch-abandon "$pack" TEAM_WORK_NOW=101 TEAM_WORK_FAKE_DELIVERY=true -- issue:42 owner "$epoch" wrong-role
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"exact kind: seat manager"* ]]
+  [ "$before" = "$(sha256_file "$database")" ]
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch-abandon "$pack" TEAM_WORK_NOW=101 TEAM_WORK_FAKE_DELIVERY=true -- issue:42 dispatch "$epoch" too-early
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" abandoned)" = "false" ]
+  [ "$before" = "$(sha256_file "$database")" ]
+}
+
+@test "team-work audit: future-dated abandoned evidence is stale" {
+  local pack="$BATS_TEST_TMPDIR/future-abandoned.json"
+  local database="$TEST_SKILL_DIR/db/messages.db"
+  local self_check contract_digest envelope_digest
+  write_pack "$pack"
+  self_check="$(bash "$SCRIPTS/team-work.sh" self-check demo "$pack")"
+  contract_digest="$(json_value "$self_check" contractDigest)"
+  envelope_digest="$(JSON_INPUT="$self_check" node -e 'process.stdout.write(JSON.parse(process.env.JSON_INPUT).items[0].envelopeDigest)')"
+  sqlite3 "$database" \
+    "INSERT INTO team_work_dispatch_current(team,work_item_id,contract_digest,envelope_digest,owner_seat,state,lease_epoch,lease_expires_at,queue_digest,delivery_evidence_json,ack_evidence,recovery_evidence,last_action,last_actor,created_at,updated_at) VALUES ('demo','issue:42','$contract_digest','$envelope_digest','owner','abandoned','epoch-abandoned',200,'sha256:queue','{}',NULL,'{\"evidence\":\"recovery\"}','dispatch-abandon','dispatch',100,100);"
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" audit "$pack" TEAM_WORK_NOW=101 --
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" classificationBasis.status)" = "unknown" ]
+  JSON_INPUT="$output" node -e 'const value=JSON.parse(process.env.JSON_INPUT); if (!value.violations.some((v) => v.code === "local_state_stale")) process.exit(1);'
+}
+
+@test "team-work audit: expired dispatch plus active claim prefers the claim" {
+  local pack="$BATS_TEST_TMPDIR/dispatch-expired-with-claim.json"
+  write_pack "$pack"
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch "$pack" TEAM_WORK_NOW=100 TEAM_WORK_FAKE_DELIVERY=true TEAM_WORK_DISPATCH_ALLOWLIST='["owner"]' -- issue:42 dispatch 1
+  [ "$status" -eq 0 ]
+  run env TEAM_WORK_NOW=101 bash "$SCRIPTS/team-work.sh" claim demo "$pack" issue:42 owner 3600
+  [ "$status" -eq 0 ]
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" audit "$pack" TEAM_WORK_NOW=102 --
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" classificationBasis.status)" = "fully_allocated" ]
+  JSON_INPUT="$output" node -e 'const value=JSON.parse(process.env.JSON_INPUT); const state=value.items[0].localState; if (state.status !== "active" || state.dispatchState !== "dispatching" || value.violations.some((v) => v.code === "local_state_stale")) process.exit(1);'
+}

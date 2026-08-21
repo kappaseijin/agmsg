@@ -771,6 +771,10 @@ export TEAM_WORK_DISPATCH_ALLOWLIST='["demo_programmer_codex"]'
 # The declared owner must ACK the exact, unexpired epoch before starting work.
 ~/.agents/skills/<cmd>/scripts/team-work.sh dispatch-ack demo .team-work.json \
   issue:42 demo_programmer_codex '<lease-epoch-from-dispatch>' received
+
+# An exact manager can explicitly close an expired dispatch epoch.
+~/.agents/skills/<cmd>/scripts/team-work.sh dispatch-abandon demo .team-work.json \
+  issue:42 demo_manager_codex '<expired-lease-epoch>' timeout-recovery
 ```
 
 `dispatch` requires all of the following: the packed Issue is currently
@@ -793,8 +797,25 @@ dispatch, an open and complete source audit, and fresh live delivery evidence.
 Only then does one SQLite transaction change the dispatch ledger to `claimed`
 and create the corresponding G2 `team_work_current` lease. A wrong, late, or
 unavailable ACK returns `acknowledged: false` and leaves both ledgers unchanged.
+`dispatch-abandon` is a manager-only recovery command: the manager, pack
+digests, declared owner, exact epoch, and an expired (`lease_expires_at <= now`)
+row must match in one guarded transaction, and its evidence must be non-empty.
+It returns `abandoned: true`, stores the evidence in `recovery_evidence`, and
+keeps the current row and append-only revision history; an unexpired G2 claim
+causes a no-mutation refusal. `abandoned` is terminal evidence, not an active
+allocation. A later `dispatch` may replace only an expired `abandoned` row with
+a new epoch (`last_action: "dispatch-replace"`); expired `dispatching` or
+`claimed` rows must be abandoned first. An ACK for the old epoch returns
+`acknowledged: false` with `dispatch_epoch_invalid` and creates no claim.
+
+The first team-work initialization after upgrade automatically migrates the
+legacy dispatch tables transactionally. It validates state, revision chain, and
+JSON before copying; a copy failure rolls back the legacy schema. Fresh and
+already-migrated stores are idempotent.
+
 Neither command creates a GitHub mutation, sends a message, operates a herdr
-pane, or spawns an agent.
+pane, or spawns an agent. Production dispatch remains disabled until the #98
+roster/delivery gate and the Phase 3 prerequisite are satisfied.
 
 ### Message delivery state
 

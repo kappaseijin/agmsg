@@ -286,7 +286,8 @@ function readLocalRows(dbPath, team) {
     "  'leaseExpiresAt', lease_expires_at,",
     "  'queueDigest', queue_digest,",
     "  'deliveryEvidence', json(delivery_evidence_json),",
-    "  'ackEvidence', ack_evidence",
+    "  'ackEvidence', ack_evidence,",
+    "  'recoveryEvidence', CASE WHEN recovery_evidence IS NULL THEN NULL ELSE json(recovery_evidence) END",
     ")",
     "FROM team_work_dispatch_current",
     `WHERE team = ${sqlLiteral(team)}`,
@@ -351,20 +352,21 @@ function localStateForItem(local, item, contractDigest, now, violations) {
 
   const currentActive = Boolean(row) && isNonEmptyString(row.leaseOwner) && Number.isInteger(row.leaseExpiresAt) && row.leaseExpiresAt > now;
   if (dispatchRow) {
+    const dispatchActive = Number.isInteger(dispatchRow.leaseExpiresAt) && dispatchRow.leaseExpiresAt > now;
     const validDispatch =
       dispatchRow.contractDigest === contractDigest &&
       dispatchRow.envelopeDigest === envelopeDigest(item) &&
       dispatchRow.ownerSeat === item.ownerSeat &&
-      (dispatchRow.state === "dispatching" || dispatchRow.state === "claimed") &&
       isNonEmptyString(dispatchRow.leaseEpoch) &&
       Number.isInteger(dispatchRow.leaseExpiresAt) &&
       isNonEmptyString(dispatchRow.queueDigest) &&
-      isObject(dispatchRow.deliveryEvidence);
-    if (!validDispatch || (currentActive && (dispatchRow.state !== "claimed" || row.leaseOwner !== item.ownerSeat))) {
+      isObject(dispatchRow.deliveryEvidence) &&
+      ((dispatchRow.state === "dispatching" || dispatchRow.state === "claimed") ||
+        (dispatchRow.state === "abandoned" && !dispatchActive && isObject(dispatchRow.recoveryEvidence)));
+    if (!validDispatch || (dispatchActive && currentActive && (dispatchRow.state !== "claimed" || row.leaseOwner !== item.ownerSeat))) {
       addViolation(violations, "local_state_stale", item);
       return { status: "stale", row, dispatchRow, prLinks: [] };
     }
-    const dispatchActive = dispatchRow.leaseExpiresAt > now;
     if (dispatchActive) {
       return {
         status: "active",
@@ -379,11 +381,12 @@ function localStateForItem(local, item, contractDigest, now, violations) {
     }
   }
 
-  if (!row) return { status: "absent", row: null, dispatchRow, prLinks: [], writebacks: [] };
+  if (!row) return { status: "absent", row: null, dispatchRow, dispatchState: dispatchRow ? dispatchRow.state : null, prLinks: [], writebacks: [] };
   return {
     status: currentActive ? "active" : "inactive",
     row,
     dispatchRow,
+    dispatchState: dispatchRow ? dispatchRow.state : null,
     prLinks,
     writebacks: row.writebacks,
     leaseOwner: row.leaseOwner || null,

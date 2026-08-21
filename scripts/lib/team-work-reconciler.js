@@ -17,7 +17,7 @@ const {
   runAudit,
 } = require("./team-work-audit");
 
-const RECONCILER_COMMANDS = new Set(["reconcile", "watchdog", "dispatch", "dispatch-ack"]);
+const RECONCILER_COMMANDS = new Set(["reconcile", "watchdog", "dispatch", "dispatch-ack", "dispatch-abandon"]);
 const POSITIVE_INTEGER = /^[1-9][0-9]*$/;
 const NON_NEGATIVE_INTEGER = /^(0|[1-9][0-9]*)$/;
 const DEFAULT_HEARTBEAT_STALE_SECONDS = 900;
@@ -228,7 +228,7 @@ function finding(findings, code, item, extra) {
 function readyItemsFromAudit(audit, pack) {
   if (audit.classificationBasis.status !== "ready") return [];
   return audit.items
-    .filter((item) => item.issueState === "OPEN" && item.localState.status !== "active" && item.localState.workflowState !== "blocked" && item.relationStatus === "complete")
+    .filter((item) => item.issueState === "OPEN" && item.localState.status !== "active" && item.localState.workflowState !== "blocked" && item.localState.dispatchState !== "abandoned" && item.relationStatus === "complete")
     .map((item) => {
       const source = pack.workItems.find((candidate) => candidate.workItem.id === item.workItemId);
       return source ? {
@@ -450,6 +450,18 @@ function readyWorkItem(audit, pack, workItemId) {
   return readyItemsFromAudit(audit, pack).find((item) => item.workItemId === workItemId) || null;
 }
 
+function dispatchableWorkItem(audit, pack, workItemId) {
+  const ready = readyWorkItem(audit, pack, workItemId);
+  if (ready) return ready;
+  if (audit.classificationBasis.status === "unknown") return null;
+  const auditItem = audit.items.find((item) => item.workItemId === workItemId);
+  if (!auditItem || auditItem.issueState !== "OPEN" || auditItem.localState.status === "active" ||
+      auditItem.localState.workflowState === "blocked" || auditItem.localState.dispatchState !== "abandoned" ||
+      auditItem.relationStatus !== "complete") return null;
+  const source = pack.workItems.find((candidate) => candidate.workItem.id === workItemId);
+  return source ? { workItemId: source.workItem.id, ownerSeat: source.ownerSeat } : null;
+}
+
 function runDispatch(team, pack, roster, workItemId, managerSeat, ackTtl) {
   validateContractPack(pack, roster, team);
   if (!isNonEmptyString(workItemId)) schemaError("work-item-id must be a non-empty string");
@@ -482,7 +494,7 @@ function runDispatch(team, pack, roster, workItemId, managerSeat, ackTtl) {
       remediation: [{ code: "source_unknown", remediation: dispatchRemediation("source_unknown") }],
     });
   }
-  if (!readyWorkItem(audit, pack, workItemId)) {
+  if (!dispatchableWorkItem(audit, pack, workItemId)) {
     return dispatchOutput(team, workItemId, managerSeat, {
       sourceDigest: audit.sourceDigest,
       remediation: [{ code: "work_not_ready", remediation: dispatchRemediation("work_not_ready") }],
@@ -512,25 +524,42 @@ function runDispatch(team, pack, roster, workItemId, managerSeat, ackTtl) {
 INSERT INTO team_work_dispatch_current(
   team, work_item_id, contract_digest, envelope_digest, owner_seat, state,
   lease_epoch, lease_expires_at, queue_digest, delivery_evidence_json,
-  ack_evidence, last_action, last_actor, created_at, updated_at
+  ack_evidence, recovery_evidence, last_action, last_actor, created_at, updated_at
 )
 SELECT
   ${sqlLiteral(team)}, ${sqlLiteral(item.workItem.id)}, ${sqlLiteral(contractDigest)}, ${sqlLiteral(envelopeDigest(item))}, ${sqlLiteral(item.ownerSeat)}, 'dispatching',
   ${sqlLiteral(leaseEpoch)}, ${leaseExpiresAt}, ${sqlLiteral(audit.sourceDigest)}, ${sqlLiteral(deliveryEvidence)},
-  NULL, 'dispatch', ${sqlLiteral(managerSeat)}, ${now}, ${now}
+  NULL, NULL, 'dispatch', ${sqlLiteral(managerSeat)}, ${now}, ${now}
 WHERE NOT EXISTS (
   SELECT 1 FROM team_work_current
   WHERE team = ${sqlLiteral(team)}
     AND work_item_id = ${sqlLiteral(item.workItem.id)}
     AND lease_expires_at > ${now}
 )
-AND NOT EXISTS (
-  SELECT 1 FROM team_work_dispatch_current
-  WHERE team = ${sqlLiteral(team)}
-    AND work_item_id = ${sqlLiteral(item.workItem.id)}
-    AND lease_expires_at > ${now}
-);
-${requireOneChange("team_work_dispatch_insert_guard")}
+ON CONFLICT(team, work_item_id) DO UPDATE SET
+  contract_digest = excluded.contract_digest,
+  envelope_digest = excluded.envelope_digest,
+  owner_seat = excluded.owner_seat,
+  state = 'dispatching',
+  lease_epoch = excluded.lease_epoch,
+  lease_expires_at = excluded.lease_expires_at,
+  queue_digest = excluded.queue_digest,
+  delivery_evidence_json = excluded.delivery_evidence_json,
+  ack_evidence = NULL,
+  recovery_evidence = NULL,
+  last_action = 'dispatch-replace',
+  last_actor = ${sqlLiteral(managerSeat)},
+  created_at = excluded.created_at,
+  updated_at = excluded.updated_at
+WHERE team_work_dispatch_current.state = 'abandoned'
+  AND team_work_dispatch_current.lease_expires_at <= ${now}
+  AND NOT EXISTS (
+    SELECT 1 FROM team_work_current
+    WHERE team = ${sqlLiteral(team)}
+      AND work_item_id = ${sqlLiteral(item.workItem.id)}
+      AND lease_expires_at > ${now}
+  );
+${requireOneChange("team_work_dispatch_insert_or_replace_guard")}
 `;
   try {
     runSqliteTransaction(dbPath, sql);
@@ -553,6 +582,99 @@ ${requireOneChange("team_work_dispatch_insert_guard")}
     sendInvoked: false,
   });
   output.dispatchDigest = sha256Digest(Object.assign({}, output, { dispatchDigest: undefined }));
+  return output;
+}
+
+function abandonOutput(team, workItemId, managerSeat, leaseEpoch, details) {
+  const output = Object.assign({
+    schemaVersion: 1,
+    command: "dispatch-abandon",
+    team,
+    workItemId,
+    managerSeat,
+    leaseEpoch,
+    abandoned: false,
+    state: "not_abandoned",
+    remediation: [],
+  }, details || {});
+  output.abandonDigest = sha256Digest(output);
+  return output;
+}
+
+function runDispatchAbandon(team, pack, roster, workItemId, managerSeat, leaseEpoch, evidence) {
+  validateContractPack(pack, roster, team);
+  if (!isNonEmptyString(workItemId)) schemaError("work-item-id must be a non-empty string");
+  if (!isNonEmptyString(managerSeat)) schemaError("manager-seat must be a non-empty string");
+  if (!isNonEmptyString(leaseEpoch)) schemaError("lease-epoch must be a non-empty string");
+  if (!isNonEmptyString(evidence)) schemaError("evidence must be a non-empty string");
+  const members = memberMap(roster);
+  const manager = members.get(managerSeat);
+  if (!manager || manager.kind !== "seat" || manager.role !== "manager") {
+    schemaError("manager-seat must be an exact kind: seat manager");
+  }
+  const item = pack.workItems.find((candidate) => candidate.workItem.id === workItemId);
+  if (!item) schemaError(`work item does not exist: ${workItemId}`);
+  const now = parseNow();
+  const local = readLocalRows(process.env.AGMSG_TEAM_WORK_DB, team);
+  const dispatch = local.dispatchRows.get(workItemId);
+  const contractDigest = sha256Digest(pack);
+  const envelope = envelopeDigest(item);
+  if (local.error || !dispatch || dispatch.contractDigest !== contractDigest || dispatch.envelopeDigest !== envelope ||
+      dispatch.ownerSeat !== item.ownerSeat || dispatch.leaseEpoch !== leaseEpoch ||
+      (dispatch.state !== "dispatching" && dispatch.state !== "claimed") ||
+      !Number.isInteger(dispatch.leaseExpiresAt) || dispatch.leaseExpiresAt > now) {
+    return abandonOutput(team, workItemId, managerSeat, leaseEpoch, {
+      remediation: [{ code: "dispatch_epoch_invalid", remediation: "use the exact expired dispatch epoch before recovery" }],
+    });
+  }
+  const current = local.rows.get(workItemId);
+  if (current && Number.isInteger(current.leaseExpiresAt) && current.leaseExpiresAt > now) {
+    return abandonOutput(team, workItemId, managerSeat, leaseEpoch, {
+      remediation: [{ code: "active_claim", remediation: "an unexpired current claim prevents dispatch recovery" }],
+    });
+  }
+
+  const recoveryEvidence = canonicalJson({ evidence, leaseEpoch, abandonedAt: now });
+  const dbPath = requireDatabasePath();
+  const sql = `
+UPDATE team_work_dispatch_current SET
+  state = 'abandoned',
+  recovery_evidence = ${sqlLiteral(recoveryEvidence)},
+  last_action = 'dispatch-abandon',
+  last_actor = ${sqlLiteral(managerSeat)},
+  updated_at = ${now}
+WHERE team = ${sqlLiteral(team)}
+  AND work_item_id = ${sqlLiteral(workItemId)}
+  AND contract_digest = ${sqlLiteral(contractDigest)}
+  AND envelope_digest = ${sqlLiteral(envelope)}
+  AND owner_seat = ${sqlLiteral(item.ownerSeat)}
+  AND state IN ('dispatching', 'claimed')
+  AND lease_epoch = ${sqlLiteral(leaseEpoch)}
+  AND lease_expires_at <= ${now}
+  AND NOT EXISTS (
+    SELECT 1 FROM team_work_current
+    WHERE team = ${sqlLiteral(team)}
+      AND work_item_id = ${sqlLiteral(workItemId)}
+      AND lease_expires_at > ${now}
+  );
+${requireOneChange("team_work_dispatch_abandon_guard")}
+`;
+  try {
+    runSqliteTransaction(dbPath, sql);
+  } catch (_) {
+    return abandonOutput(team, workItemId, managerSeat, leaseEpoch, {
+      remediation: [{ code: "dispatch_abandon_conflict", remediation: "refresh the exact dispatch and current claim before retrying recovery" }],
+    });
+  }
+  const output = abandonOutput(team, workItemId, managerSeat, leaseEpoch, {
+    abandoned: true,
+    state: "abandoned",
+    ownerSeat: item.ownerSeat,
+    leaseExpiresAt: dispatch.leaseExpiresAt,
+    recoveryEvidence: evidence,
+    remediation: [],
+  });
+  output.abandonDigest = sha256Digest(Object.assign({}, output, { abandonDigest: undefined }));
   return output;
 }
 
@@ -700,6 +822,9 @@ function main() {
   } else if (command === "dispatch") {
     if (args.length < 2 || args.length > 3) schemaError("invalid arguments for dispatch");
     output = runDispatch(team, pack, roster, args[0], args[1], args[2]);
+  } else if (command === "dispatch-abandon") {
+    if (args.length !== 4) schemaError("invalid arguments for dispatch-abandon");
+    output = runDispatchAbandon(team, pack, roster, args[0], args[1], args[2], args[3]);
   } else {
     if (args.length < 3 || args.length > 4) schemaError("invalid arguments for dispatch-ack");
     output = runDispatchAck(team, pack, roster, args[0], args[1], args[2], args[3]);
@@ -709,6 +834,7 @@ function main() {
 
 module.exports = {
   runDispatch,
+  runDispatchAbandon,
   runDispatchAck,
   runReconcile,
   runWatchdog,

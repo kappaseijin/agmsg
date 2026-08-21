@@ -48,6 +48,12 @@ case "$COMMAND" in
       exit 1
     fi
     ;;
+  dispatch-abandon)
+    if [ "$#" -ne 7 ]; then
+      echo "Usage: team-work.sh dispatch-abandon <team> <contract-pack.json> <work-item-id> <manager-seat> <lease-epoch> <evidence>" >&2
+      exit 1
+    fi
+    ;;
   claim|renew)
     if [ "$#" -ne 5 ] && [ "$#" -ne 6 ]; then
       echo "Usage: team-work.sh $COMMAND <team> <contract-pack.json> <work-item-id> <actor-seat> [ttl-seconds]" >&2
@@ -128,7 +134,7 @@ case "$COMMAND" in
     export AGMSG_TEAM_WORK_DB AGMSG_TEAM_WORK_SCRIPT_DIR
     printf '%s' "$ROSTER_JSON" | node "$SCRIPT_DIR/lib/team-work-reconciler.js" "$@"
     ;;
-  dispatch|dispatch-ack)
+  dispatch|dispatch-ack|dispatch-abandon)
     source "$SCRIPT_DIR/lib/storage.sh"
     agmsg_storage_ensure_initialized
     AGMSG_TEAM_WORK_DB="$(agmsg_db_path "$TEAM")"
