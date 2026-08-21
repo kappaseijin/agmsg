@@ -696,6 +696,17 @@ ready list; `audit` adds `relationChecks` and `violations`. The output uses
 recursively sorted object keys, so its digests and exact JSON are stable for
 the same pack, live responses, and local state.
 
+Each item summary exposes the local row's workflow state as the additive
+`localState.workflowState` field; it is `null` when no local row exists. An open
+item whose workflow state is `blocked` is withheld from `queue.ready` and from
+reconcile/dispatch ready selection. If that leaves no ready item, the
+classification is `unknown` with the stable `blocked_work_item` reason in
+`classificationBasis.reasons`; this condition is not copied into
+`audit.violations`. If another unleased item remains, the classification stays
+`ready` and only that other item appears in the ready list. An active blocked
+lease remains `fully_allocated`, while a row returned to `acknowledged` or
+`in_progress` can become ready again after its lease expires.
+
 Malformed packs, invalid command syntax, a missing Node runtime, or an
 unavailable roster remain nonzero errors. In contrast, a live GitHub/local
 source failure returns a valid `unknown` result so a reconciler can record the

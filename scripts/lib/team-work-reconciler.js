@@ -228,7 +228,7 @@ function finding(findings, code, item, extra) {
 function readyItemsFromAudit(audit, pack) {
   if (audit.classificationBasis.status !== "ready") return [];
   return audit.items
-    .filter((item) => item.issueState === "OPEN" && item.localState.status !== "active" && item.relationStatus === "complete")
+    .filter((item) => item.issueState === "OPEN" && item.localState.status !== "active" && item.localState.workflowState !== "blocked" && item.relationStatus === "complete")
     .map((item) => {
       const source = pack.workItems.find((candidate) => candidate.workItem.id === item.workItemId);
       return source ? {

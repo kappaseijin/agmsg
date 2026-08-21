@@ -506,6 +506,7 @@ function summarizeItem(item, sourceEvidence, localState, relationChecks, hasViol
     issueState: sourceEvidence ? sourceEvidence.state : "unknown",
     localState: {
       status: localState.status,
+      workflowState: localState.row ? localState.row.state || null : null,
       dispatchState: localState.dispatchState || null,
       leaseOwner: localState.leaseOwner || null,
       leaseExpiresAt: localState.leaseExpiresAt || null,
@@ -551,6 +552,7 @@ function runAudit(command, team, pack, roster) {
   let ready = [];
   let openItemCount = 0;
   let allocatedItemCount = 0;
+  let blockedItemCount = 0;
   let closedItemCount = 0;
   if (!unknown) {
     for (const fact of itemFacts) {
@@ -558,6 +560,8 @@ function runAudit(command, team, pack, roster) {
         openItemCount += 1;
         if (fact.localState.status === "active") {
           allocatedItemCount += 1;
+        } else if (fact.localState.row && fact.localState.row.state === "blocked") {
+          blockedItemCount += 1;
         } else {
           ready.push({
             workItemId: fact.item.workItem.id,
@@ -576,12 +580,18 @@ function runAudit(command, team, pack, roster) {
   }
 
   let status = "unknown";
-  const reasons = sortedViolations;
+  let reasons = sortedViolations;
   if (!unknown && ready.length > 0) status = "ready";
   if (!unknown && ready.length === 0 && openItemCount > 0 && allocatedItemCount === openItemCount) {
     status = "fully_allocated";
   }
   if (!unknown && openItemCount === 0 && closedItemCount === pack.workItems.length) status = "quiescent";
+  if (!unknown && ready.length === 0 && blockedItemCount > 0) {
+    status = "unknown";
+    reasons = sortViolations(itemFacts
+      .filter((fact) => fact.sourceEvidence.state === "OPEN" && fact.localState.row && fact.localState.row.state === "blocked")
+      .map((fact) => ({ code: "blocked_work_item", workItemId: fact.item.workItem.id })));
+  }
   if (status === "unknown") ready = [];
 
   const sourceEvidence = {

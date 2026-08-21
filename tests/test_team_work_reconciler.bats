@@ -68,6 +68,13 @@ if (!value.findings.some((finding) => finding.code === process.env.EXPECTED)) pr
 '
 }
 
+assert_no_finding() {
+  JSON_INPUT="$1" UNEXPECTED="$2" node -e '
+const value = JSON.parse(process.env.JSON_INPUT);
+if (value.findings.some((finding) => finding.code === process.env.UNEXPECTED)) process.exit(1);
+'
+}
+
 assert_canonical_json() {
   JSON_INPUT="$1" node -e '
 const input = process.env.JSON_INPUT;
@@ -179,6 +186,21 @@ INSERT INTO team_work_current(
 
   [ "$status" -eq 0 ]
   assert_finding "$output" orphan_ready
+}
+
+@test "team-work reconcile: blocked work is not reported as orphan ready" {
+  local pack="$BATS_TEST_TMPDIR/reconcile-blocked.json"
+  write_pack "$pack"
+  run env TEAM_WORK_NOW=4102444800 bash "$SCRIPTS/team-work.sh" claim demo "$pack" issue:42 owner 0
+  [ "$status" -eq 0 ]
+  run env TEAM_WORK_NOW=4102444800 bash "$SCRIPTS/team-work.sh" set-state demo "$pack" issue:42 dispatch blocked
+  [ "$status" -eq 0 ]
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" reconcile "$pack" TEAM_WORK_NOW=4102444800 TEAM_WORK_FAKE_DELIVERY=false
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" auditStatus)" = "unknown" ]
+  assert_no_finding "$output" orphan_ready
 }
 
 @test "team-work reconcile: detects required writeback without local evidence" {
@@ -312,6 +334,24 @@ INSERT INTO team_work_current(
   [ "$(json_value "$output" state)" = "not_dispatchable" ]
   [ "$before" = "$(sha256_file "$database")" ]
   [ "$(sqlite3 "$database" "SELECT count(*) FROM team_work_dispatch_current;")" = "0" ]
+}
+
+@test "team-work dispatch: blocked work does not mutate the dispatch ledger" {
+  local pack="$BATS_TEST_TMPDIR/dispatch-blocked.json"
+  local database="$TEST_SKILL_DIR/db/messages.db"
+  write_pack "$pack"
+  run env TEAM_WORK_NOW=4102444800 bash "$SCRIPTS/team-work.sh" claim demo "$pack" issue:42 owner 0
+  [ "$status" -eq 0 ]
+  run env TEAM_WORK_NOW=4102444800 bash "$SCRIPTS/team-work.sh" set-state demo "$pack" issue:42 dispatch blocked
+  [ "$status" -eq 0 ]
+
+  run_reconciler "$AUDIT_FIXTURES/open.json" dispatch "$pack" TEAM_WORK_NOW=4102444800 TEAM_WORK_FAKE_DELIVERY=true TEAM_WORK_DISPATCH_ALLOWLIST='["owner"]' -- issue:42 dispatch 120
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" dispatched)" = "false" ]
+  [ "$(json_value "$output" state)" = "not_dispatchable" ]
+  [ "$(sqlite3 "$database" "SELECT count(*) FROM team_work_dispatch_current;")" = "0" ]
+  [ "$(sqlite3 "$database" "SELECT count(*) FROM team_work_dispatch_revisions;")" = "0" ]
 }
 
 @test "team-work dispatch: records dispatching without claiming before ACK" {
