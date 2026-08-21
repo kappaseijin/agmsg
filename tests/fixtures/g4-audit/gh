@@ -41,10 +41,12 @@ function fieldsFrom(argv) {
 
 const fields = fieldsFrom(args);
 const query = fields.query || "";
-if (!/^\s*query\s+G4ScopeIssues\b/.test(query) || /\b(?:mutation|subscription)\b/.test(query)) {
+const operationMatch = /^\s*query\s+(G4ScopeIssues|G4IssueState|G4PullRequestState|G4PullRequestReviews|G4IssueComments)\b/.exec(query);
+if (!operationMatch || /\b(?:mutation|subscription)\b/.test(query)) {
   fs.appendFileSync(logPath, `${JSON.stringify({kind: "write", args})}\n`);
   fail("G4 fixture received an unsafe GraphQL document", 94);
 }
+const operation = operationMatch[1];
 
 let fixture;
 try {
@@ -57,9 +59,29 @@ if (fixture.error) fail(fixture.error, 70);
 const owner = fields.owner || "";
 const name = fields.name || "";
 const after = fields.after || "";
-const key = `scope:${owner}/${name}:${after}`;
+const number = fields.number || "";
+let key;
+switch (operation) {
+  case "G4ScopeIssues":
+    key = `scope:${owner}/${name}:${after}`;
+    break;
+  case "G4IssueState":
+    key = `issue:${owner}/${name}:${number}`;
+    break;
+  case "G4PullRequestState":
+    key = `pull:${owner}/${name}:${number}`;
+    break;
+  case "G4PullRequestReviews":
+    key = `reviews:${owner}/${name}:${number}:${after}`;
+    break;
+  case "G4IssueComments":
+    key = `comments:${owner}/${name}:${number}:${after}`;
+    break;
+  default:
+    fail(`unsupported G4 fixture operation: ${operation}`, 91);
+}
 const response = fixture.responses && fixture.responses[key];
 if (!response) fail(`missing G4 fixture response: ${key}`, 92);
 
-fs.appendFileSync(logPath, `${JSON.stringify({kind: "read", operation: "G4ScopeIssues", owner, name, after})}\n`);
+fs.appendFileSync(logPath, `${JSON.stringify({kind: "read", operation, owner, name, number, after})}\n`);
 process.stdout.write(`${JSON.stringify(response)}\n`);
