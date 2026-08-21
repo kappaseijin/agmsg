@@ -1,0 +1,15 @@
+{
+  "responses": {
+    "scope:kappaseijin/example:": {
+      "data": {
+        "repository": {
+          "issues": {
+            "totalCount": 0,
+            "nodes": [],
+            "pageInfo": {"hasNextPage": false, "endCursor": null}
+          }
+        }
+      }
+    }
+  }
+}

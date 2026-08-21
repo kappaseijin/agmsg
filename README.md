@@ -422,7 +422,7 @@ See [docs/opencode.md](docs/opencode.md) for full setup instructions.
 ~/.agents/skills/<cmd>/scripts/join.sh <team> <agent_id> <type> <project_path> [--role <role>] [--kind <seat|human|service>] [--force]
 ~/.agents/skills/<cmd>/scripts/team.sh <team> [--format human|json]
 ~/.agents/skills/<cmd>/scripts/roster-normalize.sh <team> --check|--apply
-~/.agents/skills/<cmd>/scripts/team-work.sh <validate|self-check|observe|queue|audit|reconcile|watchdog|dispatch|dispatch-ack|claim|ack|renew|release|set-state|link-pr|writeback> <team> <contract-pack.json> ...
+~/.agents/skills/<cmd>/scripts/team-work.sh <validate|self-check|g4-audit|observe|queue|audit|reconcile|watchdog|dispatch|dispatch-ack|claim|ack|renew|release|set-state|link-pr|writeback> <team> <contract-pack.json> ...
 ~/.agents/skills/<cmd>/scripts/whoami.sh <project_path> [type] [--format human|json]
 ~/.agents/skills/<cmd>/scripts/delivery.sh set <mode> <type> <project_path>
 ~/.agents/skills/<cmd>/scripts/delivery.sh status [<type> <project_path>] [--format human|json]
@@ -714,6 +714,117 @@ reason while safely withholding work. These commands never create or update a
 GitHub Issue/PR, update a lease, send a message, spawn an agent, or decide a
 remediation action. Their work universe is the supplied pack only; they do not
 discover unlisted repository Issues.
+
+### G4 state/coverage audit (Phase 1A)
+
+`g4-audit` is the read-only Phase 1A implementation of the G4 state/coverage
+contract. It is a separate input from the work-item contract pack above and
+audits only the GitHub scopes explicitly declared in that input:
+
+```bash
+~/.agents/skills/<cmd>/scripts/team-work.sh g4-audit demo .g4-state-pack.json
+```
+
+The pack is JSON with `schemaVersion: 1`, the exact `team`, at least one
+`scopes` declaration, and an `entries` array (which may be empty only when the
+declared scopes return no matching open Issues). A scope has exactly these
+fields:
+
+```json
+{
+  "id": "demo-open-issues",
+  "repository": "kappaseijin/example",
+  "issueState": "OPEN",
+  "labelsAll": [],
+  "basis": {
+    "contentDigest": "sha256:<64 lowercase hex>",
+    "refs": [{"kind": "git", "repository": "kappaseijin/example", "commit": "<immutable commit>"}]
+  }
+}
+```
+
+`repository` is an explicit `owner/name`; `issueState` is currently only
+`OPEN`; and `labelsAll` is a unique list of labels that every returned Issue
+must contain. `basis.refs` is non-empty and must identify immutable evidence
+(`git`, `github_issue`, `github_pull_request`, `commit`, or `evidence`). The
+scope `basis.contentDigest` is the SHA-256 digest of the recursively
+canonicalized scope object with `basis` removed.
+
+Each entry maps one covered Issue exactly once:
+
+```json
+{
+  "schemaVersion": 1,
+  "source": {"repository": "kappaseijin/example", "number": 42},
+  "state": "ready",
+  "ownerSeat": "demo_programmer_codex",
+  "workKinds": ["implementation"],
+  "basis": {
+    "contentDigest": "sha256:<64 lowercase hex>",
+    "refs": [{"kind": "github_issue", "repository": "kappaseijin/example", "number": 42}]
+  },
+  "revision": 1,
+  "entryDigest": "sha256:<64 lowercase hex>"
+}
+```
+
+`ownerSeat` must be an exact roster member with `kind: "seat"`. Supported
+`workKinds` are `implementation`, `writeback`, `inventory`, `closeout`, and
+`reconciliation`. Entry `state` is only `ready`, `blocked`, or `unknown`;
+`quiescent` is an aggregate audit result, never an entry state. A `ready`
+entry has no `blocker`. A `blocked` entry requires a stable lower-snake-case
+`reasonCode` and one v1 `releasePredicate`:
+
+```json
+"blocker": {
+  "reasonCode": "upstream_issue",
+  "releasePredicate": {
+    "kind": "issue_closed",
+    "repository": "kappaseijin/example",
+    "number": 41
+  }
+}
+```
+
+The other predicate kinds are `pull_request_merged`, `review_approved` (with
+`headOid`), `not_before` (JST RFC3339 time with `+09:00`),
+`issue_comment_digest` (with `commentId` and a SHA-256 `contentDigest`), and
+`all_of` (a non-empty list of predicates). An `unknown` entry cannot carry a
+blocker and is never a claim or dispatch basis. `entryDigest`, when present,
+is the canonical SHA-256 of the entry with only `entryDigest` removed. The
+entry basis digest is calculated with both `basis` and `entryDigest` removed.
+Object keys are sorted recursively for all digests; array order remains
+significant.
+
+The audit executes an explicit read-only GraphQL query for each scope, follows
+every page, filters `labelsAll`, de-duplicates scope overlap, and compares the
+resulting sorted `(repository, number)` set with `entries`. The result includes
+`packDigest`, `coverageDigest`, `sourceDigest`, `auditDigest`, `scopeAudits`,
+`coverage`, `entries`, `ready`, and `classificationBasis`:
+
+| Status | Meaning | `ready` |
+| --- | --- | --- |
+| `complete` | Live scope reads completed and entry coverage matches exactly. | Valid `ready` entries only. |
+| `quiescent` | All declared scopes returned no matching open Issues and `entries` is empty. | Empty. |
+| `unknown` | A source/pagination error, duplicate, coverage mismatch, unknown entry, or unresolved blocker predicate prevents a safe result. | Empty; do not claim or dispatch. |
+
+`classificationBasis` also reports `scopeCount`, `coverageCount`,
+`entryCount`, `readyCount`, `blockedCount`, `unknownCount`, `coverageDigest`,
+and a stable `reasons` array. A false blocker predicate remains a blocked
+entry but makes the aggregate audit `unknown`; a true predicate is recorded as
+a fresh observation and does not itself change the entry.
+
+Malformed packs return exit code `2` with `schema error:`. GitHub transport,
+GraphQL, pagination, or coverage failures return a valid `unknown` JSON result
+with exit code `0`, so callers can fail closed without confusing source
+failure with an invalid pack.
+
+Phase 1A does not initialize or mutate SQLite, create a G4 ledger, bootstrap or
+transition state, pull work, dispatch messages, change GitHub labels, or call
+any GitHub write method. `g4-bootstrap`, `g4-transition`, and `g4-pull` are not
+published commands. They remain gated until the #97 recovery work and the #98
+roster/delivery acceptance are both live; while #98 is open, this command is
+an audit-only safety observation.
 
 ### Reconciler, watchdog, and dispatch gate
 

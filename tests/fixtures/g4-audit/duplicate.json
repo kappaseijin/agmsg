@@ -1,0 +1,28 @@
+{
+  "responses": {
+    "scope:kappaseijin/example:": {
+      "data": {
+        "repository": {
+          "issues": {
+            "totalCount": 2,
+            "nodes": [
+              {
+                "number": 42,
+                "state": "OPEN",
+                "repository": {"nameWithOwner": "kappaseijin/example"},
+                "labels": {"totalCount": 0, "nodes": [], "pageInfo": {"hasNextPage": false, "endCursor": null}}
+              },
+              {
+                "number": 42,
+                "state": "OPEN",
+                "repository": {"nameWithOwner": "kappaseijin/example"},
+                "labels": {"totalCount": 0, "nodes": [], "pageInfo": {"hasNextPage": false, "endCursor": null}}
+              }
+            ],
+            "pageInfo": {"hasNextPage": false, "endCursor": null}
+          }
+        }
+      }
+    }
+  }
+}

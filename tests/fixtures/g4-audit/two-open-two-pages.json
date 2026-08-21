@@ -1,0 +1,40 @@
+{
+  "responses": {
+    "scope:kappaseijin/example:": {
+      "data": {
+        "repository": {
+          "issues": {
+            "totalCount": 2,
+            "nodes": [
+              {
+                "number": 42,
+                "state": "OPEN",
+                "repository": {"nameWithOwner": "kappaseijin/example"},
+                "labels": {"totalCount": 0, "nodes": [], "pageInfo": {"hasNextPage": false, "endCursor": null}}
+              }
+            ],
+            "pageInfo": {"hasNextPage": true, "endCursor": "scope-page-2"}
+          }
+        }
+      }
+    },
+    "scope:kappaseijin/example:scope-page-2": {
+      "data": {
+        "repository": {
+          "issues": {
+            "totalCount": 2,
+            "nodes": [
+              {
+                "number": 43,
+                "state": "OPEN",
+                "repository": {"nameWithOwner": "kappaseijin/example"},
+                "labels": {"totalCount": 0, "nodes": [], "pageInfo": {"hasNextPage": false, "endCursor": null}}
+              }
+            ],
+            "pageInfo": {"hasNextPage": false, "endCursor": null}
+          }
+        }
+      }
+    }
+  }
+}
