@@ -108,7 +108,7 @@ Run: `bats tests/test_team.bats`
 
 Expected: `roster-normalize.sh` が存在しないため、新規 normalizer cases は FAIL する。既存 team / join tests はその失敗理由を持たない。
 
-- [ ] **Step 6: commit 用に test 差分だけを stage する**
+- [x] **Step 6: commit 用に test 差分だけを stage する**
 
 ```bash
 git add tests/test_team.bats
@@ -197,7 +197,7 @@ Run: `bash -n scripts/roster-normalize.sh && git diff --check`
 
 Expected: exit 0.
 
-- [ ] **Step 7: commit implementation and tests with explicit paths**
+- [x] **Step 7: commit implementation and tests with explicit paths**
 
 ```bash
 git add scripts/roster-normalize.sh tests/test_team.bats
@@ -236,7 +236,7 @@ Run: `rg -n 'roster-normalize\.sh|--check|--apply|direct.*edit' README.md && bat
 
 Expected: README に command と safety boundary があり、focused Bats は PASS。
 
-- [ ] **Step 4: commit documentation with the feature paths only**
+- [x] **Step 4: commit documentation with the feature paths only**
 
 ```bash
 git add README.md scripts/roster-normalize.sh tests/test_team.bats
@@ -271,13 +271,17 @@ Run: `bats tests/test_team.bats && bash -n scripts/roster-normalize.sh && git di
 
 Then run the repository's documented full Bats command exactly once. If it is narrowed or stopped, report the full suite as unverified rather than PASS.
 
+実測: `tests/test_team.bats` は 1 回目に既存の concurrent-join case が 1 件失敗し、同 case の単独再実行は PASS。normalizer filter は 8/8 PASS、`bash -n` と `git diff --check` は PASS。ユーザー指定により repository-wide 142 tests は未実行で、full suite は未検証として扱う。
+
 - [ ] **Step 4: request independent formal review**
 
 Send `agmsg_reviewer_claude` the exact feature HEAD, changed files, issue URL, focused/full test commands and results, scratch evidence, and the required negative-control result. Do not ask the producer to approve its own contract.
 
-- [ ] **Step 5: report the evidence packet through PM**
+- [x] **Step 5: report the evidence packet through PM**
 
 Report `value / cutoff / source / command`: roster JSON success only after normalizer, affected config scope, feature head, test exits, negative control, reviewer state, and any unverified live-install migration. A queued agmsg message is not delivery confirmation or a completed migration.
+
+実測: PM への report は queue id `01a0239f-42b8-7926-894d-31d82750238e` で送信したが、`message-status.sh` は `notFound` を返し、delivery/ACK は未確認。
 
 ## Spec coverage self-review
 
