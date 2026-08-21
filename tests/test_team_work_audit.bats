@@ -186,7 +186,7 @@ if (input !== JSON.stringify(sort(value))) process.exit(1);
   run env TEAM_WORK_NOW="$now" bash "$SCRIPTS/team-work.sh" set-state demo "$pack" issue:43 dispatch blocked
   [ "$status" -eq 0 ]
 
-  export TEAM_WORK_NOW="$((now + 1))"
+  export TEAM_WORK_NOW="$((now + 2))"
   run_team_work "$AUDIT_FIXTURES/open-two.json" queue "$pack"
 
   [ "$status" -eq 0 ]

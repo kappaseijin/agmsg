@@ -509,7 +509,7 @@ INSERT INTO team_work_current(
 
   run_reconciler "$AUDIT_FIXTURES/open.json" dispatch-abandon "$pack" TEAM_WORK_NOW=101 TEAM_WORK_FAKE_DELIVERY=true -- issue:42 owner "$epoch" wrong-role
   [ "$status" -eq 2 ]
-  [[ "$output" == *"exact kind: seat manager"* ]]
+  printf '%s\n' "$output" | grep -Fq 'exact kind: seat manager'
   [ "$before" = "$(sha256_file "$database")" ]
 
   run_reconciler "$AUDIT_FIXTURES/open.json" dispatch-abandon "$pack" TEAM_WORK_NOW=101 TEAM_WORK_FAKE_DELIVERY=true -- issue:42 dispatch "$epoch" too-early

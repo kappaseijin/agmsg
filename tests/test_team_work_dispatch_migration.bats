@@ -94,8 +94,8 @@ ensure_store() {
 
   ensure_store "$store"
   [ "$status" -eq 0 ]
-  [[ "$(sqlite3 "$db" "PRAGMA table_info(team_work_dispatch_current);" | cut -d'|' -f2 | tr '\n' '|')" == *"recovery_evidence|"* ]]
-  [[ "$(sqlite3 "$db" "PRAGMA table_info(team_work_dispatch_revisions);" | cut -d'|' -f2 | tr '\n' '|')" == *"recovery_evidence|"* ]]
+  sqlite3 "$db" "PRAGMA table_info(team_work_dispatch_current);" | cut -d'|' -f2 | tr '\n' '|' | grep -Fq 'recovery_evidence|'
+  sqlite3 "$db" "PRAGMA table_info(team_work_dispatch_revisions);" | cut -d'|' -f2 | tr '\n' '|' | grep -Fq 'recovery_evidence|'
   [ "$(sqlite3 "$db" "SELECT state || ':' || lease_epoch FROM team_work_dispatch_current;")" = "claimed:epoch-2" ]
   [ "$(sqlite3 "$db" "SELECT group_concat(revision || ':' || state || ':' || coalesce(previous_revision, ''), '|') FROM team_work_dispatch_revisions ORDER BY revision;")" = "1:dispatching:|2:claimed:1" ]
 
