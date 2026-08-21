@@ -553,6 +553,7 @@ function runAudit(command, team, pack, roster) {
   let openItemCount = 0;
   let allocatedItemCount = 0;
   let blockedItemCount = 0;
+  const blockedWorkItemIds = [];
   let closedItemCount = 0;
   if (!unknown) {
     for (const fact of itemFacts) {
@@ -562,6 +563,7 @@ function runAudit(command, team, pack, roster) {
           allocatedItemCount += 1;
         } else if (fact.localState.row && fact.localState.row.state === "blocked") {
           blockedItemCount += 1;
+          blockedWorkItemIds.push(fact.item.workItem.id);
         } else {
           ready.push({
             workItemId: fact.item.workItem.id,
@@ -588,9 +590,8 @@ function runAudit(command, team, pack, roster) {
   if (!unknown && openItemCount === 0 && closedItemCount === pack.workItems.length) status = "quiescent";
   if (!unknown && ready.length === 0 && blockedItemCount > 0) {
     status = "unknown";
-    reasons = sortViolations(itemFacts
-      .filter((fact) => fact.sourceEvidence.state === "OPEN" && fact.localState.row && fact.localState.row.state === "blocked")
-      .map((fact) => ({ code: "blocked_work_item", workItemId: fact.item.workItem.id })));
+    reasons = sortViolations(blockedWorkItemIds
+      .map((workItemId) => ({ code: "blocked_work_item", workItemId })));
   }
   if (status === "unknown") ready = [];
 

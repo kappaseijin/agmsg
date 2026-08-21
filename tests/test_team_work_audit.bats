@@ -173,6 +173,28 @@ if (input !== JSON.stringify(sort(value))) process.exit(1);
   assert_no_reason "$output" blocked_work_item
 }
 
+@test "team-work queue: only expired blocked items explain a mixed blocked queue" {
+  local pack="$BATS_TEST_TMPDIR/mixed-blocked-reasons.json" now
+  write_mixed_pack "$pack"
+  now="$(date +%s)"
+  run env TEAM_WORK_NOW="$now" bash "$SCRIPTS/team-work.sh" claim demo "$pack" issue:42 owner 3600
+  [ "$status" -eq 0 ]
+  run env TEAM_WORK_NOW="$now" bash "$SCRIPTS/team-work.sh" claim demo "$pack" issue:43 owner 0
+  [ "$status" -eq 0 ]
+  run env TEAM_WORK_NOW="$now" bash "$SCRIPTS/team-work.sh" set-state demo "$pack" issue:42 dispatch blocked
+  [ "$status" -eq 0 ]
+  run env TEAM_WORK_NOW="$now" bash "$SCRIPTS/team-work.sh" set-state demo "$pack" issue:43 dispatch blocked
+  [ "$status" -eq 0 ]
+
+  export TEAM_WORK_NOW="$((now + 1))"
+  run_team_work "$AUDIT_FIXTURES/open-two.json" queue "$pack"
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" classificationBasis.status)" = "unknown" ]
+  [ "$(json_value "$output" ready)" = "[]" ]
+  [ "$(json_value "$output" classificationBasis.reasons)" = '[{"code":"blocked_work_item","workItemId":"issue:43"}]' ]
+}
+
 @test "team-work queue: acknowledged state clears a blocked item" {
   local pack="$BATS_TEST_TMPDIR/acknowledged-blocked.json"
   write_pack "$pack"
