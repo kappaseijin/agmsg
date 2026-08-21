@@ -6,6 +6,108 @@
 
 load test_helper
 
+# These paths are captured before setup_test_env replaces HOME. They may be
+# overridden for an isolated live-file check, while the ordinary suite remains
+# portable on machines that do not install the workstation policy files.
+AGMSG_MODEL_ORCHESTRATION_RULE_FILE_DEFAULT="${AGMSG_MODEL_ORCHESTRATION_RULE_FILE:-${HOME:-}/.agents/rules/model-orchestration.rule.md}"
+AGMSG_MODEL_ORCHESTRATION_RULE_FILE_WAS_SET="${AGMSG_MODEL_ORCHESTRATION_RULE_FILE+x}"
+AGMSG_SPAWN_OPTIONS_FILE_DEFAULT="${AGMSG_SPAWN_OPTIONS_FILE:-${HOME:-}/.agmsg/config/spawn_options.yaml}"
+AGMSG_SPAWN_OPTIONS_FILE_WAS_SET="${AGMSG_SPAWN_OPTIONS_FILE+x}"
+
+agmsg_model_orchestration_sync() {
+  local policy_file="${1:-}" options_file="${2:-}" rows
+  local role harness expected_model expected_effort section section_role
+  local actual_model actual_effort
+  local checked=0
+
+  [ "$#" -eq 2 ] || {
+    printf 'model sync: expected policy and spawn-options paths\n' >&2
+    return 2
+  }
+  [ -f "$policy_file" ] || {
+    printf 'model sync: missing policy file: %s\n' "$policy_file" >&2
+    return 1
+  }
+  [ -f "$options_file" ] || {
+    printf 'model sync: missing spawn-options file: %s\n' "$options_file" >&2
+    return 1
+  }
+
+  rows="$TEST_SKILL_DIR/model-orchestration.rows"
+  if ! awk -F '|' '
+    BEGIN { in_table = 0; rows = 0 }
+    $0 ~ /^\|[[:space:]]*役割[[:space:]]*\|[[:space:]]*ハーネス[[:space:]]*\|[[:space:]]*model[[:space:]]*\|[[:space:]]*effort[[:space:]]*\|/ {
+      in_table = 1
+      next
+    }
+    in_table && $0 !~ /^\|/ {
+      if (rows > 0) exit
+      next
+    }
+    in_table {
+      if ($2 ~ /^[[:space:]:-]+$/) next
+      role = $2
+      harness = $3
+      model = $4
+      effort = $5
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", role)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", harness)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", model)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", effort)
+      gsub(/[*`]/, "", harness)
+      gsub(/[*`]/, "", model)
+      gsub(/[*`]/, "", effort)
+      sub(/[（(].*$/, "", effort)
+      gsub(/[[:space:]]+$/, "", effort)
+      if (role == "" || harness == "" || model == "" || effort == "") next
+      print role "\t" harness "\t" model "\t" effort
+      rows++
+    }
+    END { exit(rows > 0 ? 0 : 1) }
+  ' "$policy_file" > "$rows"; then
+    printf 'model sync: role table was not found in %s\n' "$policy_file" >&2
+    return 1
+  fi
+
+  while IFS="$(printf '\t')" read -r role harness expected_model expected_effort; do
+    [ "$harness" = "claude-code" ] || continue
+    # The policy table uses the conceptual role name `manager`, while the
+    # runtime roster/spawn overlay slot is `pm`. Keep this one alias in the
+    # test so it checks the live slot instead of inventing a dead YAML section.
+    case "$role" in
+      manager) section_role=pm ;;
+      *) section_role="$role" ;;
+    esac
+    section="${harness}@${section_role}"
+    if ! actual_model="$(AGMSG_SPAWN_OPTIONS_FILE="$options_file" \
+      agmsg_spawn_options_section_value "$section" --model 2>/dev/null)"; then
+      printf 'model sync: missing --model in %s (expected %s)\n' \
+        "$section" "$expected_model" >&2
+      return 1
+    fi
+    if ! actual_effort="$(AGMSG_SPAWN_OPTIONS_FILE="$options_file" \
+      agmsg_spawn_options_section_value "$section" --effort 2>/dev/null)"; then
+      printf 'model sync: missing --effort in %s (expected %s)\n' \
+        "$section" "$expected_effort" >&2
+      return 1
+    fi
+    if [ "$actual_model" != "$expected_model" ] || \
+      [ "$actual_effort" != "$expected_effort" ]; then
+      printf 'model sync: %s expected model=%s effort=%s actual model=%s effort=%s\n' \
+        "$section" "$expected_model" "$expected_effort" \
+        "$actual_model" "$actual_effort" >&2
+      return 1
+    fi
+    checked=$((checked + 1))
+  done < "$rows"
+
+  [ "$checked" -gt 0 ] || {
+    printf 'model sync: no claude-code role rows were checked in %s\n' \
+      "$policy_file" >&2
+    return 1
+  }
+}
+
 setup() {
   setup_test_env
   # shellcheck disable=SC1090
@@ -17,6 +119,85 @@ setup() {
 }
 
 teardown() { teardown_test_env; }
+
+@test "model sync: role table and spawn options are compared" {
+  local policy_file="$TEST_SKILL_DIR/model-orchestration.rule.md"
+  local options_file="$TEST_SKILL_DIR/spawn_options.yaml"
+
+  cat > "$policy_file" <<'MARKDOWN'
+| 役割 | ハーネス | model | effort |
+| --- | --- | --- | --- |
+| manager | claude-code | `claude-opus-5` | low |
+| reviewer | **claude-code** | `claude-sonnet-5` | xhigh（review policy note） |
+| programmer | **codex** | `gpt-5.6-terra` | medium |
+MARKDOWN
+  cat > "$options_file" <<'YAML'
+claude-code@pm:
+  --model: claude-opus-5
+  --effort: low
+claude-code@reviewer:
+  --model: claude-sonnet-5
+  --effort: xhigh
+codex@programmer:
+  -p: programmer
+YAML
+
+  run agmsg_model_orchestration_sync "$policy_file" "$options_file"
+  [ "$status" -eq 0 ]
+}
+
+@test "model sync: stale model or effort fails closed" {
+  local policy_file="$TEST_SKILL_DIR/model-orchestration.rule.md"
+  local options_file="$TEST_SKILL_DIR/spawn_options.yaml"
+
+  cat > "$policy_file" <<'MARKDOWN'
+| 役割 | ハーネス | model | effort |
+| --- | --- | --- | --- |
+| reviewer | claude-code | `claude-sonnet-5` | xhigh |
+MARKDOWN
+  cat > "$options_file" <<'YAML'
+claude-code@reviewer:
+  --model: claude-sonnet-5
+  --effort: xhigh
+YAML
+
+  run agmsg_model_orchestration_sync "$policy_file" "$options_file"
+  [ "$status" -eq 0 ]
+
+  cat > "$options_file" <<'YAML'
+claude-code@reviewer:
+  --model: claude-opus-5
+  --effort: xhigh
+YAML
+  run agmsg_model_orchestration_sync "$policy_file" "$options_file"
+  [ "$status" -ne 0 ]
+
+  cat > "$options_file" <<'YAML'
+claude-code@reviewer:
+  --model: claude-sonnet-5
+  --effort: medium
+YAML
+  run agmsg_model_orchestration_sync "$policy_file" "$options_file"
+  [ "$status" -ne 0 ]
+}
+
+@test "model sync: installed role overlays match the current policy table" {
+  local policy_file="$AGMSG_MODEL_ORCHESTRATION_RULE_FILE_DEFAULT"
+  local options_file="$AGMSG_SPAWN_OPTIONS_FILE_DEFAULT"
+
+  if [ ! -f "$policy_file" ] || [ ! -f "$options_file" ]; then
+    if [ -n "$AGMSG_MODEL_ORCHESTRATION_RULE_FILE_WAS_SET" ] || \
+      [ -n "$AGMSG_SPAWN_OPTIONS_FILE_WAS_SET" ]; then
+      printf 'model sync: explicit live files are unavailable: %s and %s\n' \
+        "$policy_file" "$options_file" >&2
+      return 1
+    fi
+    skip "workstation model policy and spawn-options files are not installed"
+  fi
+
+  run agmsg_model_orchestration_sync "$policy_file" "$options_file"
+  [ "$status" -eq 0 ]
+}
 
 # --- agmsg_spawn_options_file ---
 
