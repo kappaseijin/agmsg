@@ -11,10 +11,12 @@ DB_DIR="$(dirname "$DB")"
 mkdir -p "$DB_DIR"
 
 # Keep direct internal initialization safe for deployed stores too. The public
-# storage facade invokes the same migration before this script; the second
-# invocation is an idempotent no-op.
-migration_script="$SCRIPT_DIR/migrate-team-work-dispatch.sh"
-AGMSG_STORAGE_PATH="$(agmsg_storage_dir)" bash "$migration_script"
+# storage facade runs the migration first and marks that successful handoff so
+# the normal path does not spawn the migration process twice.
+if [ "${AGMSG_DISPATCH_MIGRATION_DONE:-0}" != "1" ]; then
+  migration_script="$SCRIPT_DIR/migrate-team-work-dispatch.sh"
+  AGMSG_STORAGE_PATH="$(agmsg_storage_dir)" bash "$migration_script"
+fi
 
 # Idempotent and safe to run concurrently. When a leader fans a job out to N
 # members against a fresh/override store (see #106), every send.sh races to

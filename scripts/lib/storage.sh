@@ -253,7 +253,7 @@ agmsg_storage_ensure_initialized() {
   init_script="$lib_dir/../internal/init-db.sh"
   migration_script="$lib_dir/../internal/migrate-team-work-dispatch.sh"
   AGMSG_STORAGE_PATH="$(agmsg_storage_dir)" bash "$migration_script"
-  AGMSG_STORAGE_PATH="$(agmsg_storage_dir)" bash "$init_script" >/dev/null
+  AGMSG_STORAGE_PATH="$(agmsg_storage_dir)" AGMSG_DISPATCH_MIGRATION_DONE=1 bash "$init_script" >/dev/null
 }
 
 agmsg_runtime_lock_acquire() {
