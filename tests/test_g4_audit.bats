@@ -87,6 +87,69 @@ fs.writeFileSync(process.env.G4_PACK_PATH, JSON.stringify(pack));
 NODE
 }
 
+write_predicate_pack() {
+  local path="$1" kind="$2"
+  write_g4_pack "$path"
+  G4_PACK_PATH="$path" G4_PREDICATE_KIND="$kind" node <<'NODE'
+const crypto = require("crypto");
+const fs = require("fs");
+const pack = JSON.parse(fs.readFileSync(process.env.G4_PACK_PATH, "utf8"));
+
+function isObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (isObject(value)) {
+    const result = {};
+    for (const key of Object.keys(value).sort()) result[key] = canonicalize(value[key]);
+    return result;
+  }
+  return value;
+}
+function digest(value) {
+  return `sha256:${crypto.createHash("sha256").update(JSON.stringify(canonicalize(value)), "utf8").digest("hex")}`;
+}
+function refreshEntry(entry) {
+  const basisInput = Object.assign({}, entry);
+  delete basisInput.basis;
+  delete basisInput.entryDigest;
+  entry.basis.contentDigest = digest(basisInput);
+  const entryInput = Object.assign({}, entry);
+  delete entryInput.entryDigest;
+  entry.entryDigest = digest(entryInput);
+}
+
+const predicates = {
+  issue_closed: {kind: "issue_closed", repository: "kappaseijin/example", number: 42},
+  pull_request_merged: {kind: "pull_request_merged", repository: "kappaseijin/example", number: 42},
+  review_approved: {
+    kind: "review_approved",
+    repository: "kappaseijin/example",
+    number: 42,
+    headOid: "head-42",
+  },
+  issue_comment_digest: {
+    kind: "issue_comment_digest",
+    repository: "kappaseijin/example",
+    number: 42,
+    commentId: 7,
+    contentDigest: digest("release comment"),
+  },
+};
+const predicate = predicates[process.env.G4_PREDICATE_KIND];
+if (!predicate) throw new Error(`unknown predicate kind: ${process.env.G4_PREDICATE_KIND}`);
+
+pack.entries[0].state = "blocked";
+pack.entries[0].blocker = {
+  reasonCode: `${predicate.kind}_gate`,
+  releasePredicate: predicate,
+};
+refreshEntry(pack.entries[0]);
+fs.writeFileSync(process.env.G4_PACK_PATH, JSON.stringify(pack));
+NODE
+}
+
 mutate_g4_pack() {
   local path="$1" mutation="$2"
   G4_PACK_PATH="$path" G4_MUTATION="$mutation" node <<'NODE'
@@ -289,6 +352,53 @@ if (input !== JSON.stringify(sort(value))) process.exit(1);
   [ "$(json_value "$output" entries[0].state)" = "blocked" ]
   [ "$(json_value "$output" entries[0].releasePredicate.status)" = "true" ]
   [ "$(json_value "$output" ready[0].source.number)" = "43" ]
+}
+
+@test "g4-audit: read-only predicate fixtures cover positive paths" {
+  local pack="$BATS_TEST_TMPDIR/g4-predicate-pack.json" kind operation
+  for kind in issue_closed pull_request_merged review_approved issue_comment_digest; do
+    write_predicate_pack "$pack" "$kind"
+    run_g4_audit "$G4_FIXTURES/predicate-positive.json" "$pack"
+    [ "$status" -eq 0 ]
+    [ "$(json_value "$output" classificationBasis.status)" = "complete" ]
+    [ "$(json_value "$output" entries[0].state)" = "blocked" ]
+    [ "$(json_value "$output" entries[0].releasePredicate.status)" = "true" ]
+    [ "$(json_value "$output" ready[0].source.number)" = "43" ]
+  done
+
+  for operation in G4IssueState G4PullRequestState G4PullRequestReviews G4IssueComments; do
+    grep -Fq "\"operation\":\"$operation\"" "$G4_GH_LOG"
+  done
+  ! grep -q '"kind":"write"' "$G4_GH_LOG"
+}
+
+@test "g4-audit: read-only predicate fixtures cover negative paths" {
+  local pack="$BATS_TEST_TMPDIR/g4-predicate-pack.json" kind
+  for kind in issue_closed pull_request_merged review_approved issue_comment_digest; do
+    write_predicate_pack "$pack" "$kind"
+    run_g4_audit "$G4_FIXTURES/predicate-negative.json" "$pack"
+    [ "$status" -eq 0 ]
+    [ "$(json_value "$output" classificationBasis.status)" = "unknown" ]
+    [ "$(json_value "$output" entries[0].state)" = "blocked" ]
+    [ "$(json_value "$output" entries[0].releasePredicate.status)" = "false" ]
+    [ "$(json_value "$output" ready)" = "[]" ]
+    grep -Fq '"code":"blocked_predicate_false"' <<<"$output"
+  done
+}
+
+@test "g4-audit: predicate gh failure is unknown and never ready" {
+  local pack="$BATS_TEST_TMPDIR/g4-predicate-pack.json"
+  write_predicate_pack "$pack" issue_closed
+
+  run_g4_audit "$G4_FIXTURES/predicate-gh-failure.json" "$pack"
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" classificationBasis.status)" = "unknown" ]
+  [ "$(json_value "$output" entries[0].state)" = "unknown" ]
+  [ "$(json_value "$output" entries[0].releasePredicate.status)" = "unknown" ]
+  [ "$(json_value "$output" ready)" = "[]" ]
+  grep -Fq '"code":"blocked_predicate_unknown"' <<<"$output"
+  ! grep -q '"kind":"write"' "$G4_GH_LOG"
 }
 
 @test "g4-audit: rejects invalid state and digest contracts before live reads" {
