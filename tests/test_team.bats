@@ -233,7 +233,10 @@ config_sha256() {
 
   [ "$status" -eq 2 ]
   [ -z "$output" ]
-  [[ "$stderr" == *"schema error: schemaVersion must be integer 1"* ]]
+  case "$stderr" in
+    *"schema error: schemaVersion must be integer 1"*) ;;
+    *) false ;;
+  esac
 }
 
 @test "roster-normalize: check reports a ready candidate without changing config" {
@@ -258,7 +261,10 @@ config_sha256() {
   [ "$output" = '{"schemaVersion":1,"team":"legacy","status":"applied","changed":true}' ]
   run bash "$SCRIPTS/team.sh" legacy --format json
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"schemaVersion":1'* ]]
+  case "$output" in
+    *'"schemaVersion":1'*) ;;
+    *) false ;;
+  esac
   [ ! -e "$(dirname "$cfg")/.config.lock" ]
 }
 
@@ -286,7 +292,10 @@ config_sha256() {
 
   [ "$status" -eq 2 ]
   [ -z "$output" ]
-  [[ "$stderr" == *"schema error:"* ]]
+  case "$stderr" in
+    *"schema error:"*) ;;
+    *) false ;;
+  esac
   [ "$(config_sha256 "$cfg")" = "$before" ]
 }
 
@@ -303,7 +312,10 @@ config_sha256() {
 
   [ "$status" -eq 2 ]
   [ -z "$output" ]
-  [[ "$stderr" == *"schema error: member role"* ]]
+  case "$stderr" in
+    *"schema error: member role"*) ;;
+    *) false ;;
+  esac
   [ "$(config_sha256 "$cfg")" = "$before" ]
 }
 
@@ -320,7 +332,10 @@ config_sha256() {
 
   [ "$status" -eq 2 ]
   [ -z "$output" ]
-  [[ "$stderr" == *"schema error: member kind"* ]]
+  case "$stderr" in
+    *"schema error: member kind"*) ;;
+    *) false ;;
+  esac
   [ "$(config_sha256 "$cfg")" = "$before" ]
 
   printf '%s' \
@@ -332,7 +347,10 @@ config_sha256() {
 
   [ "$status" -eq 2 ]
   [ -z "$output" ]
-  [[ "$stderr" == *"schema error: registration type"* ]]
+  case "$stderr" in
+    *"schema error: registration type"*) ;;
+    *) false ;;
+  esac
   [ "$(config_sha256 "$cfg")" = "$before" ]
 }
 
