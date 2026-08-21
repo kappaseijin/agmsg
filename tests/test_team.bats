@@ -2,6 +2,8 @@
 
 load test_helper
 
+bats_require_minimum_version 1.5.0
+
 setup() {
   setup_test_env
 }
@@ -207,6 +209,159 @@ EOF
   run bash "$SCRIPTS/leave.sh" myteam "al.ice"
   [ "$status" -ne 0 ]
   [[ "$output" =~ "must not contain" ]]
+}
+
+write_normalizable_legacy_roster() {
+  local team="$1"
+  local cfg="$TEST_SKILL_DIR/teams/$team/config.json"
+  mkdir -p "$(dirname "$cfg")"
+  printf '%s' \
+    '{"name":"'"$team"'","agents":{"alice":{"kind":"seat","role":"architect","registrations":[{"type":"codex","project":"/tmp/alice"}]}}}' \
+    > "$cfg"
+}
+
+config_sha256() {
+  shasum -a 256 "$1" | awk '{print $1}'
+}
+
+# --- roster-normalize.sh ---
+
+@test "roster-normalize: known missing schemaVersion fails team json before normalization" {
+  write_normalizable_legacy_roster legacy
+
+  run --separate-stderr bash "$SCRIPTS/team.sh" legacy --format json
+
+  [ "$status" -eq 2 ]
+  [ -z "$output" ]
+  case "$stderr" in
+    *"schema error: schemaVersion must be integer 1"*) ;;
+    *) false ;;
+  esac
+}
+
+@test "roster-normalize: check reports a ready candidate without changing config" {
+  write_normalizable_legacy_roster legacy
+  local cfg="$TEST_SKILL_DIR/teams/legacy/config.json"
+  local before="$(config_sha256 "$cfg")"
+
+  run bash "$SCRIPTS/roster-normalize.sh" legacy --check
+
+  [ "$status" -eq 0 ]
+  [ "$output" = '{"schemaVersion":1,"team":"legacy","status":"ready","changed":true}' ]
+  [ "$(config_sha256 "$cfg")" = "$before" ]
+}
+
+@test "roster-normalize: apply publishes an atomic v1 config and team json succeeds" {
+  write_normalizable_legacy_roster legacy
+  local cfg="$TEST_SKILL_DIR/teams/legacy/config.json"
+
+  run --separate-stderr bash "$SCRIPTS/roster-normalize.sh" legacy --apply
+
+  [ "$status" -eq 0 ]
+  [ "$output" = '{"schemaVersion":1,"team":"legacy","status":"applied","changed":true}' ]
+  run bash "$SCRIPTS/team.sh" legacy --format json
+  [ "$status" -eq 0 ]
+  case "$output" in
+    *'"schemaVersion":1'*) ;;
+    *) false ;;
+  esac
+  [ ! -e "$(dirname "$cfg")/.config.lock" ]
+}
+
+@test "roster-normalize: apply is a no-op for a current config" {
+  write_normalizable_legacy_roster legacy
+  bash "$SCRIPTS/roster-normalize.sh" legacy --apply
+  local cfg="$TEST_SKILL_DIR/teams/legacy/config.json"
+  local before="$(config_sha256 "$cfg")"
+
+  run --separate-stderr bash "$SCRIPTS/roster-normalize.sh" legacy --apply
+
+  [ "$status" -eq 0 ]
+  [ "$output" = '{"schemaVersion":1,"team":"legacy","status":"already_current","changed":false}' ]
+  [ "$(config_sha256 "$cfg")" = "$before" ]
+}
+
+@test "roster-normalize: schemaVersion string fails closed without writing" {
+  write_normalizable_legacy_roster legacy
+  local cfg="$TEST_SKILL_DIR/teams/legacy/config.json"
+  sed 's/^{/{"schemaVersion":"1",/' "$cfg" > "$cfg.tmp"
+  mv "$cfg.tmp" "$cfg"
+  local before="$(config_sha256 "$cfg")"
+
+  run --separate-stderr bash "$SCRIPTS/roster-normalize.sh" legacy --apply
+
+  [ "$status" -eq 2 ]
+  [ -z "$output" ]
+  case "$stderr" in
+    *"schema error:"*) ;;
+    *) false ;;
+  esac
+  [ "$(config_sha256 "$cfg")" = "$before" ]
+}
+
+@test "roster-normalize: incomplete member metadata fails closed without writing" {
+  local cfg_dir="$TEST_SKILL_DIR/teams/legacy"
+  mkdir -p "$cfg_dir"
+  printf '%s' \
+    '{"name":"legacy","agents":{"alice":{"kind":"seat","registrations":[{"type":"codex","project":"/tmp/alice"}]}}}' \
+    > "$cfg_dir/config.json"
+  local cfg="$cfg_dir/config.json"
+  local before="$(config_sha256 "$cfg")"
+
+  run --separate-stderr bash "$SCRIPTS/roster-normalize.sh" legacy --apply
+
+  [ "$status" -eq 2 ]
+  [ -z "$output" ]
+  case "$stderr" in
+    *"schema error: member role"*) ;;
+    *) false ;;
+  esac
+  [ "$(config_sha256 "$cfg")" = "$before" ]
+}
+
+@test "roster-normalize: invalid member kind and empty registration fail closed" {
+  local cfg_dir="$TEST_SKILL_DIR/teams/legacy"
+  mkdir -p "$cfg_dir"
+  printf '%s' \
+    '{"name":"legacy","agents":{"alice":{"kind":"robot","role":"architect","registrations":[{"type":"codex","project":"/tmp/alice"}]}}}' \
+    > "$cfg_dir/config.json"
+  local cfg="$cfg_dir/config.json"
+  local before="$(config_sha256 "$cfg")"
+
+  run --separate-stderr bash "$SCRIPTS/roster-normalize.sh" legacy --apply
+
+  [ "$status" -eq 2 ]
+  [ -z "$output" ]
+  case "$stderr" in
+    *"schema error: member kind"*) ;;
+    *) false ;;
+  esac
+  [ "$(config_sha256 "$cfg")" = "$before" ]
+
+  printf '%s' \
+    '{"name":"legacy","agents":{"alice":{"kind":"seat","role":"architect","registrations":[{}]}}}' \
+    > "$cfg"
+  before="$(config_sha256 "$cfg")"
+
+  run --separate-stderr bash "$SCRIPTS/roster-normalize.sh" legacy --check
+
+  [ "$status" -eq 2 ]
+  [ -z "$output" ]
+  case "$stderr" in
+    *"schema error: registration type"*) ;;
+    *) false ;;
+  esac
+  [ "$(config_sha256 "$cfg")" = "$before" ]
+}
+
+@test "roster-normalize: invalid team and mode fail before touching config" {
+  run --separate-stderr bash "$SCRIPTS/roster-normalize.sh" "../bad" --check
+  [ "$status" -eq 2 ]
+  [ -z "$output" ]
+
+  run --separate-stderr bash "$SCRIPTS/roster-normalize.sh" legacy --unsupported
+  [ "$status" -eq 2 ]
+  [ -z "$output" ]
 }
 
 # --- team.sh ---
