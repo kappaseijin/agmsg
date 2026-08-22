@@ -153,20 +153,20 @@ _assert_startup_was_delayed() {
 
   run bash "$TYPES/codex/watch-once.sh" "$PROJ" codex --timeout 1 --interval 1
   [ "$status" -eq 2 ]
-  [[ "$output" =~ "status=timeout" ]]
+  printf '%s\n' "$output" | grep -q 'status=timeout'
 
   run bash "$TYPES/codex/watch-once.sh" "$PROJ" codex --name alice --timeout 1 --interval 1
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "count=1" ]]
+  printf '%s\n' "$output" | grep -q 'count=1'
 
   bash "$SCRIPTS/send.sh" team bob alice "inside project" >/dev/null
   run bash "$TYPES/codex/watch-once.sh" "$PROJ" codex --name alice --timeout 1 --interval 1
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "count=2" ]]
+  printf '%s\n' "$output" | grep -q 'count=2'
 
   run bash "$TYPES/codex/watch-once.sh" "$PROJ" codex --name alice --team team-b --timeout 1 --interval 1
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "count=1" ]]
+  printf '%s\n' "$output" | grep -q 'count=1'
 }
 
 # --- #605: when the exclusion above empties the whole subscription, name the

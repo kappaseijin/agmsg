@@ -94,8 +94,8 @@ fake_session() {
 
   run bash "$SKILL_DIR/scripts/actas-claim.sh" /tmp/p1 claude-code alice "sid-me"
   [ "$status" -eq 1 ]
-  [[ "$output" =~ "status=held" ]]
-  [[ "$output" =~ "team=team-b" ]]
+  printf '%s\n' "$output" | grep -q 'status=held'
+  printf '%s\n' "$output" | grep -q 'team=team-b'
   [ ! -f "$(actas_lock_path team-a alice)" ]
   [ "$(actas_lock_owner team-b alice)" = "sid-other" ]
 }
