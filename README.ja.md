@@ -159,12 +159,19 @@ PATH="$HOME/.agents/bin:$PATH" command -v git
 ホームディレクトリを展開した `~/.agents/bin/git` が表示されなければならない。
 ランチャーはインストール時にガードと実Gitの絶対パスを固定する。`git push` は
 `remote.*.pushurl` の全エントリと `url.*.insteadOf` / `url.*.pushInsteadOf` の
-書換えを含む、すべての実効push URLを検査する。書き込みが許可されるのは
-`github.com` 上の所有者 `kappaseijin` または `kappaseijinjp` だけである。
-形式不正なURL、ローカルパス、未知のホスト、第三者所有者、解決不能な宛先は
+書換えを含む、すべての実効push URLを検査する。書き込みを許可するhostは、
+`github.com`、`github.com-kappaseijinsub`、`github.com-kappaseijin4claude`、
+`github.com-kappaseijin4codex` の4つのコードリテラルとの完全一致に限る。
+所有者も `kappaseijin` または `kappaseijinjp` に限る。形式不正なURL、
+ローカルパス、未知のホスト、第三者所有者、解決不能な宛先は
 transport開始前にfail-closedで拒否する。直接URLは一時的なsynthetic remoteで
 解決し、同じ書換え後のURLを検査する。Git alias と `git send-pack` は拒否し、
 読み取り専用コマンドと `git clone` は実Gitへ渡す。
+
+上記4 host以外の任意の `github.com-*`、SSH configのalias、環境変数やGit configに
+よる上書きは許可集合を拡張しない。承認済みaliasを追加する場合は、guardの
+コードリテラルallowlistを変更し、local fake-SSHの正負テストを含むレビュー済みPRで
+明示的に拡張する。
 
 インストーラーはagmsg製でない `~/.agents/bin/git` を上書きしない。Gitが未導入
 の場合はガードを配置せずメッセージを表示するため、Git導入後に

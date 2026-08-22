@@ -198,6 +198,40 @@ assert_rejected() {
   assert_rejected -C "$WORK" push -q git@github.com:thirdparty/fixture.git HEAD:main
 }
 
+@test "GPG-16: allows every approved SSH alias for an allowlisted owner" {
+  local host ref
+  for host in github.com-kappaseijinsub github.com-kappaseijin4claude github.com-kappaseijin4codex; do
+    ref="gpg-16-${host#github.com-}"
+    : > "$SSH_LOG"
+    rm -f "$PUSH_MARKER"
+    run_guard -C "$WORK" push "git@$host:kappaseijin/fixture.git" "HEAD:$ref"
+    [ "$status" -eq 0 ]
+    [ -s "$SSH_LOG" ]
+    [ -s "$PUSH_MARKER" ]
+  done
+}
+
+@test "GPG-17: rejects an unknown github.com alias before transport" {
+  assert_rejected -C "$WORK" push git@github.com-unrecognized:kappaseijin/fixture.git HEAD:gpg-17
+}
+
+@test "GPG-18: rejects a suffix-forged approved alias before transport" {
+  assert_rejected -C "$WORK" push git@github.com-kappaseijin4codex.evil:kappaseijin/fixture.git HEAD:gpg-18
+}
+
+@test "GPG-19: approved SSH aliases do not bypass the owner allowlist" {
+  assert_rejected -C "$WORK" push git@github.com-kappaseijin4codex:thirdparty/fixture.git HEAD:gpg-19
+}
+
+@test "GPG-20: preserves canonical github.com transport for an allowlisted owner" {
+  : > "$SSH_LOG"
+  rm -f "$PUSH_MARKER"
+  run_guard -C "$WORK" push git@github.com:kappaseijin/fixture.git HEAD:gpg-20
+  [ "$status" -eq 0 ]
+  [ -s "$SSH_LOG" ]
+  [ -s "$PUSH_MARKER" ]
+}
+
 @test "GPG-14: fixed Git execution ignores a PATH decoy" {
   local decoy_dir decoy marker
   decoy_dir="$TEST_SKILL_DIR/decoy"
