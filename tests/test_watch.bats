@@ -243,21 +243,17 @@ _wait_for_file_contains() {
   mkdir -p "$(dirname "$db")"
   printf 'not a database' > "$db"
 
-  local out="$TEST_SKILL_DIR/mt5-health.out"
   local ready="$TEST_SKILL_DIR/run/ready.health-a__alice"
   # This is a standalone synthetic watcher, not a child of an agent process.
   # Keep the ambient CI Bats process tree out of the instance/project
-  # resolution walk; otherwise the health assertion can spend the wait budget
-  # traversing unrelated parent processes before it reaches the DB check.
-  export AGMSG_AGENT_PID=""
-  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" mt5-health-sid "$proj_a" claude-code alice \
-    >"$out" 2>&1 3>&- 4>&- &
-  local watcher=$!
-  if ! wait_for_file_contains "$out" "ERROR: cannot open message DB"; then
-    _stop_watcher "$watcher"
-    false
-  fi
-  wait_for_pid_exit "$watcher" || { _stop_watcher "$watcher"; false; }
+  # resolution walk. The command-local overrides are intentional: this test
+  # exercises the health gate, not parent-agent discovery, and must not alter
+  # the environment of any later test.
+  run bash -c 'exec 3>&- 4>&-; exec "$@"' _ \
+    env AGMSG_AGENT_PID="" AGMSG_RESOLVE_PROJECT=0 AGMSG_WATCH_INTERVAL=1 \
+    bash "$SCRIPTS/watch.sh" mt5-health-sid "$proj_a" claude-code alice
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"ERROR: cannot open message DB"* ]]
   [ ! -e "$ready" ]
   [ ! -e "$TEST_SKILL_DIR/run/ready.health-b__alice" ]
 }
@@ -345,12 +341,13 @@ _wait_for_file_contains() {
   # exits before it could deliver or watermark M2.
   kill "$sesspid" 2>/dev/null || true
   wait "$sesspid" 2>/dev/null || true
+  wait_for_pid_exit "$w" || { kill "$w" 2>/dev/null || true; false; }
+  _wait_for_missing "$pf" || false
   bash "$SCRIPTS/send.sh" team bob alice "M2-undelivered" >/dev/null
-  _wait_for_missing "$pf" || { kill "$w" 2>/dev/null || true; false; }
-  run kill -0 "$w"; [ "$status" -ne 0 ]
   [ "$(_read_cursor team alice)" = "$first_cursor" ]
   refute grep -q "M2-undelivered" "$out"
-  run_watcher_for "after-liveness" "$TEST_SKILL_DIR/liveness-redelivery.log" 2
+  run_watcher_until_contains "after-liveness" \
+    "$TEST_SKILL_DIR/liveness-redelivery.log" "M2-undelivered"
   grep -q "M2-undelivered" "$TEST_SKILL_DIR/liveness-redelivery.log"
 }
 
