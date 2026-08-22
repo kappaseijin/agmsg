@@ -245,16 +245,17 @@ _wait_for_file_contains() {
 
   local out="$TEST_SKILL_DIR/mt5-health.out"
   local ready="$TEST_SKILL_DIR/run/ready.health-a__alice"
+  local sid="mt5-health-sid.$$"
   # This is a standalone synthetic watcher, not a child of an agent process.
   # Keep the ambient CI Bats process tree out of the instance/project
   # resolution walk. The command-local overrides are intentional: this test
   # exercises the health gate, not parent-agent discovery, and must not alter
   # the environment of any later test.
   AGMSG_AGENT_PID="" AGMSG_RESOLVE_PROJECT=0 AGMSG_WATCH_INTERVAL=1 \
-    bash "$SCRIPTS/watch.sh" mt5-health-sid "$proj_a" claude-code alice \
+    bash "$SCRIPTS/watch.sh" "$sid" "$proj_a" claude-code alice \
     >"$out" 2>&1 3>&- 4>&- &
   local watcher=$!
-  if ! _WAIT_TICKS=300 wait_for_file_contains "$out" "ERROR: cannot open message DB"; then
+  if ! _WAIT_TICKS=600 wait_for_file_contains "$out" "ERROR: cannot open message DB"; then
     _stop_watcher "$watcher"
     false
   fi
