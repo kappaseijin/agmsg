@@ -15,6 +15,12 @@ fi
 readonly REAL_GIT="$1"
 shift
 readonly -a ALLOWED_OWNERS=(kappaseijin kappaseijinjp)
+readonly -a ALLOWED_HOSTS=(
+  github.com
+  github.com-kappaseijinsub
+  github.com-kappaseijin4claude
+  github.com-kappaseijin4codex
+)
 
 if [[ "$REAL_GIT" != /* || ! -x "$REAL_GIT" || -d "$REAL_GIT" ]]; then
   echo "error: git-push-owner-guard: invalid fixed git path: $REAL_GIT" >&2
@@ -36,6 +42,16 @@ allowed_owner() {
   local candidate
   for candidate in "${ALLOWED_OWNERS[@]}"; do
     [ "$owner" = "$candidate" ] && return 0
+  done
+  return 1
+}
+
+allowed_host() {
+  local host
+  host="$(ascii_lower "$1")"
+  local candidate
+  for candidate in "${ALLOWED_HOSTS[@]}"; do
+    [ "$host" = "$candidate" ] && return 0
   done
   return 1
 }
@@ -269,7 +285,7 @@ parse_push_url() {
 
 authorize_url() {
   parse_push_url "$1" || return 1
-  [ "$PARSED_HOST" = github.com ] || return 1
+  allowed_host "$PARSED_HOST" || return 1
   allowed_owner "$PARSED_OWNER"
 }
 

@@ -159,12 +159,20 @@ It must print `~/.agents/bin/git` (with the home directory expanded). The
 launcher pins the guard and the real Git executable to absolute paths at
 install time. `git push` checks every effective push URL, including all
 `remote.*.pushurl` entries and `url.*.insteadOf` / `url.*.pushInsteadOf`
-rewrites. Writes are allowed only for `github.com` owners `kappaseijin` and
-`kappaseijinjp`; malformed URLs, local paths, unknown hosts, third-party
+rewrites. Writes are allowed only when the resolved host is exactly one of
+`github.com`, `github.com-kappaseijinsub`, `github.com-kappaseijin4claude`, or
+`github.com-kappaseijin4codex`, and the owner is `kappaseijin` or
+`kappaseijinjp`. Malformed URLs, local paths, unknown hosts, third-party
 owners, and unresolved destinations fail closed before transport starts.
 Direct URLs are resolved through a temporary synthetic remote so the same
 rewrite rules are checked. Git aliases and `git send-pack` are rejected;
 read-only commands and `git clone` continue to use the real Git executable.
+
+The four SSH host names above are a fixed code-literal policy boundary. An
+arbitrary `github.com-*` name, an SSH config alias, or an environment/config
+override does not extend it. Adding an approved alias requires changing the
+guard's code-literal allowlist and adding local fake-SSH positive and negative
+tests in a reviewed PR.
 
 The installer refuses to overwrite a non-agmsg `~/.agents/bin/git`. If Git is
 not found, it leaves the guard uninstalled and prints a message; rerun
