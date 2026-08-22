@@ -222,6 +222,18 @@ for TEAM_CONFIG in "$TEAMS_DIR"/*/config.json; do
   fi
 done
 
+# `drop` removes the registration only from the project being reset, but the
+# session's lock for this target name may exist in every registered team. Clear
+# those locks independently so a peer watcher in another project is not kept
+# out after the role has been dropped here. actas_lock_release is owner-checked.
+if [ -n "$SESSION_ID" ] && [ -d "$TEAMS_DIR" ]; then
+  for _LOCK_CONFIG in "$TEAMS_DIR"/*/config.json; do
+    [ -f "$_LOCK_CONFIG" ] || continue
+    _LOCK_TEAM="$(basename "$(dirname "$_LOCK_CONFIG")")"
+    actas_lock_release "$_LOCK_TEAM" "$TARGET_AGENT" "$SESSION_ID" 2>/dev/null || true
+  done
+fi
+
 if [ "$REMOVED" -eq 0 ]; then
   echo "No registrations removed."
   echo "  (searched project: $PROJECT_PATH)"

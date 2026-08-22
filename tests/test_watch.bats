@@ -131,6 +131,13 @@ _read_cursor() {
     storage_read_cursor_get "$1" "$2" )
 }
 
+_team_store() {
+  ( # shellcheck disable=SC1090
+    source "$SCRIPTS/lib/storage.sh"
+    agmsg_storage_load
+    agmsg_db_path "$1" )
+}
+
 _wait_for_file() {
   local file="$1" i
   for i in $(seq 1 100); do
@@ -157,6 +164,97 @@ _wait_for_file_contains() {
     sleep 0.1
   done
   return 1
+}
+
+@test "watch: actas name receives every registered team and excludes other pairs" {
+  skip_on_windows "watcher process management under Git Bash (#182)"
+  local proj_a=/tmp/agmsg-mt3-a proj_b=/tmp/agmsg-mt3-b
+  bash "$SCRIPTS/join.sh" team-a alice claude-code "$proj_a" >/dev/null
+  bash "$SCRIPTS/join.sh" team-a sender claude-code "$proj_a" >/dev/null
+  bash "$SCRIPTS/join.sh" team-b alice claude-code "$proj_b" >/dev/null
+  bash "$SCRIPTS/join.sh" team-b sender claude-code "$proj_b" >/dev/null
+  bash "$SCRIPTS/join.sh" team-b bob claude-code "$proj_b" >/dev/null
+  bash "$SCRIPTS/join.sh" team-c sender claude-code /tmp/agmsg-mt3-c >/dev/null
+  bash "$SCRIPTS/join.sh" team-c bob claude-code /tmp/agmsg-mt3-c >/dev/null
+  bash "$SCRIPTS/join.sh" team-d sender codex /tmp/agmsg-mt3-d >/dev/null
+  bash "$SCRIPTS/join.sh" team-d alice codex /tmp/agmsg-mt3-d >/dev/null
+
+  local out="$TEST_SKILL_DIR/mt3.out"
+  local ready_a="$TEST_SKILL_DIR/run/ready.team-a__alice"
+  local ready_b="$TEST_SKILL_DIR/run/ready.team-b__alice"
+  local before_a before_b before_bob before_c before_d
+  before_a=$(_read_cursor team-a alice)
+  before_b=$(_read_cursor team-b alice)
+  before_bob=$(_read_cursor team-b bob)
+  before_c=$(_read_cursor team-c alice)
+  before_d=$(_read_cursor team-d alice)
+
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" mt3-sid "$proj_a" claude-code alice \
+    >"$out" 2>&1 3>&- 4>&- &
+  local watcher=$!
+  if ! wait_for_file "$ready_a" || ! wait_for_file "$ready_b"; then
+    _stop_watcher "$watcher"
+    false
+  fi
+
+  bash "$SCRIPTS/send.sh" team-a sender alice "MT3-team-a" >/dev/null
+  bash "$SCRIPTS/send.sh" team-b sender alice "MT3-team-b" >/dev/null
+  bash "$SCRIPTS/send.sh" team-b sender bob "MT3-bob" >/dev/null
+  bash "$SCRIPTS/send.sh" team-c sender alice "MT3-unregistered" --force >/dev/null
+  bash "$SCRIPTS/send.sh" team-d sender alice "MT3-other-runtime" >/dev/null
+
+  if ! wait_for_file_contains "$out" "MT3-team-b"; then
+    _stop_watcher "$watcher"
+    false
+  fi
+  grep -q "MT3-team-a" "$out"
+  refute grep -q "MT3-bob" "$out"
+  refute grep -q "MT3-unregistered" "$out"
+  refute grep -q "MT3-other-runtime" "$out"
+
+  local after_a after_b i
+  for i in $(seq 1 100); do
+    after_a=$(_read_cursor team-a alice)
+    after_b=$(_read_cursor team-b alice)
+    [ "$after_a" != "$before_a" ] && [ "$after_b" != "$before_b" ] && break
+    sleep 0.1
+  done
+  [ "$after_a" != "$before_a" ]
+  [ "$after_b" != "$before_b" ]
+  [ "$(_read_cursor team-b bob)" = "$before_bob" ]
+  [ "$(_read_cursor team-c alice)" = "$before_c" ]
+  [ "$(_read_cursor team-d alice)" = "$before_d" ]
+
+  _stop_watcher "$watcher"
+}
+
+@test "watch: actas checks every team's existing store before readiness" {
+  skip_on_windows "watcher process management under Git Bash (#182)"
+  local proj_a=/tmp/agmsg-mt5-health-a proj_b=/tmp/agmsg-mt5-health-b
+  bash "$SCRIPTS/join.sh" health-a alice claude-code "$proj_a" >/dev/null
+  bash "$SCRIPTS/join.sh" health-b alice claude-code "$proj_b" >/dev/null
+
+  local cfg="$TEST_SKILL_DIR/teams/health-b/config.json"
+  local updated
+  updated="$(sqlite_mem "SELECT json_set(CAST(readfile('$(rf "$cfg")') AS TEXT), '\$.drivers.partition', 'per-team');")"
+  printf '%s' "$updated" > "$cfg"
+  local db
+  db="$(_team_store health-b)"
+  mkdir -p "$(dirname "$db")"
+  printf 'not a database' > "$db"
+
+  local out="$TEST_SKILL_DIR/mt5-health.out"
+  local ready="$TEST_SKILL_DIR/run/ready.health-a__alice"
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" mt5-health-sid "$proj_a" claude-code alice \
+    >"$out" 2>&1 3>&- 4>&- &
+  local watcher=$!
+  if ! wait_for_file_contains "$out" "ERROR: cannot open message DB"; then
+    _stop_watcher "$watcher"
+    false
+  fi
+  wait_for_pid_exit "$watcher" || { _stop_watcher "$watcher"; false; }
+  [ ! -e "$ready" ]
+  [ ! -e "$TEST_SKILL_DIR/run/ready.health-b__alice" ]
 }
 
 @test "watch: restart delivers messages that arrived while the watcher was down" {

@@ -9,9 +9,9 @@ This is the long-form reference for the multi-role workflow introduced briefly i
 Mechanically, the skill:
 
 1. Joins `<name>` under your current team if it isn't registered for this project yet.
-2. Claims an exclusivity lock on `(team, name)` under the skill's run directory (`~/.agents/skills/agmsg/run/actas.<team>__<name>.session`).
+2. Resolves every locally registered `(team, name)` with the exact name and current runtime, then claims an exclusivity lock for each pair under the skill's run directory (`~/.agents/skills/agmsg/run/actas.<team>__<name>.session`).
 3. TaskStops the running `agmsg inbox stream` Monitor.
-4. Relaunches the Monitor filtered to `<name>` only, via `watch.sh`'s optional 4th argument.
+4. Relaunches the Monitor filtered to `<name>` only, via `watch.sh`'s optional 4th argument. The active-name watcher uses the same all-team pair set and checks every distinct team's existing message store before creating readiness sentinels.
 
 Effects:
 
@@ -23,7 +23,7 @@ The lock is released by `drop`, by session end, or by garbage collection when th
 
 ## What `drop` does
 
-`drop <name>` removes only that role's registration for this project (via `reset.sh`). If the role is no longer registered anywhere, it's also dropped from the team config.
+`drop <name>` removes only that role's registration for this project (via `reset.sh`). It also releases locks owned by the current session for that target name in every remaining team, so dropping one project cannot strand a peer in another project. If the role is no longer registered anywhere, it's also dropped from the team config.
 
 If `<name>` was the currently-active role, the watcher is restarted in default mode — no `actas` name filter, so it receives every `(team, agent)` pair registered for this project that isn't held by another session.
 
@@ -53,7 +53,7 @@ PID recycling could in theory keep a long-dead session looking alive forever, st
 agmsg follows a **one CC session = one active role** model. Each watcher subscribes to a *static* set of identities decided at launch:
 
 - **Without `actas`**: the watcher subscribes to whichever `(team, agent)` pairs were registered for this `(project, agent_type)` at the moment `watch.sh` started, *minus* any pair currently locked by another live session's `actas` claim. The set is *not* re-resolved later — a peer that claims a name after this watcher launched will start receiving exclusively, but this watcher won't notice the loss until it restarts. A role joined mid-session via `actas` from another CC does *not* start arriving in CCs that were launched before it.
-- **After `actas <name>`**: the watcher is relaunched filtered to `<name>` only, and the lock that filter implies prevents peer watchers from ever subscribing to `<name>` while this session is live.
+- **After `actas <name>`**: the watcher is relaunched filtered to the exact `<name>` across every locally registered team for the current runtime, and the locks that filter implies prevent peer watchers from subscribing to those pairs while this session is live. A corrupt existing store for any subscribed team prevents readiness; a missing store is still normal until that team receives its first message.
 
 This is intentional. It keeps each CC bound to one role's inbox, so a `tech-lead` window stays clear of `biz-analyst` traffic and vice versa, and the exclusivity holds across sessions on the same machine rather than per-session.
 
@@ -63,8 +63,8 @@ The send side mirrors this: every `send.sh` call from this CC uses the active ro
 
 ## Codex caveat
 
-On Codex, `$agmsg actas <name>` is **send-side only** for this session. Codex slash commands don't see a stable `session_id`, so they can't claim a peer-visible exclusivity lock — Claude Code peers will still subscribe to `<name>`.
+On Codex, `$agmsg actas <name>` remains **send-side only** for the bridge's normal turn-mode routing. Codex slash commands don't provide the same stable watcher session contract as Claude Code, so they do not claim the peer-visible all-team lock used by `watch.sh` actas mode — Claude Code peers may still subscribe to `<name>`.
 
-The receive side isn't actually narrowed either: `check-inbox.sh` resolves identity through `whoami.sh` (which picks the first registered agent) and has no view of the agent's in-session actas role, so Codex keeps polling whichever pair it would have without actas. The check-inbox lock filter only skips pairs *another* session owns.
+The Codex bridge's default identity lookup remains project-scoped. The explicit Codex `watch-once.sh --name <name>` path uses the same exact-name, all-team resolver as the Claude watcher, but it is a bounded check rather than a resident exclusive monitor. The check-inbox lock filter only skips pairs *another* session owns.
 
 Treat Codex actas as a from-line override until a Codex session-id story exists. Claude Code's `/agmsg actas` does claim the lock symmetrically and is the path that exercises the full exclusivity model.

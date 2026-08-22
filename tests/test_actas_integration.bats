@@ -77,6 +77,29 @@ fake_session() {
   [[ "$output" =~ "status=not_registered" ]]
 }
 
+@test "actas-claim: claims every matching team and rolls back partial claims" {
+  fake_register team-a alice /tmp/p1
+  fake_register team-b alice /tmp/p2
+  fake_session "sid-me" >/dev/null
+
+  run bash "$SKILL_DIR/scripts/actas-claim.sh" /tmp/p1 claude-code alice "sid-me"
+  [ "$status" -eq 0 ]
+  [ "$(actas_lock_owner team-a alice)" = "sid-me" ]
+  [ "$(actas_lock_owner team-b alice)" = "sid-me" ]
+
+  actas_lock_release team-a alice sid-me
+  actas_lock_release team-b alice sid-me
+  setup_live_owner "$RUN_DIR" sid-other
+  echo "sid-other" > "$(actas_lock_path team-b alice)"
+
+  run bash "$SKILL_DIR/scripts/actas-claim.sh" /tmp/p1 claude-code alice "sid-me"
+  [ "$status" -eq 1 ]
+  [[ "$output" =~ "status=held" ]]
+  [[ "$output" =~ "team=team-b" ]]
+  [ ! -f "$(actas_lock_path team-a alice)" ]
+  [ "$(actas_lock_owner team-b alice)" = "sid-other" ]
+}
+
 # --- reset.sh releases the lock when session_id is passed ---
 
 @test "reset: with session_id, releases the lock for the dropped role" {
@@ -178,7 +201,10 @@ fake_session() {
   AGMSG_WATCH_INTERVAL=1 bash "$SKILL_DIR/scripts/watch.sh" "sid-me" /tmp/p1 claude-code alice \
     >/dev/null 2> "$BATS_TEST_TMPDIR/watch.err" 3>&- &
   local wpid=$!
-  sleep 1
+  # Startup includes the shared subscription resolver and the per-team health
+  # check; wait for the actas readiness contract instead of racing a fixed
+  # sleep on a loaded runner.
+  wait_for_file "$(agmsg_ready_path T alice)"
 
   # Should now own the lock.
   [ "$(actas_lock_owner T alice)" = "sid-me" ]
