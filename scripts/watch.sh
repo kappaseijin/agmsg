@@ -489,10 +489,12 @@ fi
 # sqlite3.exe / Git Bash path mismatch behind #197 is one trigger (now fixed in
 # agmsg_db_path), but permissions, a missing binary, or a corrupt file fail the
 # same way. A *missing* DB file is normal (no messages sent yet), so only flag
-# the case where the file exists but a trivial query cannot run: emit one line
+# the case where the file exists but a schema read cannot run: emit one line
 # on stdout (the Monitor event stream) and exit, turning the silent failure into
 # a visible one. Done before the ready sentinel so we never signal "ready" for a
-# watcher that cannot read the store.
+# watcher that cannot read the store. A constant-only query such as `SELECT 1`
+# is deliberately not enough: SQLite 3.45 accepts that query against a file
+# with no valid database header, while reading sqlite_master rejects it.
 # Resolve and check every distinct team in the subscription. A missing store
 # remains normal, but an existing unreadable store must prevent readiness for
 # the whole multi-team watcher rather than silently dropping one team.
@@ -506,7 +508,7 @@ while IFS=$'\t' read -r _health_team _health_agent; do
   [ "$_health_seen" -eq 0 ] || continue
   HEALTH_TEAMS="$(printf '%s\n%s' "$HEALTH_TEAMS" "$_health_team")"
   DB="$(agmsg_db_path "$_health_team")" || exit 1
-  if [ -f "$DB" ] && ! agmsg_sqlite "$DB" "SELECT 1;" >/dev/null 2>&1; then
+  if [ -f "$DB" ] && ! agmsg_sqlite "$DB" "SELECT name FROM sqlite_master LIMIT 1;" >/dev/null 2>&1; then
     echo "ERROR: cannot open message DB $DB"
     exit 1
   fi
