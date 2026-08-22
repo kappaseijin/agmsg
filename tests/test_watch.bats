@@ -248,7 +248,7 @@ _wait_for_file_contains() {
   AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" mt5-health-sid "$proj_a" claude-code alice \
     >"$out" 2>&1 3>&- 4>&- &
   local watcher=$!
-  if ! wait_for_file_contains "$out" "ERROR: cannot open message DB"; then
+  if ! _WAIT_TICKS=300 wait_for_file_contains "$out" "ERROR: cannot open message DB"; then
     _stop_watcher "$watcher"
     false
   fi
