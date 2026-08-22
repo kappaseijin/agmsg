@@ -235,7 +235,7 @@ Same project, same agent type, different role — for example a `tech-lead` iden
 /agmsg drop biz-analyst    # remove the role from this project
 ```
 
-`actas <name>` is **exclusive across sessions**: it switches both sending and receiving to `<name>`, claims a lock that stops peer sessions from subscribing to the same name, and refuses if another session already holds it. `drop` releases the lock. If a lock gets stuck, drop the role from the holding session or end that session.
+`actas <name>` is **exclusive across sessions**: it switches sending and receiving to the exact `<name>` for every locally registered team of the current runtime, claims the matching locks, and refuses if another session already holds any of them. `drop` removes the registration only from the current project and releases this session's locks for that name across all teams. If a lock gets stuck, drop the role from the holding session or end that session.
 
 See [docs/actas.md](docs/actas.md) for the full mechanics — exclusivity model, recovery, liveness / PID recycling, Codex caveat.
 
@@ -379,7 +379,7 @@ The command updates `db/config.yaml`, rewrites the project's hook entries, and p
 /agmsg send <agent> <message>           — send message
 /agmsg mode <monitor|turn|both|off>     — switch delivery mode
 /agmsg mode                             — show current mode
-/agmsg actas <name>                     — switch to another role in this project (create if needed)
+/agmsg actas <name>                     — switch to another role (same name across locally registered teams; create here if needed)
 /agmsg drop <name>                      — remove a role from this project
 /agmsg spawn <type> <name>              — launch a new agent (claude-code/codex) that takes <name>
 /agmsg despawn <name> [--force]         — tear down a member you spawned (graceful, or --force)

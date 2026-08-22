@@ -20,11 +20,12 @@ agmsg_sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
 agmsg_subscription_pairs() {
   local project="$1" type="$2" owner_id="$3" active_name="${4:-}" claim_mode="${5:-}"
   local scripts_dir="$SKILL_DIR/scripts"
-  local pairs filtered skipped skip_facts held state result cc
+  local pairs filtered skipped skip_facts held state result cc claimed_here
 
-  pairs="$("$scripts_dir/identities.sh" "$project" "$type")"
   if [ -n "$active_name" ]; then
-    pairs=$(printf '%s\n' "$pairs" | awk -v n="$active_name" -F'\t' 'NF >= 2 && $2 == n')
+    pairs="$("$scripts_dir/identities.sh" "$project" "$type" --name "$active_name" --all-projects)" || return 1
+  else
+    pairs="$("$scripts_dir/identities.sh" "$project" "$type")" || return 1
   fi
 
   [ -n "$pairs" ] || return 0
@@ -33,6 +34,7 @@ agmsg_subscription_pairs() {
   skipped=""
   skip_facts=""
   held=""
+  claimed_here=""
   local team agent
   while IFS=$'\t' read -r team agent; do
     [ -z "$team" ] && continue
@@ -67,10 +69,19 @@ agmsg_subscription_pairs() {
           continue
           ;;
       esac
+      if [ "$state" != "mine" ]; then
+        claimed_here="$(printf '%s\n%s\t%s' "$claimed_here" "$team" "$agent")"
+      fi
     fi
 
     filtered="${filtered:+$filtered$'\n'}${team}"$'\t'"${agent}"
   done <<< "$pairs"
+  if [ -n "$held" ] && [ -n "$claimed_here" ]; then
+    while IFS=$'\t' read -r claimed_team claimed_agent; do
+      [ -n "$claimed_team" ] || continue
+      actas_lock_release "$claimed_team" "$claimed_agent" "$owner_id" 2>/dev/null || true
+    done <<< "$claimed_here"
+  fi
 
   if [ -n "$skipped" ]; then
     echo "agmsg watch: skipping pairs held by other sessions: $skipped" >&2

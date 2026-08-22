@@ -145,6 +145,30 @@ _assert_startup_was_delayed() {
   [[ "$output" =~ "no available subscription" ]]
 }
 
+@test "watch-once: active name spans teams and --team narrows it" {
+  local other_proj=/tmp/agmsg-watch-once-other-proj
+  bash "$SCRIPTS/join.sh" team-b alice codex "$other_proj" >/dev/null
+  bash "$SCRIPTS/join.sh" team-b bob codex "$other_proj" >/dev/null
+  bash "$SCRIPTS/send.sh" team-b bob alice "outside project" >/dev/null
+
+  run bash "$TYPES/codex/watch-once.sh" "$PROJ" codex --timeout 1 --interval 1
+  [ "$status" -eq 2 ]
+  printf '%s\n' "$output" | grep -q 'status=timeout'
+
+  run bash "$TYPES/codex/watch-once.sh" "$PROJ" codex --name alice --timeout 1 --interval 1
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q 'count=1'
+
+  bash "$SCRIPTS/send.sh" team bob alice "inside project" >/dev/null
+  run bash "$TYPES/codex/watch-once.sh" "$PROJ" codex --name alice --timeout 1 --interval 1
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q 'count=2'
+
+  run bash "$TYPES/codex/watch-once.sh" "$PROJ" codex --name alice --team team-b --timeout 1 --interval 1
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q 'count=1'
+}
+
 # --- #605: when the exclusion above empties the whole subscription, name the
 #     lock file and whether cc-instance.<pid> backs the owner. A composite
 #     owner with no matching cc-instance file is instance-id.sh's

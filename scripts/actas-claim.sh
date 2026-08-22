@@ -48,13 +48,15 @@ PROJECT="$(agmsg_resolve_project "$PROJECT" "$TYPE")"
 # a parallel --continue/--resume session can't appear to already own the role.
 SESSION_ID="$(agmsg_normalize_instance_id "$SESSION_ID" "$TYPE")"
 
-# Find the team(s) this name is registered to for the given project/type.
+# Find every team where this exact name is registered for the runtime. The
+# explicit all-projects query is limited to this active name; normal watchers
+# remain project-scoped.
 TEAMS=""
 while IFS=$'\t' read -r team agent; do
   [ -z "$team" ] && continue
   [ "$agent" = "$NAME" ] || continue
   TEAMS="${TEAMS:+$TEAMS$'\n'}$team"
-done < <("$SCRIPT_DIR/identities.sh" "$PROJECT" "$TYPE")
+done < <("$SCRIPT_DIR/identities.sh" "$PROJECT" "$TYPE" --name "$NAME" --all-projects)
 
 if [ -z "$TEAMS" ]; then
   echo "status=not_registered"

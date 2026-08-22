@@ -15,8 +15,10 @@ source "$(cd "$(dirname "$0")" && pwd)/lib/compat.sh"
 #   - Resolves (team, agent) pairs for (project_path, agent_type) via
 #     identities.sh. By default, subscribes to messages addressed to any
 #     of those pairs.
-#   - When [active_name] is given, narrows the subscription to only pairs
-#     whose agent name matches — useful for `actas` exclusive role mode.
+#   - When [active_name] is given, narrows the subscription to every local
+#     (team, agent) pair whose runtime and exact agent name match — useful for
+#     `actas` exclusive role mode. Without it, the project-scoped subscription
+#     remains unchanged.
 #   - Inbox and monitor share the driver's persistent per-(team,agent) read
 #     cursor. A restart resumes from consumed state, and a fresh watcher delivers
 #     existing unread messages instead of jumping over them. See the
@@ -60,6 +62,8 @@ source "$SCRIPT_DIR/lib/claims.sh"
 source "$SCRIPT_DIR/lib/actas-lock.sh"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/resolve-project.sh"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/subscription.sh"
 
 # Reject a path-like or unknown agent type before identities.sh can turn it into
 # a silent zero-subscription watcher. Built-in manifests are checked directly;
@@ -458,70 +462,13 @@ _install_changed() {
   [ -n "$(find "$SCRIPT_DIR" -newer "$INSTALL_STAMP" -print -quit 2>/dev/null)" ]
 }
 
-# Resolve subscription set.
-PAIRS="$("$SCRIPT_DIR/identities.sh" "$PROJECT_PATH" "$AGENT_TYPE")"
-if [ -n "$ACTIVE_NAME" ]; then
-  PAIRS=$(printf '%s\n' "$PAIRS" | awk -v n="$ACTIVE_NAME" -F'\t' 'NF >= 2 && $2 == n')
-fi
+# Resolve the project-scoped or active-name all-team subscription and apply the
+# same lock/claim policy used by the actas pre-flight.
+PAIRS="$(agmsg_subscription_pairs "$PROJECT_PATH" "$AGENT_TYPE" "$SESSION_ID" "$ACTIVE_NAME" claim)" || exit 1
 
-# Honor actas exclusivity locks. A (team, agent) pair currently owned by
-# another live session is removed from this watcher's subscription so
-# messages addressed to that role only reach the owning session. Pairs we
-# own (or that are free) stay in. See #62.
-#
-# When ACTIVE_NAME is set (the watcher was launched by an `actas` flow),
-# we also CLAIM the lock for each surviving pair. Implicit claim here makes
-# the exclusivity take effect machine-wide on the next peer watcher cycle,
-# without needing the skill cmd templates to call a separate helper. If a
-# claim fails because another live session beat us to it, exit with an
-# error — the user's host agent surfaces stderr and the original (broad)
-# watcher was already stopped by the actas flow, so this state is recoverable
-# by `drop` on the other session.
-if [ -n "$PAIRS" ]; then
-  filtered=""
-  skipped=""
-  held=""
-  while IFS=$'\t' read -r _team _agent; do
-    [ -z "$_team" ] && continue
-    state=$(actas_lock_state "$_team" "$_agent" "$SESSION_ID")
-    case "$state" in
-      other:*)
-        # If the caller is asking specifically for this name (actas flow),
-        # treat the conflict as a hard failure. Otherwise (broad subscribe)
-        # silently skip — peer owns the role, we don't need it.
-        if [ -n "$ACTIVE_NAME" ]; then
-          held="${held:+$held }${_team}/${_agent}(${state#other:})"
-        else
-          skipped="${skipped:+$skipped }${_team}/${_agent}(${state#other:})"
-        fi
-        continue
-        ;;
-    esac
-    if [ -n "$ACTIVE_NAME" ]; then
-      # Implicit claim — `actas` was the invoking flow. Covers the race
-      # where state-check said free but a peer claimed it between then and
-      # now.
-      result=$(actas_lock_claim "$_team" "$_agent" "$SESSION_ID" 2>/dev/null || true)
-      case "$result" in
-        held:*)
-          held="${held:+$held }${_team}/${_agent}(${result#held:})"
-          continue
-          ;;
-      esac
-    fi
-    filtered="${filtered:+$filtered$'\n'}${_team}"$'\t'"${_agent}"
-  done <<< "$PAIRS"
-  PAIRS="$filtered"
-  if [ -n "$skipped" ]; then
-    echo "agmsg watch: skipping pairs held by other sessions: $skipped" >&2
-  fi
-  if [ -n "$held" ]; then
-    echo "agmsg watch: cannot claim (held by other sessions): $held" >&2
-    echo "agmsg watch: run \`/agmsg drop <name>\` in the owning session, then retry." >&2
-    exit 1
-  fi
-fi
-
+# The shared helper above applies the actas lock policy: a broad watcher skips
+# pairs held elsewhere, while an active-name watcher claims every matching
+# team and rolls back claims from this attempt if any peer wins a race.
 if [ -z "$PAIRS" ]; then
   if [ -n "$ACTIVE_NAME" ]; then
     echo "agmsg watch: no registration for agent '$ACTIVE_NAME' in $PROJECT_PATH ($AGENT_TYPE); nothing to do"
@@ -542,19 +489,30 @@ fi
 # sqlite3.exe / Git Bash path mismatch behind #197 is one trigger (now fixed in
 # agmsg_db_path), but permissions, a missing binary, or a corrupt file fail the
 # same way. A *missing* DB file is normal (no messages sent yet), so only flag
-# the case where the file exists but a trivial query cannot run: emit one line
+# the case where the file exists but a schema read cannot run: emit one line
 # on stdout (the Monitor event stream) and exit, turning the silent failure into
 # a visible one. Done before the ready sentinel so we never signal "ready" for a
-# watcher that cannot read the store.
-# Resolved from this watcher's own subscription rather than a bare default:
-# the store is selected per team now. Every pair here shares a team (the
-# subscription is one project's roster); when stores actually split, this
-# becomes one check per distinct team in PAIRS.
-DB="$(agmsg_db_path "$(printf '%s\n' "$PAIRS" | head -1 | cut -f1)")" || exit 1
-if [ -f "$DB" ] && ! agmsg_sqlite "$DB" "SELECT 1;" >/dev/null 2>&1; then
-  echo "ERROR: cannot open message DB $DB"
-  exit 1
-fi
+# watcher that cannot read the store. A constant-only query such as `SELECT 1`
+# is deliberately not enough: SQLite 3.45 accepts that query against a file
+# with no valid database header, while reading sqlite_master rejects it.
+# Resolve and check every distinct team in the subscription. A missing store
+# remains normal, but an existing unreadable store must prevent readiness for
+# the whole multi-team watcher rather than silently dropping one team.
+HEALTH_TEAMS=""
+while IFS=$'\t' read -r _health_team _health_agent; do
+  [ -n "$_health_team" ] || continue
+  _health_seen=0
+  while IFS= read -r _seen_team; do
+    [ "$_seen_team" = "$_health_team" ] && _health_seen=1
+  done <<< "$HEALTH_TEAMS"
+  [ "$_health_seen" -eq 0 ] || continue
+  HEALTH_TEAMS="$(printf '%s\n%s' "$HEALTH_TEAMS" "$_health_team")"
+  DB="$(agmsg_db_path "$_health_team")" || exit 1
+  if [ -f "$DB" ] && ! agmsg_sqlite "$DB" "SELECT name FROM sqlite_master LIMIT 1;" >/dev/null 2>&1; then
+    echo "ERROR: cannot open message DB $DB"
+    exit 1
+  fi
+done <<< "$PAIRS"
 
 # Signal readiness. Once the subscription is resolved and the watcher is live,
 # this watcher will deliver anything that arrives from here on, so it is safe
