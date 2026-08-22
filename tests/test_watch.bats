@@ -245,10 +245,15 @@ _wait_for_file_contains() {
 
   local out="$TEST_SKILL_DIR/mt5-health.out"
   local ready="$TEST_SKILL_DIR/run/ready.health-a__alice"
+  # This is a standalone synthetic watcher, not a child of an agent process.
+  # Keep the ambient CI Bats process tree out of the instance/project
+  # resolution walk; otherwise the health assertion can spend the wait budget
+  # traversing unrelated parent processes before it reaches the DB check.
+  export AGMSG_AGENT_PID=""
   AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" mt5-health-sid "$proj_a" claude-code alice \
     >"$out" 2>&1 3>&- 4>&- &
   local watcher=$!
-  if ! _WAIT_TICKS=300 wait_for_file_contains "$out" "ERROR: cannot open message DB"; then
+  if ! wait_for_file_contains "$out" "ERROR: cannot open message DB"; then
     _stop_watcher "$watcher"
     false
   fi
