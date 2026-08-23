@@ -2,11 +2,17 @@
 "use strict";
 
 const childProcess = require("child_process");
+const fs = require("fs");
 const {
   SchemaError,
   canonicalJson,
   sha256Digest,
 } = require("./team-work");
+const {
+  parseJson,
+  validateG4Pack,
+} = require("./g4-contract");
+const {runAudit} = require("./g4-audit");
 
 const REPOSITORY = /^[^/\s]+\/[^/\s]+$/;
 
@@ -23,6 +29,25 @@ function requireNonEmptyString(value, context) {
     schemaError(context + " must be a non-empty string");
   }
   return value;
+}
+
+function requireEvidence(value) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    schemaError("evidence must be a non-empty string");
+  }
+  return value;
+}
+
+function requireManager(roster, managerSeat) {
+  requireNonEmptyString(managerSeat, "manager-seat");
+  if (!isObject(roster) || !Array.isArray(roster.members)) {
+    schemaError("roster contract members must be an array");
+  }
+  const manager = roster.members.find((member) => member && member.name === managerSeat);
+  if (!manager || manager.kind !== "seat" || manager.role !== "manager") {
+    schemaError("manager-seat must be an exact kind: seat manager");
+  }
+  return manager;
 }
 
 function requireSource(source) {
@@ -175,11 +200,226 @@ function runG4Transaction(dbPath, statements) {
   return String(result.stdout || "").trim();
 }
 
+function sourceKey(source) {
+  return `${source.repository}#${source.number}`;
+}
+
+function sourcePredicate(sources) {
+  return sources.map((source) => `(
+    source_repository = ${sqlLiteral(source.repository)}
+    AND source_number = ${source.number}
+  )`).join(" OR ");
+}
+
+function bootstrapSql(team, entries, packDigest, coverageDigest, auditDigest, managerSeat, evidence) {
+  const now = "CAST(strftime('%s', 'now') AS INTEGER)";
+  const sources = entries.map((info) => info.entry.source);
+  const where = `team = ${sqlLiteral(team)} AND (${sourcePredicate(sources)})`;
+  const statements = [
+    "CREATE TEMP TABLE g4_bootstrap_no_existing(value INTEGER NOT NULL, CONSTRAINT g4_bootstrap_no_existing_guard CHECK(value = 0));",
+    `INSERT INTO g4_bootstrap_no_existing(value)
+SELECT COUNT(*) FROM team_work_g4_current WHERE ${where};`,
+    "DROP TABLE g4_bootstrap_no_existing;",
+  ];
+
+  for (const info of entries) {
+    const entry = info.entry;
+    statements.push(`
+INSERT INTO team_work_g4_current(
+  team, source_repository, source_number, state, owner_seat,
+  work_kinds_json, revision, pack_digest, entry_digest, coverage_digest,
+  audit_digest, basis_json, blocker_json, evidence, last_action, last_actor,
+  created_at, updated_at
+) VALUES (
+  ${sqlLiteral(team)},
+  ${sqlLiteral(entry.source.repository)},
+  ${entry.source.number},
+  ${sqlLiteral(entry.state)},
+  ${sqlLiteral(entry.ownerSeat)},
+  json(${sqlLiteral(canonicalJson(entry.workKinds))}),
+  1,
+  ${sqlLiteral(packDigest)},
+  ${sqlLiteral(info.entryDigest)},
+  ${sqlLiteral(coverageDigest)},
+  ${sqlLiteral(auditDigest)},
+  json(${sqlLiteral(canonicalJson(entry.basis))}),
+  ${entry.blocker ? `json(${sqlLiteral(canonicalJson(entry.blocker))})` : "NULL"},
+  ${sqlLiteral(evidence)},
+  'g4-bootstrap',
+  ${sqlLiteral(managerSeat)},
+  ${now},
+  ${now}
+);`);
+  }
+
+  statements.push(
+    `CREATE TEMP TABLE g4_bootstrap_complete(value INTEGER NOT NULL, CONSTRAINT g4_bootstrap_complete_guard CHECK(value = ${entries.length}));`,
+    `INSERT INTO g4_bootstrap_complete(value)
+SELECT COUNT(*) FROM team_work_g4_current WHERE ${where};`,
+    "DROP TABLE g4_bootstrap_complete;",
+    `SELECT COUNT(*) FROM team_work_g4_current WHERE ${where};`,
+  );
+  return statements;
+}
+
+function bootstrapOutput(team, managerSeat, evidence, details) {
+  return Object.assign({
+    schemaVersion: 1,
+    command: "g4-bootstrap",
+    team,
+    managerSeat: managerSeat === undefined ? null : managerSeat,
+    evidence: evidence === undefined ? null : evidence,
+    packDigest: null,
+    coverageDigest: null,
+    auditDigest: null,
+    sources: [],
+    revision: 1,
+    bootstrapped: false,
+    remediation: [],
+  }, details || {});
+}
+
+function bootstrapRejected(team, managerSeat, evidence, code, details) {
+  return bootstrapOutput(team, managerSeat, evidence, Object.assign({
+    bootstrapped: false,
+    sources: [],
+    remediation: [{code}],
+  }, details || {}));
+}
+
+function bootstrapG4(team, pack, roster, managerSeat, evidence) {
+  let contract;
+  try {
+    contract = validateG4Pack(pack, roster, team);
+  } catch (_) {
+    return bootstrapRejected(team, managerSeat, evidence, "invalid_contract");
+  }
+
+  try {
+    requireManager(roster, managerSeat);
+  } catch (_) {
+    return bootstrapRejected(team, managerSeat, evidence, "invalid_manager", {
+      packDigest: contract.packDigest,
+    });
+  }
+  try {
+    requireEvidence(evidence);
+    for (const info of contract.entries) {
+      if (info.entry.revision !== 1) schemaError("g4-bootstrap requires entry.revision 1");
+    }
+  } catch (_) {
+    return bootstrapRejected(team, managerSeat, evidence, "invalid_bootstrap_input", {
+      packDigest: contract.packDigest,
+    });
+  }
+
+  let audit;
+  try {
+    audit = runAudit("g4-bootstrap", team, pack, roster);
+  } catch (_) {
+    return bootstrapRejected(team, managerSeat, evidence, "audit_incomplete", {
+      packDigest: contract.packDigest,
+    });
+  }
+  const auditDetails = {
+    packDigest: audit.packDigest,
+    coverageDigest: audit.coverageDigest,
+    auditDigest: audit.auditDigest,
+  };
+  if (!audit.classificationBasis || audit.classificationBasis.status !== "complete") {
+    return bootstrapRejected(team, managerSeat, evidence, "audit_incomplete", auditDetails);
+  }
+
+  const entriesBySource = new Map(contract.entries.map((info) => [info.sourceKey, info]));
+  const sortedCoverage = audit.coverage.slice().sort((left, right) => sourceKey(left).localeCompare(sourceKey(right)));
+  if (sortedCoverage.length !== contract.entries.length ||
+      sortedCoverage.some((source) => !entriesBySource.has(sourceKey(source)))) {
+    return bootstrapRejected(team, managerSeat, evidence, "audit_incomplete", auditDetails);
+  }
+  const entries = sortedCoverage.map((source) => entriesBySource.get(sourceKey(source)));
+  const dbPath = process.env.AGMSG_TEAM_WORK_DB;
+  if (typeof dbPath !== "string" || dbPath.length === 0) {
+    return bootstrapRejected(team, managerSeat, evidence, "storage_unavailable", auditDetails);
+  }
+
+  try {
+    const transactionResult = runG4Transaction(
+      dbPath,
+      bootstrapSql(team, entries, audit.packDigest, audit.coverageDigest, audit.auditDigest, managerSeat, evidence),
+    );
+    const lines = transactionResult.replace(/\r/g, "").split("\n").filter(Boolean);
+    const insertedCount = Number(lines[lines.length - 1]);
+    if (insertedCount !== entries.length) throw new Error("g4-bootstrap transaction returned an incomplete row count");
+  } catch (error) {
+    const errorMessage = String(error.message || "");
+    const code = /g4_bootstrap_no_existing|value = 0/.test(errorMessage)
+      ? "already_bootstrapped"
+      : "transaction_failed";
+    return bootstrapRejected(team, managerSeat, evidence, code, auditDetails);
+  }
+
+  return bootstrapOutput(team, managerSeat, evidence, {
+    packDigest: audit.packDigest,
+    coverageDigest: audit.coverageDigest,
+    auditDigest: audit.auditDigest,
+    sources: sortedCoverage,
+    revision: 1,
+    bootstrapped: true,
+    remediation: [],
+  });
+}
+
+function parsePackFile(packPath) {
+  try {
+    return parseJson(fs.readFileSync(packPath, "utf8"), "G4 state pack is not valid JSON");
+  } catch (_) {
+    return null;
+  }
+}
+
 module.exports = {
   readG4Current,
   snapshotG4Row,
   runG4Transaction,
   g4CurrentResultSql,
+  bootstrapG4,
   canonicalJson,
   sha256Digest,
 };
+
+function main() {
+  const [command, team, packPath, managerSeat, evidence] = process.argv.slice(2);
+  if (command !== "g4-bootstrap") {
+    throw new SchemaError(`unknown G4 ledger command: ${command || ""}`);
+  }
+  if (process.argv.slice(2).length !== 5) {
+    throw new SchemaError("invalid arguments for g4-bootstrap");
+  }
+  const pack = parsePackFile(packPath);
+  if (!pack) {
+    process.stdout.write(`${canonicalJson(bootstrapRejected(team, managerSeat, evidence, "invalid_contract"))}\n`);
+    return;
+  }
+  let roster;
+  try {
+    roster = parseJson(fs.readFileSync(0, "utf8"), "roster contract is not valid JSON");
+  } catch (_) {
+    process.stdout.write(`${canonicalJson(bootstrapRejected(team, managerSeat, evidence, "invalid_contract"))}\n`);
+    return;
+  }
+  process.stdout.write(`${canonicalJson(bootstrapG4(team, pack, roster, managerSeat, evidence))}\n`);
+}
+
+if (require.main === module) {
+  try {
+    main();
+  } catch (error) {
+    if (error instanceof SchemaError) {
+      process.stderr.write(`schema error: ${error.message}\n`);
+      process.exitCode = 2;
+    } else {
+      process.stderr.write(`Error: ${error.message}\n`);
+      process.exitCode = 1;
+    }
+  }
+}

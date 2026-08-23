@@ -32,6 +32,12 @@ case "$COMMAND" in
       exit 1
     fi
     ;;
+  g4-bootstrap)
+    if [ "$#" -ne 5 ]; then
+      echo "Usage: team-work.sh g4-bootstrap <team> <g4-state-pack.json> <manager-seat> <evidence>" >&2
+      exit 1
+    fi
+    ;;
   reconcile)
     if [ "$#" -ne 3 ] && [ "$#" -ne 4 ]; then
       echo "Usage: team-work.sh reconcile <team> <contract-pack.json> [heartbeat-path]" >&2
@@ -131,6 +137,13 @@ case "$COMMAND" in
     # Phase 1A is intentionally independent of the team-work SQLite store.
     # Do not initialize or open a database on this path.
     printf '%s' "$ROSTER_JSON" | node "$SCRIPT_DIR/lib/g4-audit.js" "$@"
+    ;;
+  g4-bootstrap)
+    source "$SCRIPT_DIR/lib/storage.sh"
+    agmsg_storage_ensure_initialized
+    AGMSG_TEAM_WORK_DB="$(agmsg_db_path "$TEAM")"
+    export AGMSG_TEAM_WORK_DB
+    printf '%s' "$ROSTER_JSON" | node "$SCRIPT_DIR/lib/g4-ledger.js" "$@"
     ;;
   observe|queue|audit)
     source "$SCRIPT_DIR/lib/storage.sh"
