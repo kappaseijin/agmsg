@@ -7,13 +7,7 @@ setup() {
   bash "$SCRIPTS/join.sh" demo owner codex /tmp/demo-owner --role programmer --kind seat >/dev/null
   bash "$SCRIPTS/join.sh" demo manager codex /tmp/demo-manager --role manager --kind seat >/dev/null
 
-  export G4_FIXTURES="$BATS_TEST_DIRNAME/fixtures/g4-audit"
-  export G4_FAKE_GH_BIN="$BATS_TEST_TMPDIR/g4-fake-gh-bin"
-  export G4_GH_LOG="$BATS_TEST_TMPDIR/g4-gh-requests.jsonl"
-  mkdir -p "$G4_FAKE_GH_BIN"
-  cp "$G4_FIXTURES/gh" "$G4_FAKE_GH_BIN/gh"
-  chmod +x "$G4_FAKE_GH_BIN/gh"
-  : > "$G4_GH_LOG"
+  setup_g4_fixture
 }
 
 teardown() {
@@ -256,6 +250,8 @@ if (input !== JSON.stringify(sort(value))) process.exit(1);
 '
 }
 
+load helpers/g4-fixtures
+
 @test "g4-audit: returns exact two-Issue coverage and deterministic digest" {
   local pack="$BATS_TEST_TMPDIR/g4-pack.json"
   write_g4_pack "$pack"
@@ -454,7 +450,7 @@ if (input !== JSON.stringify(sort(value))) process.exit(1);
   [ "$status" -eq 0 ]
   after="$(shasum -a 256 "$TEST_SKILL_DIR/db/messages.db" | awk '{print $1}')"
   [ "$before" = "$after" ]
-  [ "$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'team_work_g4_%';")" = "0" ]
+  [ "$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('team_work_g4_current', 'team_work_g4_revisions');")" = "2" ]
   if grep -q '"kind":"write"' "$G4_GH_LOG"; then
     false
   fi
