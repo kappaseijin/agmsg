@@ -760,36 +760,40 @@ enforce_optional_pr_account_guard() {
 # common case where the caller hasn't already chosen an account.
 #
 # Every failure mode (whoami.sh missing or ambiguous/absent identity, no
-# matching gh-logged-in account) falls through silently, unchanged from
-# today's behavior -- this never overrides an explicit caller-set credential
-# and never turns a currently-working call into a failing one.
+# matching gh-logged-in account) returns 1 so the caller can preserve the
+# static policy fallback. This never overrides an explicit caller-set
+# credential or turns a currently-working call into a failing one.
 proactively_select_account() {
   case "$SUBCOMMAND" in
     'pr create'|'pr comment'|'pr review') ;;
-    *) return 0 ;;
+    *) return 1 ;;
   esac
-  [ -z "${GH_CONFIG_DIR:-}" ] || return 0
-  { [ -z "${GH_TOKEN:-}" ] && [ -z "${GITHUB_TOKEN:-}" ]; } || return 0
+  [ -z "${GH_CONFIG_DIR:-}" ] || return 1
+  { [ -z "${GH_TOKEN:-}" ] && [ -z "${GITHUB_TOKEN:-}" ]; } || return 1
   local whoami_script="${AGMSG_WHOAMI_SCRIPT:-$HOME/.agents/skills/agmsg/scripts/whoami.sh}"
-  [ -x "$whoami_script" ] || return 0
+  [ -x "$whoami_script" ] || return 1
   local out type expected token
-  out="$(bash "$whoami_script" "$CURRENT_CWD" 2>/dev/null)" || return 0
+  out="$(bash "$whoami_script" "$CURRENT_CWD" 2>/dev/null)" || return 1
   case "$out" in
     agent=*' teams='*' type='*) ;;
-    *) return 0 ;;
+    *) return 1 ;;
   esac
-  case "$out" in *' multiple=true'*) return 0 ;; esac
+  case "$out" in *' multiple=true'*) return 1 ;; esac
   type="${out#*type=}"; type="${type%% *}"
   case "$type" in
     claude-code) expected=kappaseijin4claude ;;
     codex) expected=kappaseijin4codex ;;
-    *) return 0 ;;
+    *) return 1 ;;
   esac
-  token="$("$REAL_GH" auth token --user "$expected" 2>/dev/null)" || return 0
-  [ -n "$token" ] || return 0
+  token="$("$REAL_GH" auth token --user "$expected" 2>/dev/null)" || return 1
+  [ -n "$token" ] || return 1
   export GH_TOKEN="$token"
+  return 0
 }
 
-proactively_select_account
-enforce_optional_pr_account_guard
+if proactively_select_account; then
+  :
+else
+  enforce_optional_pr_account_guard
+fi
 exec "$REAL_GH" "$@"

@@ -140,6 +140,16 @@ method/body is requested); `-f`/`-F`, `--field`/`--raw-field`, and `--input`
 make an omitted-method request non-read-only. Unknown commands, aliases that
 execute commands, and extensions that execute or install commands fail closed.
 
+For pull-request writes, account routing is applied after the immutable
+destination check. Explicit `GH_CONFIG_DIR`, `GH_TOKEN`, or `GITHUB_TOKEN`
+values are preserved and the existing cwd-based `pr-account-policy.conf` is
+then enforced. When none is set, an unambiguous agmsg seat type is resolved by
+`whoami.sh`: `claude-code` selects `kappaseijin4claude` and `codex` selects
+`kappaseijin4codex`. If that token is acquired successfully, it is used for
+the invocation and the static cwd policy is skipped. Missing or ambiguous
+identity, unsupported commands, and token lookup failure keep the static policy
+in force. Tokens are never printed or logged.
+
 The installer refuses to overwrite a non-agmsg `~/.agents/bin/gh`. If `gh` is
 not installed, it leaves the guard uninstalled and prints a message; rerun
 `./install.sh --update` after installing `gh`. `uninstall.sh` removes only the

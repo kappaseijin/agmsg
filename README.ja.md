@@ -141,6 +141,15 @@ PATHで `~/.agents/bin` を実体のGitHub CLIより前に置くこと。ラン�
 書き込み側として拒否する。コマンド未分類の操作、コマンドを実行するalias、
 コマンドを実行・インストールするextensionはfail-closedで拒否する。
 
+Pull Requestへの書き込みでは、アカウント選択は不変の宛先検査の後に行われる。
+呼び出し側が `GH_CONFIG_DIR`、`GH_TOKEN`、または `GITHUB_TOKEN` を明示していれば
+その値を上書きせず、既存のcwdベース `pr-account-policy.conf` を適用する。
+明示値がない場合は `whoami.sh` で曖昧さのないagmsg席の種別を解決し、
+`claude-code` なら `kappaseijin4claude`、`codex` なら `kappaseijin4codex` の
+tokenを取得する。token取得に成功した呼び出しだけはそのアカウントを使い、cwdの
+静的policyを適用しない。identityがない・曖昧・未対応、またはtoken取得に失敗した
+場合は静的policyを維持する。tokenを表示・ログ出力することはない。
+
 インストーラーは、agmsg製でない `~/.agents/bin/gh` を上書きしない。`gh` が
 未インストールの場合はガードを配置せずメッセージを表示するため、`gh` の導入後に
 `./install.sh --update` を再実行すること。`uninstall.sh` が削除するのはagmsgが

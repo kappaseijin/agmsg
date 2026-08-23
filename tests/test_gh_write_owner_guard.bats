@@ -352,6 +352,29 @@ EOF
   grep -q '^GH_TOKEN= argv=pr create' "$FAKE_ENV_LOG"
 }
 
+@test "GHG-P8: dynamic Claude account selection bypasses a conflicting static policy" {
+  local policy="$TEST_SKILL_DIR/pr-account-policy.conf"
+  printf 'map=%s=creator\ncreator_login=kappaseijin4codex\n' "$(pwd -P)" > "$policy"
+  export PR_ACCOUNT_POLICY="$policy"
+  fake_whoami 'agent=agmsg_owner_claude teams=agmsg type=claude-code project=/work'
+  export FAKE_AUTH_TOKEN_MODE=known
+  run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
+  [ "$status" -eq 0 ]
+  grep -q '^GH_TOKEN=tok-claude argv=pr create' "$FAKE_ENV_LOG"
+}
+
+@test "GHG-P9: token lookup failure preserves the conflicting static policy rejection" {
+  local policy="$TEST_SKILL_DIR/pr-account-policy.conf"
+  printf 'map=%s=creator\ncreator_login=kappaseijin4codex\n' "$(pwd -P)" > "$policy"
+  export PR_ACCOUNT_POLICY="$policy"
+  fake_whoami 'agent=agmsg_owner_claude teams=agmsg type=claude-code project=/work'
+  export FAKE_AUTH_TOKEN_MODE=fail
+  run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title blocked
+  [ "$status" -ne 0 ]
+  [ ! -s "$FAKE_WRITE_LOG" ]
+  grep -Fq "account policy rejected role 'creator'" <<<"$output"
+}
+
 @test "GHG-09: parses the equals form of --repo" {
   assert_rejected issue create --repo=thirdparty/fixture --title "blocked"
 }
