@@ -188,6 +188,127 @@ BEGIN
   SELECT RAISE(ABORT, 'team_work_revisions is append-only');
 END;
 
+# G4 has a separate current/revision ledger. Phase 1B PR1 installs only this
+# internal schema; bootstrap and transition remain separate public-command PRs.
+CREATE TABLE IF NOT EXISTS team_work_g4_current (
+  team TEXT NOT NULL,
+  source_repository TEXT NOT NULL,
+  source_number INTEGER NOT NULL CHECK (source_number > 0),
+  state TEXT NOT NULL CHECK (state IN ('ready', 'blocked', 'unknown')),
+  owner_seat TEXT NOT NULL,
+  work_kinds_json TEXT NOT NULL CHECK (json_valid(work_kinds_json)),
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  pack_digest TEXT NOT NULL,
+  entry_digest TEXT NOT NULL,
+  coverage_digest TEXT NOT NULL,
+  audit_digest TEXT NOT NULL,
+  basis_json TEXT NOT NULL CHECK (json_valid(basis_json)),
+  blocker_json TEXT CHECK (blocker_json IS NULL OR json_valid(blocker_json)),
+  evidence TEXT NOT NULL,
+  last_action TEXT NOT NULL,
+  last_actor TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (team, source_repository, source_number),
+  CHECK ((state = 'blocked' AND blocker_json IS NOT NULL) OR
+         (state IN ('ready', 'unknown') AND blocker_json IS NULL))
+);
+
+CREATE TABLE IF NOT EXISTS team_work_g4_revisions (
+  team TEXT NOT NULL,
+  source_repository TEXT NOT NULL,
+  source_number INTEGER NOT NULL CHECK (source_number > 0),
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  previous_revision INTEGER,
+  action TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  snapshot_json TEXT NOT NULL CHECK (json_valid(snapshot_json)),
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (team, source_repository, source_number, revision)
+);
+
+CREATE TRIGGER IF NOT EXISTS team_work_g4_current_history_insert
+AFTER INSERT ON team_work_g4_current
+BEGIN
+  INSERT INTO team_work_g4_revisions(
+    team, source_repository, source_number, revision, previous_revision,
+    action, actor, snapshot_json, created_at
+  ) VALUES (
+    NEW.team, NEW.source_repository, NEW.source_number, NEW.revision, NULL,
+    NEW.last_action, NEW.last_actor,
+    json_object(
+      'action', NEW.last_action,
+      'actor', NEW.last_actor,
+      'auditDigest', NEW.audit_digest,
+      'basis', json(NEW.basis_json),
+      'blocker', CASE WHEN NEW.blocker_json IS NULL THEN NULL ELSE json(NEW.blocker_json) END,
+      'coverageDigest', NEW.coverage_digest,
+      'createdAt', NEW.created_at,
+      'entryDigest', NEW.entry_digest,
+      'evidence', NEW.evidence,
+      'ownerSeat', NEW.owner_seat,
+      'packDigest', NEW.pack_digest,
+      'revision', NEW.revision,
+      'schemaVersion', 1,
+      'source', json_object(
+        'number', NEW.source_number,
+        'repository', NEW.source_repository
+      ),
+      'state', NEW.state,
+      'updatedAt', NEW.updated_at,
+      'workKinds', json(NEW.work_kinds_json)
+    ),
+    NEW.updated_at
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS team_work_g4_current_history_update
+AFTER UPDATE ON team_work_g4_current
+BEGIN
+  INSERT INTO team_work_g4_revisions(
+    team, source_repository, source_number, revision, previous_revision,
+    action, actor, snapshot_json, created_at
+  ) VALUES (
+    NEW.team, NEW.source_repository, NEW.source_number, NEW.revision, OLD.revision,
+    NEW.last_action, NEW.last_actor,
+    json_object(
+      'action', NEW.last_action,
+      'actor', NEW.last_actor,
+      'auditDigest', NEW.audit_digest,
+      'basis', json(NEW.basis_json),
+      'blocker', CASE WHEN NEW.blocker_json IS NULL THEN NULL ELSE json(NEW.blocker_json) END,
+      'coverageDigest', NEW.coverage_digest,
+      'createdAt', NEW.created_at,
+      'entryDigest', NEW.entry_digest,
+      'evidence', NEW.evidence,
+      'ownerSeat', NEW.owner_seat,
+      'packDigest', NEW.pack_digest,
+      'revision', NEW.revision,
+      'schemaVersion', 1,
+      'source', json_object(
+        'number', NEW.source_number,
+        'repository', NEW.source_repository
+      ),
+      'state', NEW.state,
+      'updatedAt', NEW.updated_at,
+      'workKinds', json(NEW.work_kinds_json)
+    ),
+    NEW.updated_at
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS team_work_g4_revisions_immutable_update
+BEFORE UPDATE ON team_work_g4_revisions
+BEGIN
+  SELECT RAISE(ABORT, 'team_work_g4_revisions is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS team_work_g4_revisions_immutable_delete
+BEFORE DELETE ON team_work_g4_revisions
+BEGIN
+  SELECT RAISE(ABORT, 'team_work_g4_revisions is append-only');
+END;
+
 SQL
 
 # Dispatch has its own schema lifecycle because deployed stores may still have
