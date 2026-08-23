@@ -100,7 +100,11 @@ EOF
 # does not matter, signaling and waiting on a subshell that has already
 # exited on its own is a harmless no-op.
 _launcher_child_pids() {
-  ps -Ao pid=,args= 2>/dev/null | grep -F "$LAUNCHER" | grep -F "$PROJ" | awk '{print $1}'
+  local launcher="${CHILD_LAUNCHER_PATTERN:-$LAUNCHER}"
+  ps -Ao pid=,args= 2>/dev/null \
+    | grep -F "$launcher" \
+    | grep -F "$PROJ" \
+    | awk '{print $1}'
 }
 
 # PIDs of bridge processes this test's launchers started. The bridge itself
@@ -115,6 +119,10 @@ _launcher_bridge_pids() {
     [ -f "$f" ] || continue
     cat "$f" 2>/dev/null
   done
+  ps -Ao pid=,args= 2>/dev/null \
+    | grep -F "$PROJ" \
+    | grep -F 'codex-bridge.js' \
+    | awk '{print $1}'
 }
 
 # A test's own kill/wait sequence reaches the dispatcher and the short-lived
@@ -347,7 +355,7 @@ run_launcher() {
   ! grep -q -- '--pair team bob' "$CAPTURE"
 }
 
-# Count live role-child launcher processes for this test's project. A child is
+# Return the independent role-child roots for this test's project. A child is
 # distinguished from a dispatcher by carrying the role pair as its 5th argument;
 # match on the agent name rather than the whole pair, because macOS ps renders
 # the tab inside that argument as the escape sequence \011, not a literal tab.
@@ -358,6 +366,29 @@ run_launcher() {
 # line alone -- a naive count reads 3 where there is one child, depending purely
 # on when the sample lands. Filtering on ppid counts independent children, which
 # is the property these tests are actually about.
+_child_launcher_roots() {
+  local launcher="${CHILD_LAUNCHER_PATTERN:-$LAUNCHER}"
+  local role="${CHILD_ROLE:-alice}"
+  ps -Ao pid=,ppid=,args= 2>/dev/null \
+    | awk -v launcher="$launcher" -v project="$PROJ" -v role="$role" '
+        $3 != "awk" && index($0, launcher) && index($0, project) && index($0, role) {
+          pid[$1] = 1
+          parent[$1] = $2
+        }
+        END {
+          for (p in pid) if (!(parent[p] in pid)) print p, parent[p]
+        }' \
+    | sort -n
+}
+
+_count_root_lines() {
+  if [ -n "$1" ]; then
+    printf '%s\n' "$1" | awk 'NF { n++ } END { print n + 0 }'
+  else
+    printf '0\n'
+  fi
+}
+
 count_child_launchers() {
   ps -Ao pid=,ppid=,args= 2>/dev/null \
     | grep -F "$LAUNCHER" \
@@ -378,38 +409,206 @@ wait_for_child_count() {
   count_child_launchers
 }
 
+# Observe a count and its root identities over consecutive samples. The
+# identity comparison is what distinguishes a settled singleton from the
+# transient second child that exists while the per-role lock rejects it.
+_wait_for_stable_child_roots() { # <count> <samples> <seconds>
+  local want="$1" samples="$2" seconds="$3"
+  local i j roots next stable
+  CHILD_ROOT_SNAPSHOT=""
+  for ((i = 0; i < seconds * 10; i++)); do
+    roots="$(_child_launcher_roots)"
+    if [ "$(_count_root_lines "$roots")" -eq "$want" ]; then
+      stable=1
+      for ((j = 1; j < samples; j++)); do
+        sleep 0.1
+        next="$(_child_launcher_roots)"
+        if [ "$(_count_root_lines "$next")" -ne "$want" ] || [ "$next" != "$roots" ]; then
+          stable=0
+          break
+        fi
+      done
+      if [ "$stable" -eq 1 ]; then
+        CHILD_ROOT_SNAPSHOT="$roots"
+        return 0
+      fi
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
+_wait_for_pid_alive() { # <pid> <seconds>
+  local pid="$1" seconds="$2" i
+  for ((i = 0; i < seconds * 10; i++)); do
+    kill -0 "$pid" 2>/dev/null && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+_runtime_lock_owner() { # <resource>
+  sqlite3 "$TEST_SKILL_DIR/db/messages.db" \
+    "SELECT owner_pid FROM locks WHERE resource = '$1';" 2>/dev/null \
+    | tr -d '\r'
+}
+
+_wait_for_runtime_lock_owner() { # <resource> <pid> <seconds>
+  local resource="$1" expected="$2" seconds="$3" i
+  for ((i = 0; i < seconds * 10; i++)); do
+    [ "$(_runtime_lock_owner "$resource")" = "$expected" ] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+_make_no_role_lock_launcher() {
+  NO_ROLE_LOCK_LAUNCHER="$SCRIPTS/drivers/types/codex/codex-bridge-launcher-no-role-lock.sh"
+  grep -Fqx 'acquire_runtime_lock "$CHILD_LOCK_RESOURCE" || exit 0' "$LAUNCHER" || return 1
+  sed 's@^acquire_runtime_lock "\$CHILD_LOCK_RESOURCE" || exit 0$@# role lock disabled for #485 negative control@' \
+    "$LAUNCHER" > "$NO_ROLE_LOCK_LAUNCHER" || return 1
+  chmod +x "$NO_ROLE_LOCK_LAUNCHER"
+  grep -Fqx '# role lock disabled for #485 negative control' "$NO_ROLE_LOCK_LAUNCHER"
+}
+
+_diagnose_485_failure() {
+  local pid state label
+  printf '485 diagnostics: child_launcher=%s expected_roots=%s root_snapshot=%s\n' \
+    "${CHILD_LAUNCHER_PATTERN:-$LAUNCHER}" \
+    "${EXPECTED_CHILD_ROOTS:-unknown}" "${CHILD_ROOT_SNAPSHOT:-empty}" >&2
+  printf '485 dispatchers:\n' >&2
+  for label in A B; do
+    if [ "$label" = A ]; then pid="${dispatcher_a:-}"; else pid="${dispatcher_b:-}"; fi
+    printf '  dispatcher_%s pid=%s\n' "$label" "${pid:-unknown}" >&2
+    [ -n "$pid" ] || continue
+    ps -o pid=,ppid=,stat=,args= -p "$pid" 2>/dev/null \
+      | sed 's/^/    /' >&2 || true
+  done
+  printf '485 parent liveness:\n' >&2
+  for pid in "${parent_a:-}" "${parent_b:-}"; do
+    [ -n "$pid" ] || continue
+    if kill -0 "$pid" 2>/dev/null; then state=alive; else state=dead; fi
+    printf '  pid=%s state=%s\n' "$pid" "$state" >&2
+  done
+  printf '485 role-child roots:\n' >&2
+  _child_launcher_roots | sed 's/^/  /' >&2 || true
+  printf '485 role-child descendants:\n' >&2
+  ps -Ao pid=,ppid=,stat=,args= 2>/dev/null \
+    | awk -v project="$PROJ" \
+      '$4 != "awk" && index($0, project) && (index($0, "codex-bridge-launcher") || index($0, "codex-bridge.js")) { print "  " $0 }' >&2 || true
+  printf '485 runtime locks:\n' >&2
+  sqlite3 "$TEST_SKILL_DIR/db/messages.db" \
+    'SELECT resource, owner_pid, acquired_at FROM locks ORDER BY resource;' 2>/dev/null \
+    | sed 's/^/  /' >&2 || true
+  printf '485 lock owners: dispatcher=%s role=%s\n' \
+    "${DISPATCHER_LOCK_RESOURCE:+$(_runtime_lock_owner "$DISPATCHER_LOCK_RESOURCE")}" \
+    "${ROLE_LOCK_RESOURCE:+$(_runtime_lock_owner "$ROLE_LOCK_RESOURCE")}" >&2
+  return 0
+}
+
 @test "launcher: a replacement dispatcher does not double the role children (#485)" {
   put_record team alice thread-alice "$PROJ" codex
   export MOCK_BRIDGE_SLEEP=12
-  sleep 14 3>&- & local parent_a=$!
-  sleep 14 3>&- & local parent_b=$!
+  local settle_seconds=10 stable_samples=4 parent_lifetime=25
+  local tab project_hash role_hash role_pair
+  tab=$(printf '\t')
+  role_pair="team${tab}alice"
+  project_hash=$(printf '%s' "$PROJ" | bash -c 'source "$1"; agmsg_sha1' _ "$SCRIPTS/lib/hash.sh")
+  role_hash=$(printf '%s' "$role_pair" | bash -c 'source "$1"; agmsg_sha1' _ "$SCRIPTS/lib/hash.sh")
+  DISPATCHER_LOCK_RESOURCE="codex-dispatcher:$project_hash"
+  ROLE_LOCK_RESOURCE="codex-child:$project_hash:$role_hash"
+  CHILD_LAUNCHER_PATTERN="$LAUNCHER"
+  EXPECTED_CHILD_ROOTS=1
+  sleep "$parent_lifetime" 3>&- & local parent_a=$!
+  sleep "$parent_lifetime" 3>&- & local parent_b=$!
 
   # Dispatcher A spawns the role child, which is nohup'd and outlives A.
   bash "$LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$parent_a" >/dev/null 2>&1 3>&- &
   local dispatcher_a=$!
-  [ "$(wait_for_child_count 1)" -eq 1 ]
+  if ! _wait_for_stable_child_roots 1 "$stable_samples" "$settle_seconds"; then
+    _diagnose_485_failure
+    return 1
+  fi
 
   # SIGKILL is what a pane teardown effectively does to a dispatcher that never
   # trapped the signal: the EXIT trap does not run, so the lock row is left
   # behind owned by a dead pid, exactly the state a replacement dispatcher hits.
   kill -9 "$dispatcher_a" 2>/dev/null || true
   wait "$dispatcher_a" 2>/dev/null || true
-  [ "$(wait_for_child_count 1)" -eq 1 ]
+  if ! _wait_for_stable_child_roots 1 "$stable_samples" "$settle_seconds"; then
+    _diagnose_485_failure
+    return 1
+  fi
 
-  # Dispatcher B reclaims the stale lock and, with an empty known_pairs, spawns
-  # a second child for the SAME pair. Without the per-role lock that child would
-  # live on and poll forever alongside the first.
+  # Dispatcher B must first be observed as the new project-lock owner. Only
+  # after that transition is a singleton assertion meaningful: otherwise the
+  # old child can make a fixed-delay count pass before B has run at all.
   bash "$LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$parent_b" >/dev/null 2>&1 3>&- &
   local dispatcher_b=$!
-  # The duplicate is spawned and then has to lose the lock race; settle on the
-  # steady state rather than on whichever side of that transition we land.
-  [ "$(wait_for_child_count 1)" -eq 1 ]
-  sleep 1
-  [ "$(count_child_launchers)" -eq 1 ]
+  if ! _wait_for_pid_alive "$dispatcher_b" "$settle_seconds" \
+    || ! _wait_for_runtime_lock_owner "$DISPATCHER_LOCK_RESOURCE" "$dispatcher_b" "$settle_seconds"; then
+    _diagnose_485_failure
+    return 1
+  fi
+  if ! _wait_for_stable_child_roots 1 "$stable_samples" "$settle_seconds"; then
+    _diagnose_485_failure
+    return 1
+  fi
 
   kill "$dispatcher_b" 2>/dev/null || true
   wait "$dispatcher_b" 2>/dev/null || true
   kill "$parent_a" "$parent_b" 2>/dev/null || true
+  wait "$parent_a" 2>/dev/null || true
+  wait "$parent_b" 2>/dev/null || true
+}
+
+@test "launcher: per-role lock disabled exposes two independent roots (#485)" {
+  put_record team alice thread-alice "$PROJ" codex
+  export MOCK_BRIDGE_SLEEP=12
+  local settle_seconds=10 stable_samples=4 parent_lifetime=25
+  local tab project_hash role_hash role_pair
+  tab=$(printf '\t')
+  role_pair="team${tab}alice"
+  project_hash=$(printf '%s' "$PROJ" | bash -c 'source "$1"; agmsg_sha1' _ "$SCRIPTS/lib/hash.sh")
+  role_hash=$(printf '%s' "$role_pair" | bash -c 'source "$1"; agmsg_sha1' _ "$SCRIPTS/lib/hash.sh")
+  DISPATCHER_LOCK_RESOURCE="codex-dispatcher:$project_hash"
+  ROLE_LOCK_RESOURCE="codex-child:$project_hash:$role_hash"
+  EXPECTED_CHILD_ROOTS=2
+  if ! _make_no_role_lock_launcher; then
+    _diagnose_485_failure
+    return 1
+  fi
+  CHILD_LAUNCHER_PATTERN="$NO_ROLE_LOCK_LAUNCHER"
+  sleep "$parent_lifetime" 3>&- & local parent_a=$!
+  sleep "$parent_lifetime" 3>&- & local parent_b=$!
+
+  bash "$NO_ROLE_LOCK_LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$parent_a" >/dev/null 2>&1 3>&- &
+  local dispatcher_a=$!
+  if ! _wait_for_stable_child_roots 1 "$stable_samples" "$settle_seconds"; then
+    _diagnose_485_failure
+    return 1
+  fi
+  kill -9 "$dispatcher_a" 2>/dev/null || true
+  wait "$dispatcher_a" 2>/dev/null || true
+  if ! _wait_for_stable_child_roots 1 "$stable_samples" "$settle_seconds"; then
+    _diagnose_485_failure
+    return 1
+  fi
+
+  bash "$NO_ROLE_LOCK_LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$parent_b" >/dev/null 2>&1 3>&- &
+  local dispatcher_b=$!
+  if ! _wait_for_pid_alive "$dispatcher_b" "$settle_seconds" \
+    || ! _wait_for_runtime_lock_owner "$DISPATCHER_LOCK_RESOURCE" "$dispatcher_b" "$settle_seconds"; then
+    _diagnose_485_failure
+    return 1
+  fi
+  if ! _wait_for_stable_child_roots 2 "$stable_samples" "$settle_seconds"; then
+    _diagnose_485_failure
+    return 1
+  fi
+
+  kill "$dispatcher_b" "$parent_a" "$parent_b" 2>/dev/null || true
+  wait "$dispatcher_b" 2>/dev/null || true
   wait "$parent_a" 2>/dev/null || true
   wait "$parent_b" 2>/dev/null || true
 }
