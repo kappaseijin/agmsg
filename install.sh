@@ -493,6 +493,76 @@ if [ "$UPDATE_ONLY" = true ]; then
     sed "s/__SKILL_NAME__/$SKILL_NAME/g" "$(agmsg_type_template_path grok-build)" > "$GROK_SKILL_DIR/SKILL.md"
   fi
   cp "$SCRIPT_DIR/openai.yaml" "$SKILL_DIR/agents/openai.yaml" 2>/dev/null || true
+  # A team config written by an older release can be group- or world-writable,
+  # and the sync engine refuses to read one that is (#804). Upgrading does not
+  # rewrite files that already exist, so without this the release we are asking
+  # people to install is the release that stops them: joined on v1.2.0-rc.5,
+  # upgraded as told, and now the binding they already had is rejected.
+  #
+  # This is a HISTORICAL correction, not a sweep of every authority file. The
+  # set an older release's write path could have left wrong is exactly
+  # `teams/<team>/config.json`, because it is the only one written by shell
+  # under the caller's umask; `<storage>/remote-sync/<team>.json` and the
+  # retained age checkpoint are written by Node with an explicit 0600 on a
+  # fresh `wx` file, and that code is byte-identical at v1.2.0-rc.5. Those two
+  # are still authority files the engine refuses on mode -- a mode changed by
+  # hand is outside this walk, and the pasteable remedy in the refusal is what
+  # covers that case.
+  #
+  # Within what it does walk, the selection is meant to be exactly the files
+  # the engine refuses ON MODE, so this cannot correct a file into a state the
+  # engine still refuses, and cannot touch one it would have accepted:
+  #
+  #   -type f      a symlink is refused by the engine BEFORE mode is consulted
+  #                ("must not be a symbolic link"), so chmod-ing one would
+  #                change a file OUTSIDE the store and announce a repair that
+  #                repaired nothing. `[ -f ]` follows symlinks; this does not.
+  #   -perm -g+w   two tests, not one `-go+w`: `-perm -MODE` means ALL of the
+  #   -perm -o+w   named bits, so the combined form skips a file writable by
+  #                only one of them.
+  #   find, glob   `teams/*/config.json` silently drops a team whose name
+  #                begins with a dot, and lib/validate.sh allows those -- it
+  #                rejects `.` and `..` but not `.anything`. find descends
+  #                regardless of the leading character.
+  #   one traversal, not two `find` starts per binding.
+  #
+  # `go-w` rather than a numeric mode: the owner's bits and any read access the
+  # operator deliberately granted are theirs, not ours to normalise.
+  #
+  # Skipped on Windows, where the engine skips the mode check itself
+  # (`process.platform !== "win32"` guards it, and it is the LAST thing it
+  # consults). MSYS reports modes the filesystem does not really carry, so
+  # without this the walk would announce that the sync engine refuses a file the
+  # sync engine is perfectly happy with -- on every update, on the one platform
+  # where the sentence cannot be true.
+  #
+  # Said out loud, per file. A permission change the operator cannot see is
+  # indistinguishable from one that did not happen, and this one runs without
+  # being asked for.
+  if ! is_windows_host; then
+    # Same scheme as lib/shquote.sh, inline rather than sourced: the installer
+    # must not depend on the tree it is in the middle of writing. A team name
+    # may contain a space or a single quote -- lib/validate.sh rejects only
+    # empty / `.` / `..` / `/` / `\` / a leading `-` / control characters -- so
+    # a path printed for someone to paste has to survive both.
+    agmsg_shq() {
+      printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+    }
+    # -print0 and `read -d ''` because the path is arbitrary UTF-8. A newline
+    # cannot appear in a team name (validate.sh rejects control characters), but
+    # nothing here needs to rely on that.
+    find "$SKILL_DIR/teams" -mindepth 2 -maxdepth 2 -name config.json -type f \
+      \( -perm -g+w -o -perm -o+w \) -print0 2>/dev/null |
+      while IFS= read -r -d '' agmsg_binding; do
+        if chmod go-w "$agmsg_binding" 2>/dev/null; then
+          echo "  + tightened $agmsg_binding (an older release left it group- or world-writable; the sync engine refuses those)"
+        else
+          printf '  ! could not tighten %s -- run: chmod go-w %s\n' \
+            "$agmsg_binding" "$(agmsg_shq "$agmsg_binding")" >&2
+        fi
+      done || true
+    unset -f agmsg_shq
+  fi
   chmod +x "$SKILL_DIR/scripts/"*.sh
   chmod +x "$SKILL_DIR/scripts/guards/"*.sh 2>/dev/null || true
   chmod +x "$SKILL_DIR/scripts/drivers/types/codex/"*.sh 2>/dev/null || true
@@ -549,7 +619,18 @@ if [ "$UPDATE_ONLY" = true ]; then
   configure_codex_sandbox
   echo ""
   echo "  ! Restart any running agent sessions to pick up the updated scripts."
-  echo "    In-flight watch.sh processes keep the old code until they restart."
+  echo "    In-flight watch.sh processes detect this and stand down on their own;"
+  echo "    reopening the session brings delivery back."
+  echo ""
+  echo "  ! A running sync engine stands down when it can tell it was updated, and"
+  echo "    does not come back. When it cannot tell, it keeps running the engine"
+  echo "    code it loaded before the update."
+  echo "    Check each team you sync remotely:"
+  echo ""
+  echo "      remote.sh status <team>"
+  echo ""
+  echo "    There is no supported way to replace a running engine yet, and"
+  echo "    'engine stale' is not proof that one has stopped (#963, #954)."
   echo ""
   echo "  ! If a project uses 'monitor'/'both'/'turn' delivery, re-run"
   echo "    'delivery.sh set <mode> <type> <project>' there. An upgrade (or a skill"

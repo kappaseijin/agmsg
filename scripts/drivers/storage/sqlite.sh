@@ -23,7 +23,11 @@ _sqlite_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # than held in a driver-wide variable: these run inside command substitutions,
 # where an assignment made by a caller would not be visible anyway.
 _sqlite_db() { agmsg_db_path "$1"; }
-_sqlite_lit() { printf '%s' "$1" | sed "s/'/''/g"; }
+# The quote is a variable, not a \' in the pattern: bash 3.2 keeps the
+# backslash of a \' REPLACEMENT and would double a quote into \'\' there while
+# producing '' on bash 4+. tests/test_sqlpath.bats holds this equal to the
+# forking form it replaces, on the inputs that matter to SQL quoting.
+_sqlite_lit() { local q="'"; printf '%s' "${1//$q/$q$q}"; }
 
 # Run a record-returning query: strip CR but PRESERVE the sqlite exit status
 # (pipefail), so a backend failure surfaces as a non-zero return instead of
@@ -32,6 +36,28 @@ _sqlite_lit() { printf '%s' "$1" | sed "s/'/''/g"; }
 # debuggable, per §2.1 framing (#203 (1) / review).
 _sqlite_data() {
   ( set -o pipefail; agmsg_sqlite "$(_sqlite_db "$1")" "$2" | tr -d '\r' )
+}
+
+# The same query, handed over stdin instead of on the command line (#882).
+#
+# FOR SQL WHOSE LENGTH GROWS WITH THE DATA, and only for that. A command line
+# has an operating-system limit and stdin does not, so any statement carrying a
+# list of ids -- one `IN (...)` entry per pulled message, per acked message, per
+# roster member -- has to arrive this way or it stops working at a size nobody
+# chose.
+#
+# The size that stops it is not large. Windows' CreateProcess caps the command
+# line at 32,767 characters; measured on a Windows machine, sqlite3 took 827
+# uuids as arguments and refused 837. A pull page carrying its ids twice
+# reaches that at about 400 messages, which is under half a default page, so a
+# team that had grown past it simply could not be pulled -- the failure the
+# report in #882 arrived as.
+#
+# `-batch` because this is a script rather than a session: without it sqlite3
+# reading a non-tty is still willing to treat a malformed line as an
+# interactive prompt, and the point of this path is that nobody is watching.
+_sqlite_data_stdin() {
+  ( set -o pipefail; printf '%s\n' "$2" | agmsg_sqlite -batch "$(_sqlite_db "$1")" | tr -d '\r' )
 }
 
 # IN (...) list of "team:agent" pairs.
@@ -106,6 +132,26 @@ storage_init() {
     );
     CREATE INDEX IF NOT EXISTS events_sent ON events(type, team, to_agent, seq);
     CREATE INDEX IF NOT EXISTS events_read ON events(type, team, agent, msg_id);
+    -- legacy_id is looked up by value from the other side: every reader that
+    -- unions the two tables asks NOT EXISTS(events.legacy_id = messages.id)
+    -- per legacy row, and the one-time push projection asks the same question
+    -- for every message in the team. Without this index each of those is a
+    -- full scan of events, so the cost is messages x events: on a 17,369-message
+    -- store with 28,568 events the projection ran 155 s inside one write
+    -- transaction (#919) -- holding the store's write lock for the whole of it,
+    -- which is what killed the unlock reprocess in #910 -- to insert nothing.
+    -- The ALTER above runs first on purpose, so an older store has the column
+    -- before this asks for the index on it.
+    CREATE INDEX IF NOT EXISTS events_legacy ON events(legacy_id);
+    -- id is the value every cross-reference to an event carries, but the
+    -- table's key is seq, so a lookup by id is otherwise a full scan of a
+    -- table that holds every message body. The sync import pays that scan
+    -- once per imported message (the sync_messages projection selects
+    -- FROM events WHERE id=...), which made the import batch grow with the
+    -- store: 24.6 ms per message on a 21,471-event store, against ~0 with
+    -- this index (#910's remaining reprocess drift, measured statement by
+    -- statement on a captured import batch).
+    CREATE INDEX IF NOT EXISTS events_id ON events(id);
     CREATE TABLE IF NOT EXISTS read_cursors (
       team TEXT NOT NULL,
       agent TEXT NOT NULL,
