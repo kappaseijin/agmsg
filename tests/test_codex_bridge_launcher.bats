@@ -45,6 +45,9 @@ setup() {
   # of $CAPTURE / $SCRIPTS / $RUN_DIR come from the environment it inherits.
   cat > "$SCRIPTS/drivers/types/codex/codex-bridge.js" <<'EOF'
 #!/usr/bin/env bash
+if [ -n "${MOCK_BRIDGE_EVENTS:-}" ]; then
+  printf 'exec pid=%s ppid=%s\n' "$$" "$PPID" >> "$MOCK_BRIDGE_EVENTS"
+fi
 [ -z "${MOCK_BRIDGE_CAPTURE_DELAY:-}" ] || sleep "$MOCK_BRIDGE_CAPTURE_DELAY"
 printf '%s\n' "$*" >> "$CAPTURE"
 source "$SCRIPTS/lib/hash.sh" 2>/dev/null || true
@@ -182,6 +185,69 @@ run_launcher() {
     fi
     return 1
   fi
+}
+
+# Record the launch points that matter to the native-Windows lifecycle test.
+# The dispatcher and role child are both detached from the Bats process, so a
+# failure needs their first observed PIDs rather than a final process listing.
+record_windows_native_events() {
+  local event_file="$1" dispatcher_pid="$2" parent_pid="$3" child
+  if ! grep -q '^dispatcher-start ' "$event_file" 2>/dev/null; then
+    printf 'dispatcher-start pid=%s parent=%s\n' "$dispatcher_pid" "$parent_pid" >> "$event_file"
+  fi
+  grep -q '^role-child-start ' "$event_file" 2>/dev/null && return 0
+  for child in $(_launcher_child_pids); do
+    grep -q "^role-child-start pid=$child " "$event_file" 2>/dev/null && continue
+    printf 'role-child-start pid=%s dispatcher=%s parent=%s\n' \
+      "$child" "$dispatcher_pid" "$parent_pid" >> "$event_file"
+  done
+}
+
+windows_native_diagnostics() {
+  local parent_pid="$1" dispatcher_pid="$2" event_file="$3" snapshot
+  echo "windows-native diagnostics:"
+  echo "capture path: $CAPTURE"
+  echo "parent pid: $parent_pid"
+  echo "dispatcher pid: $dispatcher_pid"
+  echo "MSYSTEM: ${MSYSTEM:-unset}"
+  echo "tasklist result:"
+  if command -v tasklist >/dev/null 2>&1; then
+    MSYS_NO_PATHCONV=1 tasklist /FI "PID eq $parent_pid" 2>&1 || true
+  else
+    echo "tasklist: unavailable"
+  fi
+  echo "local pid probe:"
+  if (source "$SCRIPTS/lib/instance-id.sh"; _agmsg_pid_alive_local "$parent_pid"); then
+    echo "parent is alive by local probe"
+  else
+    echo "parent is not alive by local probe"
+  fi
+  echo "dispatcher/role-child start events:"
+  if [ -f "$event_file" ]; then
+    sed -n -e '/^dispatcher-start /p' -e '/^role-child-start /p' "$event_file"
+  else
+    echo "no dispatcher or role-child event observed"
+  fi
+  echo "bridge exec events:"
+  if [ -f "$MOCK_BRIDGE_EVENTS" ]; then
+    sed -n '/^exec /p' "$MOCK_BRIDGE_EVENTS"
+  else
+    echo "no bridge exec event observed"
+  fi
+  echo "process snapshot:"
+  snapshot="$(ps -Ao pid=,ppid=,stat=,args= 2>&1 || true)"
+  printf '%s\n' "$snapshot" | grep -F -e "$LAUNCHER" -e 'codex-bridge.js' -e "$PROJ" || true
+}
+
+cleanup_windows_native_processes() {
+  local dispatcher_pid="$1" parent_pid="$2"
+  # Signal both direct children before waiting for either. Waiting on the
+  # dispatcher first can hold the parent alive until its full test timer when a
+  # native signal is delivered between two launcher polls.
+  kill "$dispatcher_pid" 2>/dev/null || true
+  kill "$parent_pid" 2>/dev/null || true
+  wait "$dispatcher_pid" 2>/dev/null || true
+  wait "$parent_pid" 2>/dev/null || true
 }
 
 @test "launcher: binds the recorded thread when the record's project matches (#350)" {
@@ -694,16 +760,32 @@ _diagnose_485_failure() {
   chmod +x "$stubdir/tasklist"
 
   put_record team alice thread-msys "$PROJ" codex
+  export MSYSTEM=MINGW64 PATH="$stubdir:$PATH"
+  export MOCK_BRIDGE_EVENTS="$TEST_SKILL_DIR/native-bridge-events.log"
+  local lifecycle_events="$TEST_SKILL_DIR/native-launcher-events.log"
 
-  sleep 6 3>&- & local p=$!
-  MSYSTEM=MINGW64 PATH="$stubdir:$PATH" \
-    bash "$LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$p" >/dev/null 2>&1 3>&- || true
-  wait "$p" 2>/dev/null || true
+  # Keep the simulated MSYS parent alive while the launcher observes the
+  # tasklist blind spot. This control must exercise the same bounded lifecycle
+  # as the real native leg, or its six-second parent becomes another race.
+  sleep 30 3>&- & local p=$!
+  bash "$LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$p" >/dev/null 2>&1 3>&- &
+  local dispatcher=$!
+  record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
   local i
-  for i in {1..30}; do [ -f "$CAPTURE" ] && break; sleep 0.1; done
+  for i in {1..150}; do
+    record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
+    [ -f "$CAPTURE" ] && break
+    sleep 0.1
+  done
+  record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
 
   # A bridge was launched at all -- this is what the whole class costs on Windows.
-  [ -f "$CAPTURE" ] || { echo "no bridge was started under a blind tasklist"; false; }
+  if [ ! -f "$CAPTURE" ]; then
+    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    cleanup_windows_native_processes "$dispatcher" "$p"
+    false
+  fi
+  cleanup_windows_native_processes "$dispatcher" "$p"
   grep -q -- '--thread thread-msys' "$CAPTURE"
 }
 
@@ -716,14 +798,31 @@ _diagnose_485_failure() {
   # evaluation, which means neither loop turns over and no bridge is ever
   # started. Real tasklist, no stub.
   put_record team alice thread-win "$PROJ" codex
+  export MOCK_BRIDGE_CAPTURE_DELAY=7
+  export MOCK_BRIDGE_EVENTS="$TEST_SKILL_DIR/native-bridge-events.log"
+  local lifecycle_events="$TEST_SKILL_DIR/native-launcher-events.log"
 
-  sleep 6 3>&- & local p=$!
-  bash "$LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$p" >/dev/null 2>&1 3>&- || true
-  wait "$p" 2>/dev/null || true
+  # Keep the MSYS parent alive beyond the capture deadline. The old fixture
+  # waited for a six-second parent before looking at capture for three seconds,
+  # so a slow bridge could be killed before the assertion ever observed it.
+  sleep 30 3>&- & local p=$!
+  bash "$LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$p" >/dev/null 2>&1 3>&- &
+  local dispatcher=$!
+  record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
   local i
-  for i in {1..30}; do [ -f "$CAPTURE" ] && break; sleep 0.1; done
+  for i in {1..150}; do
+    record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
+    [ -f "$CAPTURE" ] && break
+    sleep 0.1
+  done
+  record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
 
-  [ -f "$CAPTURE" ] || { echo "no bridge was started on native Windows"; false; }
+  if [ ! -f "$CAPTURE" ]; then
+    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    cleanup_windows_native_processes "$dispatcher" "$p"
+    false
+  fi
+  cleanup_windows_native_processes "$dispatcher" "$p"
   grep -q -- '--thread thread-win' "$CAPTURE"
 }
 
