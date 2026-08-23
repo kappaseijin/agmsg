@@ -2794,10 +2794,24 @@ cmd_status() {
 
 cmd_sync_start() {
   local team="${1:?Usage: remote.sh sync start <team>}" cfg connected_at disconnected_at \
-    engine_state engine_pid started_pid ready_pid startup_nonce ready=0 i=0 \
-    logfile log_offset=1
+    engine_state engine_pid started_pid ready_pid startup_nonce ready=0 \
+    logfile log_offset=1 ready_timeout_s="${AGMSG_REMOTE_SYNC_READY_TIMEOUT_S:-16}" \
+    ready_deadline
   [ $# -eq 1 ] || { echo "Usage: remote.sh sync start <team>" >&2; exit 1; }
   agmsg_validate_team_name "$team" || exit 1
+  case "$ready_timeout_s" in
+    ''|*[!0-9]*)
+      echo "agmsg: AGMSG_REMOTE_SYNC_READY_TIMEOUT_S must be a positive integer" >&2
+      return 1
+      ;;
+  esac
+  if ! [ "$ready_timeout_s" -gt 0 ] 2>/dev/null; then
+    echo "agmsg: AGMSG_REMOTE_SYNC_READY_TIMEOUT_S must be a positive integer" >&2
+    return 1
+  fi
+  # Force decimal arithmetic so a valid value such as 08 is not parsed as an
+  # invalid octal literal by Bash arithmetic expansion.
+  ready_timeout_s=$((10#$ready_timeout_s))
   agmsg_lock_acquire "$TEAMS_DIR/$team" || exit 1
   # Set only after the acquire returned success, and only in the process that
   # made the call: this is what _remote_sync_engine_start trusts instead of the
@@ -2871,7 +2885,8 @@ cmd_sync_start() {
   # that is late or missing for ANY reason costs this caller its own wait and
   # not the rest of the machine.
   agmsg_lock_release
-  while [ "$i" -lt 1600 ]; do
+  ready_deadline=$((SECONDS + ready_timeout_s))
+  while [ "$SECONDS" -lt "$ready_deadline" ]; do
     IFS=$'\t' read -r engine_state ready_pid < <(_remote_sync_engine_status "$team")
     if [ "$engine_state" = "running" ] && [ "$ready_pid" = "$started_pid" ] &&
        tail -c "+$log_offset" "$logfile" 2>/dev/null |
@@ -2882,7 +2897,6 @@ cmd_sync_start() {
       ready=1
       break
     fi
-    i=$((i + 1))
     sleep 0.01
   done
   if [ "$ready" -ne 1 ]; then
