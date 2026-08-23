@@ -440,7 +440,7 @@ See [docs/opencode.md](docs/opencode.md) for full setup instructions.
 ~/.agents/skills/<cmd>/scripts/join.sh <team> <agent_id> <type> <project_path> [--role <role>] [--kind <seat|human|service>] [--force]
 ~/.agents/skills/<cmd>/scripts/team.sh <team> [--format human|json]
 ~/.agents/skills/<cmd>/scripts/roster-normalize.sh <team> --check|--apply
-~/.agents/skills/<cmd>/scripts/team-work.sh <validate|self-check|g4-audit|g4-bootstrap|observe|queue|audit|reconcile|watchdog|dispatch|dispatch-ack|claim|ack|renew|release|set-state|link-pr|writeback> <team> <contract-pack.json> ...
+~/.agents/skills/<cmd>/scripts/team-work.sh <validate|self-check|g4-audit|g4-bootstrap|g4-transition|observe|queue|audit|reconcile|watchdog|dispatch|dispatch-ack|claim|ack|renew|release|set-state|link-pr|writeback> <team> <contract-pack.json> ...
 ~/.agents/skills/<cmd>/scripts/whoami.sh <project_path> [type] [--format human|json]
 ~/.agents/skills/<cmd>/scripts/delivery.sh set <mode> <type> <project_path>
 ~/.agents/skills/<cmd>/scripts/delivery.sh status [<type> <project_path>] [--format human|json]
@@ -839,9 +839,9 @@ failure with an invalid pack.
 
 Phase 1A `g4-audit` does not initialize or mutate SQLite, create a G4 ledger,
 bootstrap or transition state, pull work, dispatch messages, change GitHub
-labels, or call any GitHub write method. `g4-transition` and `g4-pull` are not
-published commands. The mutation commands remain gated until the #97 recovery
-work and the #98 roster/delivery acceptance are both live.
+labels, or call any GitHub write method. `g4-pull` remains a Phase 2 command and
+is not published here. The Phase 1B commands below require the #97 recovery
+work and the #98 roster/delivery acceptance gates to be live.
 
 ### G4 bootstrap ledger (Phase 1B)
 
@@ -879,6 +879,36 @@ Rejected operational results retain the identity fields, return an empty
 `remediation[0].code`. The SQLite ledger is the only mutation target: this
 command never writes GitHub, changes labels, sends messages, or dispatches
 work.
+
+### G4 blocked-to-ready transition (Phase 1B)
+
+After a source has been bootstrapped, the exact manager seat can record only
+the next expected revision when the saved blocker predicate is freshly true:
+
+```bash
+~/.agents/skills/<cmd>/scripts/team-work.sh g4-transition demo \
+  .g4-state-pack.json kappaseijin/example 42 1 demo_manager \
+  https://example.test/g4-transition
+```
+
+The command accepts exactly the team, G4 state pack, source repository, Issue
+number, expected current revision, manager seat, and non-empty evidence. The
+submitted entry must be `revision: expected-revision + 1`, must change exactly
+from `blocked` to `ready`, and must preserve the source, owner seat, work kinds,
+and immutable basis references. The current local row must still be the
+expected revision and blocked; stale, skipped, unsupported, or immutable-field
+changes are rejected without mutation.
+
+Each transition performs a fresh complete scope audit and directly
+re-evaluates the release predicate saved in the current blocked row. A false,
+unknown, unavailable, or incomplete observation is fail-closed. A successful
+transition updates exactly one `team_work_g4_current` row in a local
+`BEGIN IMMEDIATE` transaction; the append-only trigger records the next
+revision. The command never writes GitHub, changes labels, creates claims,
+dispatches work, or invokes `g4-pull`. Retry with a refreshed pack and the
+current revision after a rejection; rejected results retain the identity and
+digest fields with `transitioned: false` and a stable
+`remediation[0].code`.
 
 ### Reconciler, watchdog, and dispatch gate
 
