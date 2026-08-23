@@ -75,7 +75,13 @@ _pairs_hash="$(printf '%s' "$(printf '%s' "$_ph" | LC_ALL=C sort | sed '/^$/d')"
     "$(printf '%s' "$_proj" | agmsg_sha1)" \
     "$_pairs_hash" \
     "$(hostname)" "$$" "$_start" "$_ssrc" ; } > "$_lease.tmp" && mv "$_lease.tmp" "$_lease"
-trap 'rm -f "$_lease"' EXIT
+_mock_event() {
+  [ -n "${MOCK_BRIDGE_EVENTS:-}" ] || return 0
+  printf '%s pid=%s startsrc=%s start=%s lease=%s\n' \
+    "$1" "$$" "$_ssrc" "$_start" "$_lease" >> "$MOCK_BRIDGE_EVENTS"
+}
+_mock_event start
+trap 'rm -f "$_lease"; _mock_event exit' EXIT
 [ -z "${MOCK_BRIDGE_SLEEP:-}" ] || sleep "$MOCK_BRIDGE_SLEEP"
 exit 0
 EOF
@@ -551,15 +557,196 @@ _spawn_fake() { # <project> <pair...>
   FAKE_PID=$!
 }
 
+_lease_value() { # <key> <lease>
+  awk -F= -v key="$1" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$2"
+}
+
+_snapshot_role_identity() {
+  local pidfile="$RUN_DIR/codex-bridge.team.alice.pid" pid lease lease_pid
+  local startsrc start
+  SNAPSHOT_PID=""
+  SNAPSHOT_LEASE=""
+  SNAPSHOT_STARTSRC=""
+  SNAPSHOT_START=""
+  [ -s "$pidfile" ] || return 1
+  IFS= read -r pid < "$pidfile" || return 1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  lease="$RUN_DIR/codex-bridge-lease.$pid"
+  [ -s "$lease" ] || return 1
+  lease_pid="$(_lease_value pid "$lease")"
+  [ "$lease_pid" = "$pid" ] || return 1
+  startsrc="$(_lease_value startsrc "$lease")"
+  start="$(_lease_value start "$lease")"
+  [ -n "$startsrc" ] && [ -n "$start" ] || return 1
+  SNAPSHOT_PID="$pid"
+  SNAPSHOT_LEASE="$lease"
+  SNAPSHOT_STARTSRC="$startsrc"
+  SNAPSHOT_START="$start"
+}
+
+_wait_for_role_identity() { # <pid> <lease> <startsrc> <start> <samples>
+  local expected_pid="$1" expected_lease="$2" expected_startsrc="$3" expected_start="$4" samples="$5"
+  local i count
+  for ((i = 0; i < samples; i++)); do
+    count="$(_count_role_bridges "$PROJ" alice)"
+    _snapshot_role_identity || return 1
+    [ "$count" -eq 1 ] || return 1
+    [ "$SNAPSHOT_PID" = "$expected_pid" ] || return 1
+    [ "$SNAPSHOT_LEASE" = "$expected_lease" ] || return 1
+    [ "$SNAPSHOT_STARTSRC" = "$expected_startsrc" ] || return 1
+    [ "$SNAPSHOT_START" = "$expected_start" ] || return 1
+    [ "$i" -eq $((samples - 1)) ] || sleep 0.1
+  done
+}
+
+_wait_for_stable_role_identity() { # sets ROLE_STABLE_* on success
+  local i candidate_pid candidate_lease candidate_startsrc candidate_start
+  ROLE_STABLE_PID=""
+  ROLE_STABLE_LEASE=""
+  ROLE_STABLE_STARTSRC=""
+  ROLE_STABLE_START=""
+  for i in {1..100}; do
+    if _snapshot_role_identity; then
+      candidate_pid="$SNAPSHOT_PID"
+      candidate_lease="$SNAPSHOT_LEASE"
+      candidate_startsrc="$SNAPSHOT_STARTSRC"
+      candidate_start="$SNAPSHOT_START"
+      if _wait_for_role_identity \
+        "$candidate_pid" "$candidate_lease" "$candidate_startsrc" "$candidate_start" 3; then
+        ROLE_STABLE_PID="$candidate_pid"
+        ROLE_STABLE_LEASE="$candidate_lease"
+        ROLE_STABLE_STARTSRC="$candidate_startsrc"
+        ROLE_STABLE_START="$candidate_start"
+        return 0
+      fi
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
+_wait_for_bridge_exit_event() { # <pid> <lease> <startsrc> <start> <seconds>
+  local pid="$1" lease="$2" startsrc="$3" start="$4" seconds="$5"
+  local event="exit pid=$pid startsrc=$startsrc start=$start lease=$lease" i
+  for ((i = 0; i < seconds * 10; i++)); do
+    if [ ! -f "$lease" ] && [ -f "$MOCK_BRIDGE_EVENTS" ] \
+      && grep -F -q -- "$event" "$MOCK_BRIDGE_EVENTS"; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
+_wait_for_stable_replacement() { # <old-pid> <old-start> <seconds>, sets ROLE_STABLE_*
+  local old_pid="$1" old_start="$2" seconds="$3"
+  local i candidate_pid candidate_lease candidate_startsrc candidate_start
+  ROLE_STABLE_PID=""
+  ROLE_STABLE_LEASE=""
+  ROLE_STABLE_STARTSRC=""
+  ROLE_STABLE_START=""
+  for ((i = 0; i < seconds * 10; i++)); do
+    if _snapshot_role_identity; then
+      candidate_pid="$SNAPSHOT_PID"
+      candidate_lease="$SNAPSHOT_LEASE"
+      candidate_startsrc="$SNAPSHOT_STARTSRC"
+      candidate_start="$SNAPSHOT_START"
+      if { [ "$candidate_pid" != "$old_pid" ] || [ "$candidate_start" != "$old_start" ]; } \
+        && _wait_for_role_identity \
+          "$candidate_pid" "$candidate_lease" "$candidate_startsrc" "$candidate_start" 3; then
+        ROLE_STABLE_PID="$candidate_pid"
+        ROLE_STABLE_LEASE="$candidate_lease"
+        ROLE_STABLE_STARTSRC="$candidate_startsrc"
+        ROLE_STABLE_START="$candidate_start"
+        return 0
+      fi
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
+_diagnose_937_failure() {
+  local pidfile="$RUN_DIR/codex-bridge.team.alice.pid" f
+  printf '937 diagnostics: elapsed=%ss old_pid=%s old_startsrc=%s old_start=%s old_lease=%s new_pid=%s new_startsrc=%s new_start=%s new_lease=%s\n' \
+    "${ELAPSED_937_SECONDS:-unknown}" "${old_pid:-unknown}" "${old_startsrc:-unknown}" \
+    "${old_start:-unknown}" "${old_lease:-unknown}" "${new_pid:-unknown}" \
+    "${new_startsrc:-unknown}" "${new_start:-unknown}" "${new_lease:-unknown}" >&2
+  printf '937 pidfile: %s\n' "$pidfile" >&2
+  if [ -f "$pidfile" ]; then
+    sed 's/^/  /' "$pidfile" >&2 || true
+  else
+    printf '  absent\n' >&2
+  fi
+  printf '937 leases:\n' >&2
+  for f in "$RUN_DIR"/codex-bridge-lease.*; do
+    [ -f "$f" ] || continue
+    printf '  %s\n' "$f" >&2
+    sed 's/^/    /' "$f" >&2 || true
+  done
+  printf '937 rate markers:\n' >&2
+  for f in "$RUN_DIR"/codex-bridge-rate.*; do
+    [ -e "$f" ] || continue
+    printf '  %s\n' "$f" >&2
+  done
+  printf '937 runtime locks:\n' >&2
+  sqlite3 "$TEST_SKILL_DIR/db/messages.db" \
+    'SELECT resource, owner_pid, acquired_at FROM locks ORDER BY resource;' 2>/dev/null \
+    | sed 's/^/  /' >&2 || true
+  printf '937 mock events:\n' >&2
+  [ -f "$MOCK_BRIDGE_EVENTS" ] && sed 's/^/  /' "$MOCK_BRIDGE_EVENTS" >&2 || true
+  printf '937 process tree:\n' >&2
+  ps -Ao pid=,ppid=,stat=,args= 2>/dev/null \
+    | awk -v launcher="$LAUNCHER" -v project="$PROJ" \
+      'index($0, launcher) || index($0, "codex-bridge.js") || index($0, project) { print "  " $0 }' >&2 || true
+  return 1
+}
+
 @test "launcher: reaps a same-(project,role) orphan the pidfile lost, converging to one (#937)" {
   put_record team alice thread-alice "$PROJ" codex
   export MOCK_BRIDGE_SLEEP=25
-  sleep 22 3>&- & local parent=$!
+  export MOCK_BRIDGE_EVENTS="$TEST_SKILL_DIR/bridge-events"
+  : > "$MOCK_BRIDGE_EVENTS"
+  local reap_wait_seconds=5 max_poll_seconds=2 deadline_seconds
+  deadline_seconds=$((reap_wait_seconds + max_poll_seconds + 8))
+  # The deadline starts after the old identity has stabilized. Keep the parent
+  # alive well beyond it, or its deregistration cleanup can masquerade as the
+  # reaper's exit event when a runner is under load.
+  sleep "$((deadline_seconds + 15))" 3>&- & local parent=$!
   bash "$LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$parent" >/dev/null 2>&1 3>&- & local disp=$!
-  local i; for i in {1..80}; do [ "$(_count_role_bridges "$PROJ" alice)" -ge 1 ] && break; sleep 0.1; done
-  [ "$(_count_role_bridges "$PROJ" alice)" -eq 1 ]
-  rm -f "$RUN_DIR"/codex-bridge.*.pid
-  [ "$(_wait_role_count "$PROJ" alice 1)" -eq 1 ]
+  local started_at; started_at="$(date +%s)"
+  local old_pid old_lease old_startsrc old_start
+  if ! _wait_for_stable_role_identity; then
+    ELAPSED_937_SECONDS=$(( $(date +%s) - started_at )); _diagnose_937_failure
+    false
+  fi
+  old_pid="$ROLE_STABLE_PID"
+  old_lease="$ROLE_STABLE_LEASE"
+  old_startsrc="$ROLE_STABLE_STARTSRC"
+  old_start="$ROLE_STABLE_START"
+  local pidfile="$RUN_DIR/codex-bridge.team.alice.pid"
+  rm -f "$pidfile"
+  if ! _wait_for_bridge_exit_event "$old_pid" "$old_lease" "$old_startsrc" "$old_start" "$deadline_seconds"; then
+    ELAPSED_937_SECONDS=$(( $(date +%s) - started_at )); _diagnose_937_failure
+    false
+  fi
+  local new_pid new_lease new_startsrc new_start
+  if ! _wait_for_stable_replacement "$old_pid" "$old_start" "$deadline_seconds"; then
+    ELAPSED_937_SECONDS=$(( $(date +%s) - started_at )); _diagnose_937_failure
+    false
+  fi
+  new_pid="$ROLE_STABLE_PID"
+  new_lease="$ROLE_STABLE_LEASE"
+  new_startsrc="$ROLE_STABLE_STARTSRC"
+  new_start="$ROLE_STABLE_START"
+  if ! { [ "$new_pid" != "$old_pid" ] || [ "$new_start" != "$old_start" ]; }; then
+    ELAPSED_937_SECONDS=$(( $(date +%s) - started_at )); _diagnose_937_failure
+    false
+  fi
+  if ! { [ "$new_lease" != "$old_lease" ] || [ "$new_start" != "$old_start" ]; }; then
+    ELAPSED_937_SECONDS=$(( $(date +%s) - started_at )); _diagnose_937_failure
+    false
+  fi
   kill "$disp" "$parent" 2>/dev/null || true; wait "$disp" 2>/dev/null || true
 }
 
