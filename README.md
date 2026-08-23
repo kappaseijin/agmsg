@@ -910,6 +910,76 @@ current revision after a rejection; rejected results retain the identity and
 digest fields with `transitioned: false` and a stable
 `remediation[0].code`.
 
+### PM-absent pull workflow
+
+Use this workflow when a team does not want a manager to be the only person
+who can start already-assigned work. It is an operating procedure over two
+explicit packs: the G4 state pack records state and coverage; the work-item
+contract pack supplies `queue` and the lease commands. They must name the
+same source Issue and declared `ownerSeat`, but `g4-bootstrap` does not make
+`queue` read the G4 ledger automatically.
+
+Before rolling the procedure out to any team, verify that its own roster is
+schema v1 and that the manager and owner are exact `kind: "seat"` members. A
+multi-team rollout repeats this check and keeps one roster, state pack,
+work-item pack, and local store per team; it does not share a claim across
+teams.
+
+```bash
+# Read the target team's public roster before preparing its packs.
+~/.agents/skills/<cmd>/scripts/team.sh demo --format json
+
+# An exact manager creates the initial all-or-nothing G4 snapshot once the
+# G4 audit is complete. The evidence string is an operator-owned record.
+~/.agents/skills/<cmd>/scripts/team-work.sh g4-bootstrap demo \
+  .g4-state-pack.json demo_manager 'https://example.test/g4-bootstrap'
+
+# The declared owner reads the ordinary work queue, then claims only its own
+# ready item. The owner records the lease acknowledgement before starting.
+~/.agents/skills/<cmd>/scripts/team-work.sh queue demo .team-work.json
+~/.agents/skills/<cmd>/scripts/team-work.sh claim demo .team-work.json \
+  issue:42 demo_programmer_codex 300
+~/.agents/skills/<cmd>/scripts/team-work.sh ack demo .team-work.json \
+  issue:42 demo_programmer_codex received
+```
+
+The `claim` command also permits an exact manager by its existing authority,
+but the pull procedure deliberately has the declared owner make this claim.
+That keeps work moving when no manager is dispatching. It is not an
+implementation of `g4-pull`: that exact-owner-only command and any pull-only
+pilot are Phase 2 work and are not published by agmsg.
+
+Do not turn a blocked G4 item ready by claiming it or changing a GitHub label.
+The exact manager must submit the next pack revision through `g4-transition`;
+the command requires the saved release predicate to be freshly true and
+rejects an old revision or incomplete audit.
+
+```bash
+# The submitted entry for issue 42 must be revision 2 and ready; `1` is the
+# expected current ledger revision. The manager supplies its own evidence.
+~/.agents/skills/<cmd>/scripts/team-work.sh g4-transition demo \
+  .g4-state-pack.json kappaseijin/example 42 1 demo_manager \
+  'https://example.test/g4-transition'
+```
+
+Run the existing reconciler and watchdog independently. If `reconcile` reports
+`orphan_ready`, the ready item's owner has no single live, deliverable roster
+registration. Treat that as the PM/owner liveness alarm: restore or explicitly
+reassign the owner through the normal team procedure, rather than spawning a
+closed role or silently claiming on its behalf. Neither command creates a
+claim or starts an agent.
+
+```bash
+~/.agents/skills/<cmd>/scripts/team-work.sh reconcile demo .team-work.json \
+  /tmp/demo-reconciler-heartbeat.json
+~/.agents/skills/<cmd>/scripts/team-work.sh watchdog demo .team-work.json \
+  /tmp/demo-reconciler-heartbeat.json 900
+```
+
+When a manager is actively directing a handoff, use the existing
+`dispatch` then `dispatch-ack` path below instead of this owner pull path. Do
+not combine both paths for the same lease epoch.
+
 ### Reconciler, watchdog, and dispatch gate
 
 `reconcile` and `watchdog` run independently of an interactive agent command.
