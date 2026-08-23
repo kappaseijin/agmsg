@@ -440,7 +440,7 @@ See [docs/opencode.md](docs/opencode.md) for full setup instructions.
 ~/.agents/skills/<cmd>/scripts/join.sh <team> <agent_id> <type> <project_path> [--role <role>] [--kind <seat|human|service>] [--force]
 ~/.agents/skills/<cmd>/scripts/team.sh <team> [--format human|json]
 ~/.agents/skills/<cmd>/scripts/roster-normalize.sh <team> --check|--apply
-~/.agents/skills/<cmd>/scripts/team-work.sh <validate|self-check|g4-audit|observe|queue|audit|reconcile|watchdog|dispatch|dispatch-ack|claim|ack|renew|release|set-state|link-pr|writeback> <team> <contract-pack.json> ...
+~/.agents/skills/<cmd>/scripts/team-work.sh <validate|self-check|g4-audit|g4-bootstrap|observe|queue|audit|reconcile|watchdog|dispatch|dispatch-ack|claim|ack|renew|release|set-state|link-pr|writeback> <team> <contract-pack.json> ...
 ~/.agents/skills/<cmd>/scripts/whoami.sh <project_path> [type] [--format human|json]
 ~/.agents/skills/<cmd>/scripts/delivery.sh set <mode> <type> <project_path>
 ~/.agents/skills/<cmd>/scripts/delivery.sh status [<type> <project_path>] [--format human|json]
@@ -837,12 +837,48 @@ GraphQL, pagination, or coverage failures return a valid `unknown` JSON result
 with exit code `0`, so callers can fail closed without confusing source
 failure with an invalid pack.
 
-Phase 1A does not initialize or mutate SQLite, create a G4 ledger, bootstrap or
-transition state, pull work, dispatch messages, change GitHub labels, or call
-any GitHub write method. `g4-bootstrap`, `g4-transition`, and `g4-pull` are not
-published commands. They remain gated until the #97 recovery work and the #98
-roster/delivery acceptance are both live; while #98 is open, this command is
-an audit-only safety observation.
+Phase 1A `g4-audit` does not initialize or mutate SQLite, create a G4 ledger,
+bootstrap or transition state, pull work, dispatch messages, change GitHub
+labels, or call any GitHub write method. `g4-transition` and `g4-pull` are not
+published commands. The mutation commands remain gated until the #97 recovery
+work and the #98 roster/delivery acceptance are both live.
+
+### G4 bootstrap ledger (Phase 1B)
+
+After those gates are accepted, an exact `kind: "seat"`, `role: "manager"`
+roster member can record the first local snapshot for every Issue in a fresh,
+complete audit:
+
+```bash
+~/.agents/skills/<cmd>/scripts/team-work.sh g4-bootstrap demo \
+  .g4-state-pack.json demo_manager https://example.test/g4-bootstrap
+```
+
+The command accepts exactly the team, G4 state pack, manager seat, and a
+non-empty evidence string shown above. It re-reads every declared GitHub scope
+and succeeds only when `classificationBasis.status` is `complete`, the live
+coverage matches the pack exactly, and each entry is an initial `revision: 1`.
+The manager seat must be the exact roster identity with both `kind: "seat"`
+and `role: "manager"`; an owner seat, human, service, missing, or other
+non-manager identity is rejected before the live read.
+
+Bootstrap is initial-only and all-or-nothing. It writes each source to the
+team-local SQLite `team_work_g4_current` table and relies on its append-only
+`team_work_g4_revisions` trigger to record revision 1. If any source already
+has a current row, the entire operation is rejected and no source is partially
+inserted. Retry after refreshing the pack and audit; a repeated bootstrap
+returns `bootstrapped: false` with remediation code `already_bootstrapped`.
+Unknown, incomplete, mismatched, or unavailable audit evidence returns
+`bootstrapped: false` with remediation code `audit_incomplete`.
+
+Successful output is canonical JSON containing `schemaVersion`, `command`,
+`team`, `managerSeat`, `evidence`, `packDigest`, `coverageDigest`,
+`auditDigest`, sorted `sources`, `revision: 1`, and `bootstrapped: true`.
+Rejected operational results retain the identity fields, return an empty
+`sources` array and `bootstrapped: false`, and provide a stable
+`remediation[0].code`. The SQLite ledger is the only mutation target: this
+command never writes GitHub, changes labels, sends messages, or dispatches
+work.
 
 ### Reconciler, watchdog, and dispatch gate
 
