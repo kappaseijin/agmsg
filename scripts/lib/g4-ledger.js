@@ -12,7 +12,7 @@ const {
   parseJson,
   validateG4Pack,
 } = require("./g4-contract");
-const {runAudit} = require("./g4-audit");
+const {evaluatePredicate, runAudit} = require("./g4-audit");
 
 const REPOSITORY = /^[^/\s]+\/[^/\s]+$/;
 
@@ -58,6 +58,22 @@ function requireSource(source) {
     schemaError("source.number must be a positive integer");
   }
   return source;
+}
+
+function parsePositiveInteger(value, context) {
+  if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) {
+    schemaError(context + " must be a positive integer");
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) schemaError(context + " must be a safe positive integer");
+  return parsed;
+}
+
+function basisIdentity(basis) {
+  if (!isObject(basis) || !Array.isArray(basis.refs)) return null;
+  // contentDigest is derived from the entry's state/revision, so the
+  // immutable basis identity is the canonical set of declaration refs.
+  return canonicalJson({refs: basis.refs});
 }
 
 function sqlLiteral(value) {
@@ -369,6 +385,228 @@ function bootstrapG4(team, pack, roster, managerSeat, evidence) {
   });
 }
 
+function transitionOutput(team, source, expectedRevision, managerSeat, evidence, details) {
+  return Object.assign({
+    schemaVersion: 1,
+    command: "g4-transition",
+    team,
+    source: source === null ? null : {
+      number: source.number,
+      repository: source.repository,
+    },
+    expectedRevision: expectedRevision === undefined ? null : expectedRevision,
+    managerSeat: managerSeat === undefined ? null : managerSeat,
+    evidence: evidence === undefined ? null : evidence,
+    packDigest: null,
+    entryDigest: null,
+    coverageDigest: null,
+    auditDigest: null,
+    state: null,
+    revision: null,
+    previousRevision: null,
+    transitioned: false,
+    remediation: [],
+  }, details || {});
+}
+
+function transitionRejected(team, source, expectedRevision, managerSeat, evidence, code, details) {
+  return transitionOutput(team, source, expectedRevision, managerSeat, evidence, Object.assign({
+    transitioned: false,
+    remediation: [{code}],
+  }, details || {}));
+}
+
+function auditMatchesContract(audit, contract) {
+  if (!audit || !Array.isArray(audit.coverage)) return false;
+  const expected = contract.entries
+    .map((info) => info.sourceKey)
+    .sort();
+  const actual = audit.coverage
+    .map((source) => sourceKey(source))
+    .sort();
+  return expected.length === actual.length && expected.every((value, index) => value === actual[index]);
+}
+
+function transitionG4(team, pack, roster, repository, issueNumber, expectedRevision, managerSeat, evidence) {
+  let contract;
+  try {
+    contract = validateG4Pack(pack, roster, team);
+  } catch (_) {
+    return transitionRejected(team, null, null, managerSeat, evidence, "invalid_contract");
+  }
+
+  let source;
+  let expected;
+  try {
+    source = {
+      repository: requireNonEmptyString(repository, "repository"),
+      number: parsePositiveInteger(issueNumber, "issue-number"),
+    };
+    requireSource(source);
+    expected = parsePositiveInteger(expectedRevision, "expected-revision");
+    if (expected === Number.MAX_SAFE_INTEGER) schemaError("expected-revision is too large");
+    requireEvidence(evidence);
+  } catch (_) {
+    return transitionRejected(team, source || null, expected || null, managerSeat, evidence, "invalid_input", {
+      packDigest: contract.packDigest,
+    });
+  }
+
+  try {
+    requireManager(roster, managerSeat);
+  } catch (_) {
+    return transitionRejected(team, source, expected, managerSeat, evidence, "invalid_manager", {
+      packDigest: contract.packDigest,
+    });
+  }
+
+  const target = contract.entries.find((info) => info.sourceKey === sourceKey(source));
+  if (!target) {
+    return transitionRejected(team, source, expected, managerSeat, evidence, "target_not_in_pack", {
+      packDigest: contract.packDigest,
+    });
+  }
+  if (target.entry.revision !== expected + 1) {
+    return transitionRejected(team, source, expected, managerSeat, evidence, "revision_mismatch", {
+      packDigest: contract.packDigest,
+      entryDigest: target.entryDigest,
+    });
+  }
+
+  const dbPath = process.env.AGMSG_TEAM_WORK_DB;
+  if (typeof dbPath !== "string" || dbPath.length === 0) {
+    return transitionRejected(team, source, expected, managerSeat, evidence, "storage_unavailable", {
+      packDigest: contract.packDigest,
+      entryDigest: target.entryDigest,
+    });
+  }
+
+  let current;
+  try {
+    current = readG4Current(dbPath, team, source);
+  } catch (_) {
+    return transitionRejected(team, source, expected, managerSeat, evidence, "storage_unavailable", {
+      packDigest: contract.packDigest,
+      entryDigest: target.entryDigest,
+    });
+  }
+  if (!current) {
+    return transitionRejected(team, source, expected, managerSeat, evidence, "current_missing", {
+      packDigest: contract.packDigest,
+      entryDigest: target.entryDigest,
+    });
+  }
+  if (current.revision !== expected) {
+    return transitionRejected(team, source, expected, managerSeat, evidence, "revision_mismatch", {
+      packDigest: contract.packDigest,
+      entryDigest: target.entryDigest,
+    });
+  }
+  if (current.state !== "blocked" || target.entry.state !== "ready") {
+    return transitionRejected(team, source, expected, managerSeat, evidence, "unsupported_transition", {
+      packDigest: contract.packDigest,
+      entryDigest: target.entryDigest,
+    });
+  }
+  if (current.ownerSeat !== target.entry.ownerSeat ||
+      canonicalJson(current.workKinds) !== canonicalJson(target.entry.workKinds) ||
+      basisIdentity(current.basis) !== basisIdentity(target.entry.basis)) {
+    return transitionRejected(team, source, expected, managerSeat, evidence, "immutable_mismatch", {
+      packDigest: contract.packDigest,
+      entryDigest: target.entryDigest,
+    });
+  }
+  if (!isObject(current.blocker) || !isObject(current.blocker.releasePredicate)) {
+    return transitionRejected(team, source, expected, managerSeat, evidence, "current_blocker_missing", {
+      packDigest: contract.packDigest,
+      entryDigest: target.entryDigest,
+    });
+  }
+
+  let audit;
+  try {
+    audit = runAudit("g4-transition", team, pack, roster);
+  } catch (_) {
+    return transitionRejected(team, source, expected, managerSeat, evidence, "audit_incomplete", {
+      packDigest: contract.packDigest,
+      entryDigest: target.entryDigest,
+    });
+  }
+  const auditDetails = {
+    packDigest: audit.packDigest,
+    entryDigest: target.entryDigest,
+    coverageDigest: audit.coverageDigest,
+    auditDigest: audit.auditDigest,
+  };
+  if (!audit.classificationBasis || audit.classificationBasis.status !== "complete" ||
+      !auditMatchesContract(audit, contract)) {
+    return transitionRejected(team, source, expected, managerSeat, evidence, "audit_incomplete", auditDetails);
+  }
+
+  let predicateObservation;
+  try {
+    predicateObservation = evaluatePredicate(current.blocker.releasePredicate, Date.now());
+  } catch (_) {
+    predicateObservation = {status: "unknown"};
+  }
+  if (!predicateObservation || predicateObservation.status !== "true") {
+    return transitionRejected(team, source, expected, managerSeat, evidence, "predicate_not_true", auditDetails);
+  }
+
+  const oldBasis = canonicalJson(current.basis);
+  const oldBlocker = canonicalJson(current.blocker);
+  const now = "CAST(strftime('%s', 'now') AS INTEGER)";
+  const statements = [
+    `UPDATE team_work_g4_current
+SET state = 'ready',
+    blocker_json = NULL,
+    revision = ${expected + 1},
+    pack_digest = ${sqlLiteral(audit.packDigest)},
+    entry_digest = ${sqlLiteral(target.entryDigest)},
+    coverage_digest = ${sqlLiteral(audit.coverageDigest)},
+    audit_digest = ${sqlLiteral(audit.auditDigest)},
+    evidence = ${sqlLiteral(evidence)},
+    last_action = 'g4-transition',
+    last_actor = ${sqlLiteral(managerSeat)},
+    updated_at = ${now}
+WHERE team = ${sqlLiteral(team)}
+  AND source_repository = ${sqlLiteral(source.repository)}
+  AND source_number = ${source.number}
+  AND state = 'blocked'
+  AND revision = ${expected}
+  AND owner_seat = ${sqlLiteral(current.ownerSeat)}
+  AND work_kinds_json = json(${sqlLiteral(canonicalJson(current.workKinds))})
+  AND basis_json = json(${sqlLiteral(oldBasis)})
+  AND blocker_json = json(${sqlLiteral(oldBlocker)})
+  AND entry_digest = ${sqlLiteral(current.entryDigest)};`,
+    "CREATE TEMP TABLE g4_transition_exact_one(value INTEGER NOT NULL, CONSTRAINT g4_transition_exact_one_guard CHECK(value = 1));",
+    "INSERT INTO g4_transition_exact_one(value) SELECT changes();",
+    "DROP TABLE g4_transition_exact_one;",
+    g4CurrentResultSql(team, source),
+  ];
+
+  let updatedRow;
+  try {
+    updatedRow = parseSingleJsonRow(runG4Transaction(dbPath, statements), "G4 transition result");
+    if (!updatedRow) throw new Error("G4 transition result is empty");
+    updatedRow = snapshotG4Row(updatedRow);
+  } catch (_) {
+    return transitionRejected(team, source, expected, managerSeat, evidence, "transition_conflict", auditDetails);
+  }
+
+  return transitionOutput(team, source, expected, managerSeat, evidence, {
+    packDigest: updatedRow.packDigest,
+    entryDigest: updatedRow.entryDigest,
+    coverageDigest: updatedRow.coverageDigest,
+    auditDigest: updatedRow.auditDigest,
+    state: updatedRow.state,
+    revision: updatedRow.revision,
+    previousRevision: expected,
+    transitioned: true,
+    remediation: [],
+  });
+}
+
 function parsePackFile(packPath) {
   try {
     return parseJson(fs.readFileSync(packPath, "utf8"), "G4 state pack is not valid JSON");
@@ -383,31 +621,45 @@ module.exports = {
   runG4Transaction,
   g4CurrentResultSql,
   bootstrapG4,
+  transitionG4,
   canonicalJson,
   sha256Digest,
 };
 
 function main() {
-  const [command, team, packPath, managerSeat, evidence] = process.argv.slice(2);
-  if (command !== "g4-bootstrap") {
+  const argv = process.argv.slice(2);
+  const [command, team, packPath] = argv;
+  if (command !== "g4-bootstrap" && command !== "g4-transition") {
     throw new SchemaError(`unknown G4 ledger command: ${command || ""}`);
   }
-  if (process.argv.slice(2).length !== 5) {
-    throw new SchemaError("invalid arguments for g4-bootstrap");
+  if ((command === "g4-bootstrap" && argv.length !== 5) ||
+      (command === "g4-transition" && argv.length !== 8)) {
+    throw new SchemaError(`invalid arguments for ${command}`);
   }
   const pack = parsePackFile(packPath);
+  const managerSeat = command === "g4-bootstrap" ? argv[3] : argv[6];
+  const evidence = command === "g4-bootstrap" ? argv[4] : argv[7];
   if (!pack) {
-    process.stdout.write(`${canonicalJson(bootstrapRejected(team, managerSeat, evidence, "invalid_contract"))}\n`);
+    const result = command === "g4-bootstrap"
+      ? bootstrapRejected(team, managerSeat, evidence, "invalid_contract")
+      : transitionRejected(team, null, null, managerSeat, evidence, "invalid_contract");
+    process.stdout.write(`${canonicalJson(result)}\n`);
     return;
   }
   let roster;
   try {
     roster = parseJson(fs.readFileSync(0, "utf8"), "roster contract is not valid JSON");
   } catch (_) {
-    process.stdout.write(`${canonicalJson(bootstrapRejected(team, managerSeat, evidence, "invalid_contract"))}\n`);
+    const result = command === "g4-bootstrap"
+      ? bootstrapRejected(team, managerSeat, evidence, "invalid_contract")
+      : transitionRejected(team, null, null, managerSeat, evidence, "invalid_contract");
+    process.stdout.write(`${canonicalJson(result)}\n`);
     return;
   }
-  process.stdout.write(`${canonicalJson(bootstrapG4(team, pack, roster, managerSeat, evidence))}\n`);
+  const result = command === "g4-bootstrap"
+    ? bootstrapG4(team, pack, roster, managerSeat, evidence)
+    : transitionG4(team, pack, roster, argv[3], argv[4], argv[5], managerSeat, evidence);
+  process.stdout.write(`${canonicalJson(result)}\n`);
 }
 
 if (require.main === module) {

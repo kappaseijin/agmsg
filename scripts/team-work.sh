@@ -38,6 +38,12 @@ case "$COMMAND" in
       exit 1
     fi
     ;;
+  g4-transition)
+    if [ "$#" -ne 8 ]; then
+      echo "Usage: team-work.sh g4-transition <team> <g4-state-pack.json> <repository> <issue-number> <expected-revision> <manager-seat> <evidence>" >&2
+      exit 1
+    fi
+    ;;
   reconcile)
     if [ "$#" -ne 3 ] && [ "$#" -ne 4 ]; then
       echo "Usage: team-work.sh reconcile <team> <contract-pack.json> [heartbeat-path]" >&2
@@ -138,7 +144,7 @@ case "$COMMAND" in
     # Do not initialize or open a database on this path.
     printf '%s' "$ROSTER_JSON" | node "$SCRIPT_DIR/lib/g4-audit.js" "$@"
     ;;
-  g4-bootstrap)
+  g4-bootstrap|g4-transition)
     source "$SCRIPT_DIR/lib/storage.sh"
     agmsg_storage_ensure_initialized
     AGMSG_TEAM_WORK_DB="$(agmsg_db_path "$TEAM")"

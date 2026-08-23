@@ -455,7 +455,7 @@ load helpers/g4-fixtures
     false
   fi
 
-  for command in g4-transition g4-pull; do
+  for command in g4-pull; do
     run bash "$SCRIPTS/team-work.sh" "$command" demo "$pack"
     [ "$status" -ne 0 ]
     grep -Fq 'unknown team-work command' <<<"$output"
