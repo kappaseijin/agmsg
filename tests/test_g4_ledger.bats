@@ -68,10 +68,10 @@ SQL
   seed_g4_row
   run sqlite3 "$DBPATH" "UPDATE team_work_g4_revisions SET actor = 'attacker';"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"team_work_g4_revisions is append-only"* ]]
+  grep -Fq 'team_work_g4_revisions is append-only' <<<"$output"
   run sqlite3 "$DBPATH" "DELETE FROM team_work_g4_revisions;"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"team_work_g4_revisions is append-only"* ]]
+  grep -Fq 'team_work_g4_revisions is append-only' <<<"$output"
   [ "$(sqlite3 "$DBPATH" "SELECT COUNT(*) FROM team_work_g4_revisions;")" = "1" ]
 }
 
