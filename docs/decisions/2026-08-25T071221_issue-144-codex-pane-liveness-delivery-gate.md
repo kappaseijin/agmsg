@@ -4,6 +4,7 @@ title: "Issue #144: Codex pane liveness を delivery capability の gate にす�
 status: proposed
 issue: "https://github.com/kappaseijin/agmsg/issues/144"
 timestamp: "2026-08-25T07:12:21+09:00"
+updated: "2026-08-25T08:37:08+09:00"
 ---
 
 # Issue #144: Codex pane liveness を delivery capability の gate にする設計
@@ -112,7 +113,7 @@ status JSON の人間向け出力は変更しない。
 | fixture | 期待値 | 検査対象 |
 | --- | --- | --- |
 | 現行 Codex prompt を含む末尾 | `paneLiveness=live`、bridge が live なら `deliverable=true` | live 正の対照 |
-| herdr-agent-monitor が捕獲した実 crash 文言を含む末尾 | `paneLiveness=crashed`、bridge が live でも `deliverable=false` | crash 検出の正の対照 |
+| controlled reproduction で採取した crash pane tail | `paneLiveness=crashed`、bridge が live でも `deliverable=false` | crash 検出の正の対照 |
 | scrollback 前方に crash 語を引用し、末尾に live prompt | `paneLiveness=live`、`deliverable=true` | 履歴引用による偽陽性の負の対照 |
 | 非空だが語彙に一致しない末尾、空出力、herdr エラー | `paneLiveness=unknown`、bridge が live でも `deliverable="unknown"` | #138 と観測不能の fail-closed 対照 |
 | crash fixture の active signature を非一致値へ mutation | crash を検出する assertion が失敗する（KILLED） | 語彙検査が常に成功する偽陰性の防止 |
@@ -121,11 +122,33 @@ status JSON の人間向け出力は変更しない。
 実装 PR では active signature を変えた実行が KILLED になった生出力を残す。
 健康 pane の履歴に crash 語を引用する fixture は、tail-only 判定のために必須とする。
 
-## 実クラッシュ fixture の依存
+## 実クラッシュ fixture の代替方針
 
-Issue #144 の報告では実運用の `CRASHED` 正例がまだ無い。
-実装 PR を受入可能にする前に、herdr-agent-monitor チームから捕獲済みの実クラッシュ pane 末尾を、秘密値と無関係な形に最小化して fixture として提供してもらう。
-この fixture が無い間は、既知の語彙を並べた synthetic fixture だけで「実クラッシュを検出できた」と主張しない。
+herdr-agent-monitor の PM 席が停止しており、捕獲済み pane 末尾は当面受領できない。
+Issue 本文にある `tui.resume_cwd = 'current' requires --cd` は実インシデント由来の
+diagnostic だが、採取済みの pane tail そのものではない。したがって、既知 signature を
+寄せ集めた fixture（案 B）だけを CRASHED 正例の根拠にはしない。
+
+**案 A を採用し、再現不能なら案 C へ戻る。**
+使い捨て clone、使い捨て role、隔離 `AGMSG_STORAGE_PATH`、隔離 herdr workspace を使い、
+temporary role の Codex config だけに `[tui] resume_cwd = "current"` を置いて
+herdr/agmsg 経由の resume を起動する。既存 role の config、production DB、team roster、
+既存 pane は変更しない。
+
+採用可能な fixture は次をすべて満たす controlled reproduction の末尾 8 行から最小化する。
+
+1. `requires --cd` を含む resume failure 又は bare shell fallback が、独立した 2 run で同じく現れる。
+2. 同じ clone / bridge 条件で `resume_cwd` を持たない temporary role は Codex live prompt になる。
+3. crash diagnostic を過去の会話として引用した healthy tail は `live` のままである。
+4. crash signature を非一致値へ変える mutation が CRASHED assertion を KILLED する。
+
+fixture の provenance は `controlled-reproduction` と明記し、捕獲済み production pane tail と
+同一視しない。実運用 tail が後日得られたら、同じ stable signature ID に対する追加 fixture
+として扱い、controlled fixture を黙って差し替えない。
+
+この再現が失敗する、又は failure が live prompt と bare shell / diagnostic を区別できない場合、
+実装を保留する（案 C）。案 B の合成 fixture は parser の単体確認には使えるが、CRASHED の
+受入れ正例・語彙追加・`deliverable=false` の出荷根拠にはしない。
 
 ## 実装単位と非対象
 
@@ -150,6 +173,7 @@ README 更新は実装 PR に含める。
 - `scripts/spawn.sh`: herdr 起動時に `(team, name)` の placement record へ `herdr:<pane_id>` を記録する経路。
 - `~/.agents/bin/verify-agent-idle.sh`: pane 末尾優先、live 優先、process を補強根拠とする先行観測。
 - `docs/decisions/2026-08-24T221749_issue-138-pane-log-correlation.md`: blank/frozen を原因断定せず unknown として記録する制約。
+- [Issue #144](https://github.com/kappaseijin/agmsg/issues/144): `resume_cwd = "current"` と `requires --cd` の実インシデント記述、および既知 signature / tail-first の受入条件。
 
 ## 確認日時
 
