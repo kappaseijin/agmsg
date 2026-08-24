@@ -66,6 +66,19 @@ SQL
   [ "$(sqlite3 "$DBPATH" "SELECT COUNT(*) FROM team_work_g4_revisions WHERE revision = 1 AND previous_revision IS NULL AND action = 'g4-bootstrap' AND actor = 'manager';")" = "2" ]
 }
 
+@test "g4-bootstrap: pm seat is accepted as the manager role alias" {
+  local pack="$BATS_TEST_TMPDIR/g4-pack.json"
+  write_g4_pack "$pack" two
+  bash "$SCRIPTS/join.sh" demo pm codex /tmp/demo-pm --role pm --kind seat >/dev/null
+
+  run_g4_bootstrap "$G4_FIXTURES/two-open.json" "$pack" pm
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" bootstrapped)" = "true" ]
+  [ "$(json_value "$output" managerSeat)" = "pm" ]
+  [ "$(json_value "$output" remediation)" = "[]" ]
+}
+
 @test "g4-bootstrap: identical retry rejects without changing current or revision checksums" {
   local pack="$BATS_TEST_TMPDIR/g4-pack.json" before_current before_revisions
   write_g4_pack "$pack" two
