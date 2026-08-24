@@ -34,8 +34,18 @@ _sqlite_lit() { local q="'"; printf '%s' "${1//$q/$q$q}"; }
 # being swallowed by tr's exit 0. The backend's error text goes to stderr (a
 # separate fd — it never pollutes the JSONL on stdout) so failures are
 # debuggable, per §2.1 framing (#203 (1) / review).
+# LC_ALL=C on the tr: message bodies are arbitrary user/agent text and can
+# contain byte sequences that are not valid UTF-8. Under a UTF-8 locale, BSD
+# tr (macOS) treats -d's argument set as characters and aborts with "tr:
+# Illegal byte sequence" the moment such a body passes through, taking the
+# whole query down with it (observed live: agmsg-watch-stream.sh looping on
+# "warning: agmsg history failed" once a single malformed message entered the
+# store). LC_ALL=C makes tr operate byte-wise instead, which is what -d '\r'
+# actually wants here. Same fix already used elsewhere in this codebase for
+# the identical failure mode (guards/gh-write-owner-guard.sh,
+# guards/git-push-owner-guard.sh, lib/registry-lock.sh).
 _sqlite_data() {
-  ( set -o pipefail; agmsg_sqlite "$(_sqlite_db "$1")" "$2" | tr -d '\r' )
+  ( set -o pipefail; agmsg_sqlite "$(_sqlite_db "$1")" "$2" | LC_ALL=C tr -d '\r' )
 }
 
 # The same query, handed over stdin instead of on the command line (#882).
@@ -57,7 +67,7 @@ _sqlite_data() {
 # reading a non-tty is still willing to treat a malformed line as an
 # interactive prompt, and the point of this path is that nobody is watching.
 _sqlite_data_stdin() {
-  ( set -o pipefail; printf '%s\n' "$2" | agmsg_sqlite -batch "$(_sqlite_db "$1")" | tr -d '\r' )
+  ( set -o pipefail; printf '%s\n' "$2" | agmsg_sqlite -batch "$(_sqlite_db "$1")" | LC_ALL=C tr -d '\r' )
 }
 
 # IN (...) list of "team:agent" pairs.
@@ -597,7 +607,7 @@ storage_import() {
   [ -f "$file" ] || return 1
   storage_init "$selector" >/dev/null
   local line t id team frm to body msg_id agent at
-  j() { sqlite3 :memory: "SELECT COALESCE(json_extract('$(_sqlite_lit "$line")','\$.$1'),'')" 2>/dev/null | tr -d '\r'; }
+  j() { sqlite3 :memory: "SELECT COALESCE(json_extract('$(_sqlite_lit "$line")','\$.$1'),'')" 2>/dev/null | LC_ALL=C tr -d '\r'; }
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     t=$(j type); id=$(j id); team=$(j team); at=$(j at)
