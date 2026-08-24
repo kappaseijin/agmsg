@@ -74,6 +74,14 @@ write_matching_ps_fixture() {
   printf '%s\n' "$fake_bin"
 }
 
+assert_output_contains() {
+  local output="$1" needle="$2"
+  case "$output" in
+    *"$needle"*) ;;
+    *) printf 'expected output to contain: %s\nactual output: %s\n' "$needle" "$output" >&2; return 1 ;;
+  esac
+}
+
 @test "sync start: unready engine exits at the real-time deadline (#88)" {
   # Positive control for the suspected failure mode. The engine never emits a
   # ready marker, so the production cleanup must kill it after the one-second
@@ -122,7 +130,7 @@ raise SystemExit(proc.returncode)'
   [ "$status" -ne 0 ]
   [ "$elapsed" -ge 1 ]
   [ "$elapsed" -le 8 ]
-  [[ "$output" == *"did not become ready"* ]]
+  assert_output_contains "$output" "did not become ready"
   [ -f "$killed_file" ]
   refute test -e "$pidfile"
 }
@@ -139,7 +147,7 @@ raise SystemExit(proc.returncode)'
     AGMSG_REMOTE_SYNC_READY_TIMEOUT_S=8 \
     bash "$SCRIPTS/remote.sh" sync start testteam
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Sync engine started for 'testteam' (pid "* ]]
+  assert_output_contains "$output" "Sync engine started for 'testteam' (pid "
   engine_pid="$(cat "$pidfile")"
   kill "$engine_pid" 2>/dev/null || true
   wait_for_pid_exit "$engine_pid"
