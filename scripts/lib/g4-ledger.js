@@ -44,7 +44,7 @@ function requireManager(roster, managerSeat) {
     schemaError("roster contract members must be an array");
   }
   const manager = roster.members.find((member) => member && member.name === managerSeat);
-  if (!manager || manager.kind !== "seat" || manager.role !== "manager") {
+  if (!manager || manager.kind !== "seat" || !["manager", "pm"].includes(manager.role)) {
     schemaError("manager-seat must be an exact kind: seat manager");
   }
   return manager;

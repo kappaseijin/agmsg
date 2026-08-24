@@ -183,6 +183,23 @@ SQL
   assert_canonical_json "$output"
 }
 
+@test "g4-transition: pm seat is accepted as the manager role alias" {
+  local bootstrap_pack="$BATS_TEST_TMPDIR/bootstrap.json" transition_pack="$BATS_TEST_TMPDIR/transition.json"
+  write_predicate_pack "$bootstrap_pack" issue_closed
+  run_g4_bootstrap "$G4_FIXTURES/predicate-positive.json" "$bootstrap_pack"
+  [ "$status" -eq 0 ]
+  bash "$SCRIPTS/join.sh" demo pm codex /tmp/demo-pm --role pm --kind seat >/dev/null
+  cp "$bootstrap_pack" "$transition_pack"
+  write_transition_pack "$transition_pack" ready 2
+
+  run_g4_transition "$G4_FIXTURES/predicate-positive.json" "$transition_pack" kappaseijin/example 42 1 pm
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" transitioned)" = "true" ]
+  [ "$(json_value "$output" managerSeat)" = "pm" ]
+  [ "$(json_value "$output" remediation)" = "[]" ]
+}
+
 @test "g4-transition: false and unavailable predicates reject without mutation" {
   local bootstrap_pack="$BATS_TEST_TMPDIR/bootstrap.json" transition_pack="$BATS_TEST_TMPDIR/transition.json" fixture before
   write_predicate_pack "$bootstrap_pack" issue_closed
