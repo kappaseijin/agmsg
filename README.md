@@ -845,9 +845,9 @@ work and the #98 roster/delivery acceptance gates to be live.
 
 ### G4 bootstrap ledger (Phase 1B)
 
-After those gates are accepted, an exact `kind: "seat"`, `role: "manager"`
-roster member can record the first local snapshot for every Issue in a fresh,
-complete audit:
+After those gates are accepted, an exact roster member with `kind: "seat"` and
+`role: "manager"` or `role: "pm"` can record the first local snapshot for
+every Issue in a fresh, complete audit:
 
 ```bash
 ~/.agents/skills/<cmd>/scripts/team-work.sh g4-bootstrap demo \
@@ -858,9 +858,9 @@ The command accepts exactly the team, G4 state pack, manager seat, and a
 non-empty evidence string shown above. It re-reads every declared GitHub scope
 and succeeds only when `classificationBasis.status` is `complete`, the live
 coverage matches the pack exactly, and each entry is an initial `revision: 1`.
-The manager seat must be the exact roster identity with both `kind: "seat"`
-and `role: "manager"`; an owner seat, human, service, missing, or other
-non-manager identity is rejected before the live read.
+The manager seat must be the exact roster identity with `kind: "seat"` and
+`role: "manager"` or `role: "pm"`; an owner seat, human, service, missing, or
+any identity with a different kind or role is rejected before the live read.
 
 Bootstrap is initial-only and all-or-nothing. It writes each source to the
 team-local SQLite `team_work_g4_current` table and relies on its append-only
@@ -885,8 +885,9 @@ with code `0`. Malformed input and usage/schema errors still exit with code
 
 ### G4 blocked-to-ready transition (Phase 1B)
 
-After a source has been bootstrapped, the exact manager seat can record only
-the next expected revision when the saved blocker predicate is freshly true:
+After a source has been bootstrapped, an exact roster seat with `kind: "seat"`
+and `role: "manager"` or `role: "pm"` can record only the next expected
+revision when the saved blocker predicate is freshly true:
 
 ```bash
 ~/.agents/skills/<cmd>/scripts/team-work.sh g4-transition demo \
