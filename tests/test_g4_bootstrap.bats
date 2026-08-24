@@ -89,7 +89,7 @@ SQL
 
   run_g4_bootstrap "$G4_FIXTURES/two-open.json" "$pack"
 
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 1 ]
   [ "$(json_value "$output" bootstrapped)" = "false" ]
   [ "$(json_value "$output" remediation[0].code)" = "already_bootstrapped" ]
   [ "$(shasum -a 256 "$DBPATH" | awk '{print $1}')" = "$before_current" ]
@@ -104,7 +104,7 @@ SQL
 
   run_g4_bootstrap "$G4_FIXTURES/two-open.json" "$pack"
 
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 1 ]
   [ "$(json_value "$output" bootstrapped)" = "false" ]
   [ "$(json_value "$output" remediation[0].code)" = "already_bootstrapped" ]
   [ "$(shasum -a 256 "$DBPATH" | awk '{print $1}')" = "$before_db" ]
@@ -120,7 +120,7 @@ SQL
   for seat in owner human missing; do
     : > "$G4_GH_LOG"
     run_g4_bootstrap "$G4_FIXTURES/two-open.json" "$pack" "$seat"
-    [ "$status" -eq 0 ]
+    [ "$status" -eq 1 ]
     [ "$(json_value "$output" bootstrapped)" = "false" ]
     [ "$(json_value "$output" remediation[0].code)" = "invalid_manager" ]
     [ "$(wc -l < "$G4_GH_LOG" | tr -d ' ')" -eq 0 ]
@@ -133,7 +133,7 @@ SQL
 
   write_g4_pack "$pack" one
   run_g4_bootstrap "$G4_FIXTURES/two-open.json" "$pack"
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 1 ]
   [ "$(json_value "$output" bootstrapped)" = "false" ]
   [ "$(json_value "$output" remediation[0].code)" = "audit_incomplete" ]
   [ "$(sqlite3 "$DBPATH" "SELECT COUNT(*) FROM team_work_g4_current;")" = "0" ]
@@ -141,7 +141,7 @@ SQL
   for fixture in error.json pagination-failure.json; do
     write_g4_pack "$pack" two
     run_g4_bootstrap "$G4_FIXTURES/$fixture" "$pack"
-    [ "$status" -eq 0 ]
+    [ "$status" -eq 1 ]
     [ "$(json_value "$output" bootstrapped)" = "false" ]
     [ "$(json_value "$output" remediation[0].code)" = "audit_incomplete" ]
     [ "$(sqlite3 "$DBPATH" "SELECT COUNT(*) FROM team_work_g4_current;")" = "0" ]
@@ -150,7 +150,7 @@ SQL
   for fixture in predicate-negative.json predicate-gh-failure.json; do
     write_predicate_pack "$pack" issue_closed
     run_g4_bootstrap "$G4_FIXTURES/$fixture" "$pack"
-    [ "$status" -eq 0 ]
+    [ "$status" -eq 1 ]
     [ "$(json_value "$output" bootstrapped)" = "false" ]
     [ "$(json_value "$output" remediation[0].code)" = "audit_incomplete" ]
     [ "$(sqlite3 "$DBPATH" "SELECT COUNT(*) FROM team_work_g4_current;")" = "0" ]

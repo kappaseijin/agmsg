@@ -212,7 +212,7 @@ SQL
     before="$(shasum -a 256 "$DBPATH" | awk '{print $1}')"
     : > "$G4_GH_LOG"
     run_g4_transition "$G4_FIXTURES/$fixture" "$transition_pack"
-    [ "$status" -eq 0 ]
+    [ "$status" -eq 1 ]
     [ "$(json_value "$output" transitioned)" = "false" ]
     [ "$(json_value "$output" remediation[0].code)" = "predicate_not_true" ]
     [ "$(shasum -a 256 "$DBPATH" | awk '{print $1}')" = "$before" ]
@@ -230,14 +230,14 @@ SQL
   before="$(shasum -a 256 "$DBPATH" | awk '{print $1}')"
 
   run_g4_transition "$G4_FIXTURES/predicate-positive.json" "$transition_pack" kappaseijin/example 42 2
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 1 ]
   [ "$(json_value "$output" transitioned)" = "false" ]
   [ "$(json_value "$output" remediation[0].code)" = "revision_mismatch" ]
   [ "$(shasum -a 256 "$DBPATH" | awk '{print $1}')" = "$before" ]
 
   write_transition_pack "$transition_pack" ready 3
   run_g4_transition "$G4_FIXTURES/predicate-positive.json" "$transition_pack" kappaseijin/example 42 1
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 1 ]
   [ "$(json_value "$output" transitioned)" = "false" ]
   [ "$(json_value "$output" remediation[0].code)" = "revision_mismatch" ]
   [ "$(shasum -a 256 "$DBPATH" | awk '{print $1}')" = "$before" ]
@@ -256,7 +256,7 @@ SQL
     : > "$G4_GH_LOG"
     before="$(shasum -a 256 "$DBPATH" | awk '{print $1}')"
     run_g4_transition "$G4_FIXTURES/predicate-positive.json" "$transition_pack" kappaseijin/example 42 1 "$seat"
-    [ "$status" -eq 0 ]
+    [ "$status" -eq 1 ]
     [ "$(json_value "$output" transitioned)" = "false" ]
     [ "$(json_value "$output" remediation[0].code)" = "invalid_manager" ]
     [ "$(wc -l < "$G4_GH_LOG" | tr -d ' ')" -eq 0 ]
@@ -265,7 +265,7 @@ SQL
 
   before="$(shasum -a 256 "$DBPATH" | awk '{print $1}')"
   run_g4_transition "$G4_FIXTURES/predicate-positive.json" "$transition_pack" kappaseijin/example 42 1 manager ""
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 1 ]
   [ "$(json_value "$output" transitioned)" = "false" ]
   [ "$(json_value "$output" remediation[0].code)" = "invalid_input" ]
   [ "$(shasum -a 256 "$DBPATH" | awk '{print $1}')" = "$before" ]
@@ -274,7 +274,7 @@ SQL
     before="$(shasum -a 256 "$DBPATH" | awk '{print $1}')"
     # shellcheck disable=SC2086
     run_g4_transition "$G4_FIXTURES/predicate-positive.json" "$transition_pack" $target 1 manager
-    [ "$status" -eq 0 ]
+    [ "$status" -eq 1 ]
     [ "$(json_value "$output" transitioned)" = "false" ]
     [ "$(shasum -a 256 "$DBPATH" | awk '{print $1}')" = "$before" ]
   done
@@ -291,7 +291,7 @@ SQL
     mutate_transition_pack "$transition_pack" "$mutation"
     before="$(shasum -a 256 "$DBPATH" | awk '{print $1}')"
     run_g4_transition "$G4_FIXTURES/predicate-positive.json" "$transition_pack"
-    [ "$status" -eq 0 ]
+    [ "$status" -eq 1 ]
     [ "$(json_value "$output" transitioned)" = "false" ]
     [ "$(shasum -a 256 "$DBPATH" | awk '{print $1}')" = "$before" ]
   done
@@ -307,7 +307,7 @@ SQL
   write_transition_pack "$transition_pack" blocked 2
   before="$(shasum -a 256 "$DBPATH" | awk '{print $1}')"
   run_g4_transition "$G4_FIXTURES/predicate-positive.json" "$transition_pack"
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 1 ]
   [ "$(json_value "$output" transitioned)" = "false" ]
   [ "$(shasum -a 256 "$DBPATH" | awk '{print $1}')" = "$before" ]
 }
@@ -322,7 +322,7 @@ SQL
   write_transition_pack "$transition_pack" unknown 2
   before="$(shasum -a 256 "$DBPATH" | awk '{print $1}')"
   run_g4_transition "$G4_FIXTURES/predicate-positive.json" "$transition_pack"
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 1 ]
   [ "$(json_value "$output" transitioned)" = "false" ]
   [ "$(shasum -a 256 "$DBPATH" | awk '{print $1}')" = "$before" ]
 }
@@ -335,7 +335,7 @@ SQL
   write_transition_pack "$transition_pack" ready 2
   before="$(shasum -a 256 "$DBPATH" | awk '{print $1}')"
   run_g4_transition "$G4_FIXTURES/predicate-positive.json" "$transition_pack"
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 1 ]
   [ "$(json_value "$output" transitioned)" = "false" ]
   [ "$(shasum -a 256 "$DBPATH" | awk '{print $1}')" = "$before" ]
 }

@@ -878,7 +878,10 @@ Rejected operational results retain the identity fields, return an empty
 `sources` array and `bootstrapped: false`, and provide a stable
 `remediation[0].code`. The SQLite ledger is the only mutation target: this
 command never writes GitHub, changes labels, sends messages, or dispatches
-work.
+work. When the command returns a JSON result with one or more remediation
+items, it exits with code `1`; a successful `bootstrapped: true` result exits
+with code `0`. Malformed input and usage/schema errors still exit with code
+`2` and write `schema error:` to stderr.
 
 ### G4 blocked-to-ready transition (Phase 1B)
 
@@ -908,7 +911,11 @@ revision. The command never writes GitHub, changes labels, creates claims,
 dispatches work, or invokes `g4-pull`. Retry with a refreshed pack and the
 current revision after a rejection; rejected results retain the identity and
 digest fields with `transitioned: false` and a stable
-`remediation[0].code`.
+`remediation[0].code`. A JSON result with remediation items exits with code
+`1`, while a successful `transitioned: true` result exits with code `0`.
+Malformed input and usage/schema errors remain exit code `2` with
+`schema error:` on stderr. This is distinct from `g4-audit`, whose valid `unknown`
+JSON result exits with code `0`.
 
 ### PM-absent pull workflow
 
