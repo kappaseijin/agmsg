@@ -1069,7 +1069,7 @@ dispatch, an open and complete source audit, and fresh live delivery evidence.
 Only then does one SQLite transaction change the dispatch ledger to `claimed`
 and create the corresponding G2 `team_work_current` lease. A wrong, late, or
 unavailable ACK returns `acknowledged: false` and leaves both ledgers unchanged.
-`dispatch-abandon` is a manager-only recovery command: the manager, pack
+`dispatch-abandon` is a manager/pm recovery command: the manager, pack
 digests, declared owner, exact epoch, and an expired (`lease_expires_at <= now`)
 row must match in one guarded transaction, and its evidence must be non-empty.
 It returns `abandoned: true`, stores the evidence in `recovery_evidence`, and
