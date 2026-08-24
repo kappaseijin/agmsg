@@ -626,6 +626,13 @@ module.exports = {
   sha256Digest,
 };
 
+function writeG4Result(result) {
+  process.stdout.write(`${canonicalJson(result)}\n`);
+  if (Array.isArray(result.remediation) && result.remediation.length > 0) {
+    process.exitCode = 1;
+  }
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const [command, team, packPath] = argv;
@@ -643,7 +650,7 @@ function main() {
     const result = command === "g4-bootstrap"
       ? bootstrapRejected(team, managerSeat, evidence, "invalid_contract")
       : transitionRejected(team, null, null, managerSeat, evidence, "invalid_contract");
-    process.stdout.write(`${canonicalJson(result)}\n`);
+    writeG4Result(result);
     return;
   }
   let roster;
@@ -653,13 +660,13 @@ function main() {
     const result = command === "g4-bootstrap"
       ? bootstrapRejected(team, managerSeat, evidence, "invalid_contract")
       : transitionRejected(team, null, null, managerSeat, evidence, "invalid_contract");
-    process.stdout.write(`${canonicalJson(result)}\n`);
+    writeG4Result(result);
     return;
   }
   const result = command === "g4-bootstrap"
     ? bootstrapG4(team, pack, roster, managerSeat, evidence)
     : transitionG4(team, pack, roster, argv[3], argv[4], argv[5], managerSeat, evidence);
-  process.stdout.write(`${canonicalJson(result)}\n`);
+  writeG4Result(result);
 }
 
 if (require.main === module) {
