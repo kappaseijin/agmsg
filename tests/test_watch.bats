@@ -1017,9 +1017,11 @@ _record_handover_events() {
   skip_on_windows "watcher background launch under Git Bash (#182)"
   local sid="sess-burst"
   local out="$TEST_SKILL_DIR/burst.log"
+  local err="$TEST_SKILL_DIR/burst.err"
   local pf="$TEST_SKILL_DIR/run/watch.$(_iid "$sid").pid"
 
-  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "$sid" "$PROJ" claude-code >"$out" 2>/dev/null 3>&- 4>&- &
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "$sid" "$PROJ" claude-code \
+    >"$out" 2>"$err" 3>&- 4>&- &
   local w=$!
   _wait_for_file "$pf"          # watcher process is live; unread has no seed race
 
@@ -1029,12 +1031,26 @@ _record_handover_events() {
   done
 
   # Wait for the last one to arrive, then assert EVERY message is present.
-  _wait_for_file_contains "$out" "BURST-8" || { kill "$w" 2>/dev/null || true; false; }
+  if ! _wait_for_file_contains "$out" "BURST-8"; then
+    echo "burst stdout:" >&2
+    cat "$out" >&2
+    echo "burst stderr:" >&2
+    cat "$err" >&2
+    kill "$w" 2>/dev/null || true
+    false
+  fi
   kill "$w" 2>/dev/null || true
   wait "$w" 2>/dev/null || true
 
   for n in 1 2 3 4 5 6 7 8; do
-    grep -q "BURST-$n" "$out"
+    grep -q "BURST-$n" "$out" || {
+      echo "missing BURST-$n" >&2
+      echo "burst stdout:" >&2
+      cat "$out" >&2
+      echo "burst stderr:" >&2
+      cat "$err" >&2
+      false
+    }
   done
 }
 
