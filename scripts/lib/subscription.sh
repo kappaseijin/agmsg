@@ -20,7 +20,7 @@ agmsg_sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
 agmsg_subscription_pairs() {
   local project="$1" type="$2" owner_id="$3" active_name="${4:-}" claim_mode="${5:-}"
   local scripts_dir="$SKILL_DIR/scripts"
-  local pairs filtered skipped skip_facts held state result cc claimed_here
+  local pairs filtered skipped skip_facts held state result cc claimed_here claim_rc
 
   if [ -n "$active_name" ]; then
     pairs="$("$scripts_dir/identities.sh" "$project" "$type" --name "$active_name" --all-projects)" || return 1
@@ -62,13 +62,33 @@ agmsg_subscription_pairs() {
     esac
 
     if [ -n "$active_name" ] && [ "$claim_mode" = "claim" ]; then
-      result=$(actas_lock_claim "$team" "$agent" "$owner_id" 2>/dev/null || true)
+      if result=$(actas_lock_claim "$team" "$agent" "$owner_id" 2>/dev/null); then
+        claim_rc=0
+      else
+        claim_rc=$?
+      fi
       case "$result" in
         held:*)
           held="${held:+$held }${team}/${agent}(${result#held:})"
           continue
           ;;
+        gate-unavailable*)
+          while IFS=$'\t' read -r claimed_team claimed_agent; do
+            [ -n "$claimed_team" ] || continue
+            actas_lock_release "$claimed_team" "$claimed_agent" "$owner_id" 2>/dev/null || true
+          done <<< "$claimed_here"
+          echo "agmsg watch: ownership gate unavailable for ${team}/${agent}; no delivery started." >&2
+          return 1
+          ;;
       esac
+      if [ "$claim_rc" -ne 0 ]; then
+        while IFS=$'\t' read -r claimed_team claimed_agent; do
+          [ -n "$claimed_team" ] || continue
+          actas_lock_release "$claimed_team" "$claimed_agent" "$owner_id" 2>/dev/null || true
+        done <<< "$claimed_here"
+        echo "agmsg watch: ownership gate unavailable for ${team}/${agent}; no delivery started." >&2
+        return 1
+      fi
       if [ "$state" != "mine" ]; then
         claimed_here="$(printf '%s\n%s\t%s' "$claimed_here" "$team" "$agent")"
       fi

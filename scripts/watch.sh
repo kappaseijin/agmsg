@@ -187,6 +187,9 @@ esac
 
 # Pairs already reported as storeless, so the notice is once per process.
 NO_STORE_REPORTED=""
+# The pair gate is held from ownership re-read through fetch/display/consume.
+# cleanup() releases it on signal/EXIT so a watcher cannot strand a live gate.
+WATCH_GATE_LOCK_PATH=""
 
 watch_log() {
   local msg="$*" record size=0 bytes
@@ -221,6 +224,20 @@ watch_log() {
   fi
   # Never fatal: a sandbox that cannot write here must not take delivery down.
   printf '%s\n' "$record" >> "$LOGFILE" 2>/dev/null || true
+}
+
+_watch_release_gate() {
+  local lock_path="$WATCH_GATE_LOCK_PATH"
+  [ -n "$lock_path" ] || return 0
+  if actas_lock_gate_release "$lock_path"; then
+    WATCH_GATE_LOCK_PATH=""
+    return 0
+  fi
+  # Clear the local ownership claim even when the runtime DB cannot confirm
+  # release. The process is about to stop; a successor can reclaim only after
+  # this PID is confirmed dead, never by deleting an unknown holder.
+  WATCH_GATE_LOCK_PATH=""
+  return 1
 }
 
 # Resolve poll interval. Env var wins over config, default 5s.
@@ -372,6 +389,9 @@ fi
 # watcher is currently receiving for that role.
 READY_FILES=""
 cleanup() {
+  if [ -n "$WATCH_GATE_LOCK_PATH" ]; then
+    _watch_release_gate || true
+  fi
   # EXIT only removes the pidfile if it still records our pid. A successor
   # watcher (Monitor re-invoked for the same session_id) overwrites $PIDFILE
   # with its own pid before signalling us, so this read sees the successor's
@@ -567,6 +587,21 @@ _held_elsewhere_without() {
   printf '%s' "$out"
 }
 
+# Test-only synchronization seam for the ownership handover regression. It is
+# inert in production because the variable is unset; when enabled, the marker
+# is written only after the watcher has acquired the pair gate and re-read
+# ownership.
+_watch_test_delivery_barrier() {
+  local barrier="${AGMSG_TEST_ACTAS_DELIVERY_GATE_BARRIER:-}"
+  [ -n "$barrier" ] || return 0
+  [ -n "$ACTIVE_NAME" ] || return 0
+  mkdir -p "$barrier" 2>/dev/null || return 1
+  printf '%s\n' "$$" > "$barrier.entered" || return 1
+  while [ ! -e "$barrier.release" ]; do
+    sleep 0.1 || return 1
+  done
+}
+
 while true; do
   # The installation changed under us (#684). Say it on STDOUT, not stderr:
   # stdout is the delivery channel the session is reading, and this watcher's
@@ -622,6 +657,12 @@ while true; do
     # Only the lock file is read here, not the whole subscription set: losing a
     # pair is the half a running process can detect for the price of a file
     # read. Gaining one is the caller's job, at the point it creates the team.
+    pair_lock_path="$(actas_lock_path "$pair_team" "$pair_agent")"
+    if ! actas_lock_gate_try_acquire "$pair_lock_path"; then
+      watch_log "ownership gate unavailable for ${pair_team}/${pair_agent}; skipping without delivery."
+      continue
+    fi
+    WATCH_GATE_LOCK_PATH="$pair_lock_path"
     pair_state="$(actas_lock_state "$pair_team" "$pair_agent" "$SESSION_ID" 2>/dev/null || echo free)"
     case "$pair_state" in
       other:*)
@@ -630,6 +671,7 @@ while true; do
           # it. Stop -- and say so: stderr is the only place a reason survives,
           # and a watcher that ends without one is indistinguishable from one
           # that crashed.
+          _watch_release_gate || exit 1
           watch_log "${pair_team}/${pair_agent} is now held by session ${pair_state#other:}."
           watch_log "this watcher no longer owns that role and is stopping."
           watch_log "messages for it stay unread and reach the session that claimed it."
@@ -654,6 +696,7 @@ while true; do
 }${pair_team}/${pair_agent}"
           echo "agmsg watch: ${pair_team}/${pair_agent} was claimed by session ${pair_state#other:}; not serving it while they hold it." >&2
         fi
+        _watch_release_gate || exit 1
         continue
         ;;
       *)
@@ -666,6 +709,10 @@ while true; do
         fi
         ;;
     esac
+    if ! _watch_test_delivery_barrier; then
+      _watch_release_gate || true
+      exit 1
+    fi
     # Per team: with a store per team, "one team has no store yet" is a
     # normal state, and a single check outside this loop would silence
     # delivery for every OTHER team as well.
@@ -680,6 +727,7 @@ while true; do
         *) NO_STORE_REPORTED="$NO_STORE_REPORTED $pair_team:$pair_agent"
            watch_log "${pair_team}/${pair_agent}: no store yet; skipping this pair until one exists." ;;
       esac
+      _watch_release_gate || exit 1
       continue
     fi
     READ_CURSOR="$(storage_read_cursor_get "$pair_team" "$pair_agent" 2>/dev/null || true)"
@@ -738,6 +786,7 @@ while true; do
         continue
       fi
       if ! printf '%s | %s | %s → %s | %s\n' "$ts" "$team" "$from" "$to" "$body"; then
+        _watch_release_gate || true
         cleanup
         exit 0
       fi
@@ -765,6 +814,7 @@ while true; do
       placed_id=""
       spawn_rec="$(agmsg_spawn_path "$pair_team" "$DESPAWN_TARGET" 2>/dev/null || true)"
       [ -f "$spawn_rec" ] && IFS=$'\t' read -r placed_id _ _ < "$spawn_rec"
+      _watch_release_gate || exit 1
       "$SCRIPT_DIR/reset.sh" "$PROJECT_PATH" "$AGENT_TYPE" "$DESPAWN_TARGET" "$SESSION_ID" >/dev/null 2>&1 || true
       if [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then
         tmux kill-pane -t "$TMUX_PANE" 2>/dev/null || true
@@ -777,6 +827,7 @@ while true; do
       fi
       exit 0
     fi
+    _watch_release_gate || exit 1
     fi
   done <<< "$PAIRS"
 

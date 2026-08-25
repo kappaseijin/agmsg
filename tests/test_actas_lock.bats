@@ -161,6 +161,68 @@ live_pid() { echo "$$"; }
   [ "$status" -ne 0 ]
 }
 
+# --- delivery gate ---
+
+@test "delivery gate: writer waits for a live holder instead of reclaiming it" {
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+  local resource="$(actas_lock_gate_resource "$lock_path")"
+  local marker="$BATS_TEST_TMPDIR/gate-acquired"
+  sleep 60 &
+  local holder=$!
+  agmsg_runtime_lock_acquire "$resource" "$holder" >/dev/null
+
+  (
+    if actas_lock_gate_acquire "$lock_path"; then
+      printf '%s\n' "acquired" > "$marker"
+      actas_lock_gate_release "$lock_path"
+    fi
+  ) &
+  local waiter=$!
+  local i
+  for i in $(seq 1 20); do
+    [ ! -e "$marker" ] || break
+    sleep 0.1
+  done
+  [ ! -e "$marker" ]
+  [ "$(agmsg_runtime_lock_owner "$resource")" = "$holder" ]
+
+  agmsg_runtime_lock_release "$resource" "$holder"
+  wait "$waiter"
+  [ -f "$marker" ]
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+}
+
+@test "delivery gate: reclaims only a confirmed-dead holder with CAS" {
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+  local resource="$(actas_lock_gate_resource "$lock_path")"
+  bash -c 'exit 0' &
+  local dead=$!
+  wait "$dead"
+  agmsg_runtime_lock_acquire "$resource" "$dead" >/dev/null
+
+  actas_lock_gate_acquire "$lock_path"
+  [ "$(agmsg_runtime_lock_owner "$resource")" = "$$" ]
+  actas_lock_gate_release "$lock_path"
+  [ -z "$(agmsg_runtime_lock_owner "$resource")" ]
+}
+
+@test "delivery gate: release is limited to the current runtime owner" {
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+  local resource="$(actas_lock_gate_resource "$lock_path")"
+  sleep 60 &
+  local holder=$!
+  agmsg_runtime_lock_acquire "$resource" "$holder" >/dev/null
+
+  if actas_lock_gate_release "$lock_path"; then
+    false
+  fi
+  [ "$(agmsg_runtime_lock_owner "$resource")" = "$holder" ]
+  agmsg_runtime_lock_release "$resource" "$holder"
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+}
+
 # --- release / release_all ---
 
 @test "release: removes a lock we own" {

@@ -19,6 +19,32 @@ Effects:
 - Other live sessions stop subscribing to `<name>` — their watchers exclude any pair locked by a peer at startup.
 - If another session already holds the lock, `actas` refuses with a clear error. Drop it from that session first.
 
+## Delivery gate and failure boundary
+
+The lock file and the watcher share a per-path runtime gate named
+`actas-delivery:<actas lock path>`. A watcher holds that gate while it re-reads
+ownership, fetches rows, prints them, advances the read cursor, and records
+receipts. The ownership mutation helpers (`claim`, `release`, `release-all`,
+and stale-lock GC) take the same gate before changing a lock file. The read-only
+`state` query does not take it; the watcher calls it after acquiring the gate.
+
+This makes the ownership change the linearization point: a watcher cannot
+consume a row after another session's claim has completed. A failed stdout
+write, handover, or despawn releases the gate before the next action. `send`
+does not take the gate; messages sent before a claim returns may belong to the
+old owner, while messages sent after it returns are not processed by that old
+watcher.
+
+The gate is fail-closed. A watcher skips the pair without fetch, output,
+consume, or receipt when the runtime lock is unavailable. An ownership writer
+waits only for a bounded interval, reclaims only a confirmed-dead gate PID via
+an expected-owner compare-and-delete, and otherwise returns non-zero. Unknown
+or live holders are never reclaimed. In particular,
+`actas-claim.sh` reports
+`status=unavailable team=<team> reason=ownership_gate_unavailable` with exit 3
+and leaves the existing Monitor untouched. Retry the actas command after the
+runtime lock becomes readable.
+
 The lock is released by `drop`, by session end, or by garbage collection when the holding session is no longer alive.
 
 ## What `drop` does
@@ -41,6 +67,11 @@ To unstick:
 - End the session.
 
 Either releases the lock so peers can pick it up.
+
+If `actas-claim.sh` instead returns `status=unavailable`, do not stop or
+restart the existing Monitor. The runtime gate could not be verified, so
+retry the claim after the runtime lock is readable. A gate holder that is
+unknown or merely slow is not treated as stale.
 
 ## Liveness and PID recycling
 

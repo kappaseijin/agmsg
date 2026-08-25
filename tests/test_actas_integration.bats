@@ -77,6 +77,20 @@ fake_session() {
   [[ "$output" =~ "status=not_registered" ]]
 }
 
+@test "actas-claim: gate failure is unavailable and does not claim" {
+  fake_register T alice
+  fake_session "sid-me" >/dev/null
+  local broken_store="$BATS_TEST_TMPDIR/not-a-store"
+  touch "$broken_store"
+
+  run env AGMSG_STORAGE_PATH="$broken_store" \
+    bash "$SKILL_DIR/scripts/actas-claim.sh" /tmp/p1 claude-code alice "sid-me"
+  [ "$status" -eq 3 ]
+  [[ "$output" =~ "status=unavailable" ]]
+  [[ "$output" =~ "reason=ownership_gate_unavailable" ]]
+  [ ! -f "$(actas_lock_path T alice)" ]
+}
+
 @test "actas-claim: claims every matching team and rolls back partial claims" {
   fake_register team-a alice /tmp/p1
   fake_register team-b alice /tmp/p2
@@ -231,32 +245,79 @@ fake_session() {
   fake_register T alice
   fake_register T bob
 
+  local barrier="$BATS_TEST_TMPDIR/actas-delivery-gate"
+  local entered="$barrier.entered"
+  local release="$barrier.release"
+  local handover_started="$barrier.handover-started"
+  local handover_done="$barrier.handover-done"
+  mkdir -p "$barrier"
+  export AGMSG_TEST_ACTAS_DELIVERY_GATE_BARRIER="$barrier"
+
   AGMSG_WATCH_INTERVAL=1 bash "$SKILL_DIR/scripts/watch.sh" "sid-old" /tmp/p1 claude-code alice \
     > "$BATS_TEST_TMPDIR/old.out" 2> "$BATS_TEST_TMPDIR/old.err" 3>&- &
   local old=$!
-  local i
-  for i in $(seq 1 50); do
-    [ "$(actas_lock_owner T alice)" = "sid-old" ] && break
-    sleep 0.1
-  done
-  [ "$(actas_lock_owner T alice)" = "sid-old" ]
+  if ! wait_for_file "$entered"; then
+    kill "$old" 2>/dev/null || true
+    wait "$old" 2>/dev/null || true
+    false
+  fi
+  local gate_resource="actas-delivery:$(actas_lock_path T alice)"
+  [ "$(agmsg_runtime_lock_owner "$gate_resource")" = "$old" ]
 
   # A second session takes the role — what `/agmsg actas` does from a new
-  # session. It needs to look ALIVE, or the lock reads as stale and free.
+  # session. The ownership writer must wait for the delivery gate.
   sleep 60 &
   local newpid=$!
   echo "sid-new" > "$RUN_DIR/cc-instance.$newpid"
-  echo "sid-new" > "$(actas_lock_path T alice)"
 
+  (
+    printf '%s\n' "started" > "$handover_started"
+    if ! bash -c '
+      source "$1/scripts/lib/actas-lock.sh"
+      actas_lock_release T alice sid-old || exit 1
+      actas_lock_claim T alice sid-new || exit 1
+    ' _ "$SKILL_DIR"; then
+      printf '%s\n' "failed" > "$handover_done"
+      exit 1
+    fi
+    printf '%s\n' "done" > "$handover_done"
+  ) > "$BATS_TEST_TMPDIR/handover.out" 2>&1 &
+  local handover=$!
+  wait_for_file "$handover_started"
+
+  # Poll for completion rather than using a fixed sleep as synchronization.
+  local i
+  for i in $(seq 1 20); do
+    [ ! -e "$handover_done" ] || break
+    sleep 0.1
+  done
+  [ ! -e "$handover_done" ]
+  [ "$(agmsg_runtime_lock_owner "$gate_resource")" = "$old" ]
+
+  : > "$release"
+  if ! wait_for_file "$handover_done"; then
+    kill "$handover" 2>/dev/null || true
+    wait "$handover" 2>/dev/null || true
+    kill "$old" 2>/dev/null || true
+    wait "$old" 2>/dev/null || true
+    kill "$newpid" 2>/dev/null || true
+    wait "$newpid" 2>/dev/null || true
+    false
+  fi
+  wait "$handover"
+  [ "$?" -eq 0 ]
+  [ "$(cat "$handover_done")" = "done" ]
+  [ "$(actas_lock_owner T alice)" = "sid-new" ]
+
+  wait_for_pid_exit "$old"
+  rm -f "$release"
   bash "$SKILL_DIR/scripts/send.sh" T bob alice "after the handover" >/dev/null
-
-  # Several poll cycles at the 1s interval set above.
-  sleep 4
-  kill "$newpid" 2>/dev/null || true
 
   # It must not have taken a message addressed to a role it no longer owns.
   run cat "$BATS_TEST_TMPDIR/old.out"
-  [[ "$output" != *"after the handover"* ]]
+  case "$output" in
+    *"after the handover"*) false ;;
+  esac
 
   # It must have stopped. A watcher that keeps running is what consumes the
   # next message too.
@@ -265,8 +326,14 @@ fake_session() {
   # And it must say why. Exiting silently is the same defect class -- this
   # watcher's stderr is the only place a reason can survive.
   run cat "$BATS_TEST_TMPDIR/old.err"
-  [[ "$output" == *"T/alice"* ]]
-  [[ "$output" == *"sid-new"* ]]
+  case "$output" in
+    *"T/alice"*) ;;
+    *) false ;;
+  esac
+  case "$output" in
+    *"sid-new"*) ;;
+    *) false ;;
+  esac
 
   # The message is still unread, so the session that now owns the role is
   # offered it. Without this, "did not print it" would also pass for a watcher
@@ -279,8 +346,11 @@ fake_session() {
   ' | grep -c .)"
   [ "$left" -eq 1 ]
 
+  rm -f "$RUN_DIR/cc-instance.$newpid"
   kill "$old" 2>/dev/null || true
   wait "$old" 2>/dev/null || true
+  kill "$newpid" 2>/dev/null || true
+  wait "$newpid" 2>/dev/null || true
 }
 
 # The other half, and the one that decides whether this fix is safe: a watcher

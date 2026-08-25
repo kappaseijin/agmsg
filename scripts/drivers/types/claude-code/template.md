@@ -165,6 +165,7 @@ If argument starts with "actas" followed by an agent name (e.g. "actas alice"):
     - `status=ok ...`: proceed to step 5.
     - `status=held team=<team> owner=<sid>`: another live session currently owns `<name>` in `<team>`. Tell the user: "Cannot actas as `<name>` — it is held by session `<sid>` in team `<team>`. Run `/__SKILL_NAME__ drop <name>` in that session first, then retry." Then abort — do NOT touch the running Monitor.
     - `status=not_registered`: shouldn't happen if step 3 ran; treat as an error.
+    - `status=unavailable team=<team> reason=ownership_gate_unavailable`: the ownership/delivery gate could not be verified. Tell the user that actas did not change the existing Monitor and should be retried after the gate is available. Then abort — do NOT stop, restart, or otherwise touch the running Monitor.
 5. **Switch receive too — exclusive role mode.**
    a. Run TaskList. Find any task whose description begins with "agmsg inbox stream".
    b. **If a matching task is found**: TaskStop it.

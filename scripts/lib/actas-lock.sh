@@ -32,6 +32,14 @@
 # liveness check (actas_lock_sid_alive) delegates to agmsg_instance_alive.
 # shellcheck disable=SC1091
 . "$SKILL_DIR/scripts/lib/instance-id.sh"
+# The delivery gate uses the existing runtime-lock ABI. Callers such as
+# actas-claim.sh source this file before storage.sh, while watch.sh has already
+# loaded it. Keep the dependency local so every ownership writer uses the same
+# gate without requiring a particular source order.
+if ! declare -F agmsg_runtime_lock_acquire >/dev/null 2>&1; then
+  # shellcheck disable=SC1091
+  . "$SKILL_DIR/scripts/lib/storage.sh"
+fi
 
 _actas_lock_dir() { printf '%s/run' "$SKILL_DIR"; }
 
@@ -100,6 +108,63 @@ actas_lock_sid_alive() {
   agmsg_instance_alive "$1"
 }
 
+# The delivery critical section is keyed by the exact actas lock path. This
+# lets release-all and stale GC protect each file without decoding arbitrary
+# team/agent bytes back out of its filename.
+actas_lock_gate_resource() {
+  printf 'actas-delivery:%s' "$1"
+}
+
+# Try to acquire a delivery gate for a watcher. A watcher must never wait for
+# an ownership writer: if the runtime lock is held, unread delivery is safer
+# than guessing which ownership snapshot it belongs to.
+actas_lock_gate_try_acquire() {
+  local lock_path="$1" resource owner
+  resource="$(actas_lock_gate_resource "$lock_path")"
+  owner="$(agmsg_runtime_lock_acquire "$resource" "$$" 2>/dev/null)" || return 1
+  [ "$owner" = "$$" ] || return 1
+}
+
+# Acquire a delivery gate for an ownership writer. A bounded wait is allowed
+# for a live holder. Only a confirmed-dead numeric PID may be reclaimed, and
+# that reclaim is an expected-owner CAS in the runtime-lock transaction.
+actas_lock_gate_acquire() {
+  local lock_path="$1" resource owner next_owner attempts=0
+  resource="$(actas_lock_gate_resource "$lock_path")"
+  while [ "$attempts" -lt 50 ]; do
+    owner="$(agmsg_runtime_lock_acquire "$resource" "$$" 2>/dev/null)" || return 1
+    case "$owner" in
+      "$$") return 0 ;;
+      ''|*[!0-9]*) return 1 ;;
+    esac
+
+    # _agmsg_pid_alive_local returns false only after kill(2) and ps agree
+    # that the PID is gone. Unknown/permission-denied states are treated as
+    # alive, so this path waits and then fails closed instead of reclaiming.
+    if ! _agmsg_pid_alive_local "$owner"; then
+      next_owner="$(agmsg_runtime_lock_acquire "$resource" "$$" "$owner" 2>/dev/null)" || return 1
+      [ "$next_owner" = "$$" ] && return 0
+      case "$next_owner" in
+        ''|*[!0-9]*) return 1 ;;
+      esac
+    fi
+
+    attempts=$((attempts + 1))
+    sleep 0.1 || return 1
+  done
+  return 1
+}
+
+# Release only a gate row owned by this shell. The runtime DELETE itself is
+# owner-conditional, so even a successor that acquires between observations
+# cannot be deleted by this cleanup path.
+actas_lock_gate_release() {
+  local lock_path="$1" resource
+  resource="$(actas_lock_gate_resource "$lock_path")"
+  agmsg_runtime_lock_verify "$resource" "$$" || return 1
+  agmsg_runtime_lock_release "$resource" "$$" || return 1
+}
+
 # Internal: attempt one atomic claim. Echoes "ok" on success, "held:<sid>"
 # when another sid currently owns it, or "stale" when the existing lock's
 # owner is dead (caller should retry after removing).
@@ -137,15 +202,23 @@ _actas_lock_try_claim() {
 # Exit codes:
 #   0  — claimed (now owned by this sid, was already ours, or stale-replaced).
 #   1  — held by another live session. Stdout: "held:<other_sid>".
+#   2  — delivery gate could not be verified. Stdout: "gate-unavailable".
 actas_lock_claim() {
   local team="$1" agent="$2" sid="$3"
-  local attempts=0 result lock_path reclaim_dir _owner
+  local attempts=0 result lock_path reclaim_dir _owner rc=1
   lock_path="$(actas_lock_path "$team" "$agent")"
   reclaim_dir="${lock_path}.reclaim.d"
+  if ! actas_lock_gate_acquire "$lock_path"; then
+    printf 'gate-unavailable\n'
+    return 2
+  fi
   while [ "$attempts" -lt 3 ]; do
-    result="$(_actas_lock_try_claim "$team" "$agent" "$sid")"
+    result="$(_actas_lock_try_claim "$team" "$agent" "$sid")" || {
+      rc=1
+      break
+    }
     case "$result" in
-      ok) return 0 ;;
+      ok) rc=0; break ;;
       stale)
         # Stale removal needs a re-check-under-mutex. A naked rm (or even an
         # atomic mv) reads-then-removes whatever sits at lock_path, with no
@@ -174,23 +247,38 @@ actas_lock_claim() {
         ;;
       held:*)
         printf '%s\n' "$result"
-        return 1
+        rc=1
+        break
         ;;
     esac
-    return 1
+    rc=1
+    break
   done
-  return 1
+  if ! actas_lock_gate_release "$lock_path"; then
+    printf 'gate-unavailable\n'
+    return 2
+  fi
+  return "$rc"
 }
 
-# Release a lock if we own it. Idempotent.
+# Release a lock if we own it. Idempotent when the delivery gate is available;
+# returns non-zero without changing the lock when that gate cannot be verified.
 actas_lock_release() {
   local team="$1" agent="$2" sid="$3"
-  local lock owner
+  local lock owner rc=0
   lock="$(actas_lock_path "$team" "$agent")"
   [ -f "$lock" ] || return 0
+  if ! actas_lock_gate_acquire "$lock"; then
+    return 2
+  fi
   owner="$(actas_lock_owner "$team" "$agent")"
-  [ "$owner" = "$sid" ] && rm -f "$lock"
-  return 0
+  if [ "$owner" = "$sid" ] && ! rm -f "$lock"; then
+    rc=1
+  fi
+  if ! actas_lock_gate_release "$lock"; then
+    rc=2
+  fi
+  return "$rc"
 }
 
 # Release every lock currently owned by the given session_id. Used by
@@ -199,13 +287,23 @@ actas_lock_release_all() {
   local sid="$1"
   local dir; dir="$(_actas_lock_dir)"
   [ -d "$dir" ] || return 0
-  local f owner
+  local f owner lock rc=0
   for f in "$dir"/actas.*.session; do
     [ -f "$f" ] || continue
     owner="$(head -1 "$f" 2>/dev/null || true)"
-    [ "$owner" = "$sid" ] && rm -f "$f"
+    [ "$owner" = "$sid" ] || continue
+    lock="$f"
+    if ! actas_lock_gate_acquire "$lock"; then
+      rc=1
+      continue
+    fi
+    owner="$(head -1 "$f" 2>/dev/null || true)"
+    if [ "$owner" = "$sid" ] && ! rm -f "$f"; then
+      rc=1
+    fi
+    actas_lock_gate_release "$lock" || rc=2
   done
-  return 0
+  return "$rc"
 }
 
 # Garbage-collect locks whose owner session_id is no longer alive.
@@ -213,16 +311,26 @@ actas_lock_release_all() {
 actas_lock_gc_stale() {
   local dir; dir="$(_actas_lock_dir)"
   [ -d "$dir" ] || { echo 0; return 0; }
-  local f owner count=0
+  local f owner lock count=0 rc=0
   for f in "$dir"/actas.*.session; do
     [ -f "$f" ] || continue
+    lock="$f"
+    if ! actas_lock_gate_acquire "$lock"; then
+      rc=1
+      continue
+    fi
     owner="$(head -1 "$f" 2>/dev/null || true)"
     if [ -z "$owner" ] || ! actas_lock_sid_alive "$owner"; then
-      rm -f "$f"
-      count=$((count + 1))
+      if rm -f "$f"; then
+        count=$((count + 1))
+      else
+        rc=1
+      fi
     fi
+    actas_lock_gate_release "$lock" || rc=2
   done
   echo "$count"
+  return "$rc"
 }
 
 # Classify a (team, agent) pair relative to the calling session.

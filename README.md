@@ -247,6 +247,8 @@ Same project, same agent type, different role — for example a `tech-lead` iden
 
 `actas <name>` is **exclusive across sessions**: it switches sending and receiving to the exact `<name>` for every locally registered team of the current runtime, claims the matching locks, and refuses if another session already holds any of them. `drop` removes the registration only from the current project and releases this session's locks for that name across all teams. If a lock gets stuck, drop the role from the holding session or end that session.
 
+Before changing ownership, agmsg briefly verifies a per-role delivery gate shared with the inbox watcher. If that gate cannot be verified, `actas` reports `status=unavailable` and leaves the existing Monitor and ownership files unchanged; retry after the runtime is available. A watcher also leaves the pair unread when its gate cannot be acquired.
+
 See [docs/actas.md](docs/actas.md) for the full mechanics — exclusivity model, recovery, liveness / PID recycling, Codex caveat.
 
 ### Spawn a new agent (`spawn`)

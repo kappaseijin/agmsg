@@ -17,11 +17,14 @@ set -euo pipefail
 #   status=ok team=<team> [team=<team2> ...]              everything claimed
 #   status=held team=<team> owner=<owner_sid>             refused — another live session owns it
 #   status=not_registered                                  name is not joined to any team in this project/type
+#   status=unavailable team=<team> reason=ownership_gate_unavailable
+#                                                        gate state could not be verified
 #
 # Exit code:
 #   0 — status=ok
 #   1 — status=held (callers should NOT proceed with the actas flow)
 #   2 — status=not_registered (callers should run join.sh first)
+#   3 — status=unavailable (callers must leave the existing Monitor untouched)
 
 PROJECT="${1:?Usage: actas-claim.sh <project> <type> <name> <session_id>}"
 TYPE="${2:?Missing type}"
@@ -67,20 +70,33 @@ fi
 # offending team — callers should resolve that before retrying. Releases
 # already-claimed pairs in this same attempt so partial state doesn't leak.
 claimed=""
+rollback_claimed() {
+  local c_team
+  while IFS= read -r c_team; do
+    [ -z "$c_team" ] && continue
+    actas_lock_release "$c_team" "$NAME" "$SESSION_ID" 2>/dev/null || true
+  done <<< "$claimed"
+}
 while IFS= read -r team; do
   [ -z "$team" ] && continue
-  result=$(actas_lock_claim "$team" "$NAME" "$SESSION_ID" 2>/dev/null || true)
+  if result=$(actas_lock_claim "$team" "$NAME" "$SESSION_ID" 2>/dev/null); then
+    claim_rc=0
+  else
+    claim_rc=$?
+  fi
   case "$result" in
     held:*)
       # Roll back any partial claims so the user can retry cleanly.
-      while IFS= read -r c_team; do
-        [ -z "$c_team" ] && continue
-        actas_lock_release "$c_team" "$NAME" "$SESSION_ID" 2>/dev/null || true
-      done <<< "$claimed"
+      rollback_claimed
       printf 'status=held team=%s owner=%s\n' "$team" "${result#held:}"
       exit 1
       ;;
   esac
+  if [ "$claim_rc" -ne 0 ]; then
+    rollback_claimed
+    printf 'status=unavailable team=%s reason=ownership_gate_unavailable\n' "$team"
+    exit 3
+  fi
   claimed="${claimed:+$claimed$'\n'}$team"
 done <<< "$TEAMS"
 
