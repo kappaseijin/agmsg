@@ -557,6 +557,8 @@ SKILL=~/.agents/skills/agmsg
 
 `--check` は検査が完了したときに0を返す。ストアが正常かどうかは終了コードだけで判断せず、`repairable_count=0 unsupported_count=0` を確認する。DBの初期化・更新・既読化は行わない。`--apply` は新規バックアップ先とSQLiteの `integrity_check` 成功を先に要求し、その後 `BEGIN IMMEDIATE` トランザクション内で不正な `body` だけを修復する。更新には元の主キーと元のbody bytesを同時にガードとして使う。team、sender、recipient、id、timestampなどbody以外の不正は `unsupported_corruption` として報告し、書き込みを行わず失敗する。
 
+実運用規模（数万行）のストアでは、環境やDBサイズによって `--check` に約2分かかることがあり、その間は出力がない。出力が止まって見えても、それだけを理由に中断しない。実測では、31MB・`messages` 12,445行・`events` 14,135行のストアが121秒で完了した。`--check` は読み取り専用なので中断してもDBは変更されないが、`--apply` の開始後は中断しない。
+
 apply成功後は、もう一度 `--check` を実行し、読み取り専用の履歴コマンドで確認する。
 
 ```bash

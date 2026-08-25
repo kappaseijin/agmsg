@@ -1276,6 +1276,13 @@ body bytes as an update guard. Invalid bytes in team, sender, recipient, id,
 or timestamp fields are reported as `unsupported_corruption` and cause a
 no-write failure.
 
+On a production-sized store with tens of thousands of rows, `--check` may take
+around two minutes, depending on the machine and store size, and may produce no
+output while scanning. Do not interrupt it merely because the output is quiet.
+For reference, one 31 MB store with 12,445 `messages` rows and 14,135 `events`
+rows took 121 seconds to complete. `--check` is read-only, so interrupting it
+does not change the database; do not interrupt `--apply` after it starts.
+
 After a successful apply, run `--check` again and use the read-only history
 command to verify the result:
 
