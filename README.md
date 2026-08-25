@@ -542,9 +542,14 @@ dispatch to a role only when its `deliverable` is the JSON boolean `true`.
 
 For Claude Code, `true` requires a live exclusive `watch.sh` watcher for that
 role, not merely a SessionStart hook. For Codex, it requires a live bridge with
-matching metadata and the role's recorded Codex session. Other runtimes report
-`"unknown"` when agmsg has no type-specific liveness probe; configuration alone
-never makes them dispatchable.
+matching metadata and the role's recorded Codex session. Each Codex seat also
+reports `seats[].paneLiveness` as `"live"`, `"crashed"`, or `"unknown"`, based
+on the recorded herdr placement. A `"crashed"` pane vetoes that seat's
+`deliverable`; `"live"` and `"unknown"` preserve the bridge result, so an
+unreadable or still-starting pane is not treated as a crash. The aggregate
+object has no `paneLiveness` field, and pane text is never emitted in JSON
+evidence. Other runtimes report `"unknown"` when agmsg has no type-specific
+liveness probe; configuration alone never makes them dispatchable.
 
 The nested `receipt` records queued, claimed, handed-off, and legacy-unknown
 messages. `handedOff` acknowledges delivery to the receiver only. It does not

@@ -354,12 +354,63 @@ agmsg_delivery_capability_codex_bridge() {
   fi
 }
 
+# Sets AGMSG_CAP_CODEX_PANE_* for one monitored Codex seat. The spawn record
+# stores the herdr placement that belongs to the seat; pane text itself never
+# leaves pane-liveness.sh and is intentionally not included in JSON evidence.
+agmsg_delivery_capability_codex_pane_liveness() {
+  local team="$1" name="$2" placement_path placement pane workspace probe state
+  AGMSG_CAP_CODEX_PANE_LIVENESS="unknown"
+  AGMSG_CAP_CODEX_PANE_EVIDENCE=""
+
+  placement_path="$(agmsg_spawn_path "$team" "$name" 2>/dev/null || true)"
+  if [ ! -f "$placement_path" ]; then
+    AGMSG_CAP_CODEX_PANE_EVIDENCE="$(agmsg_delivery_capability_evidence placement unknown spawn_record_missing)"
+    return 0
+  fi
+
+  IFS=$'\t' read -r placement _rest < "$placement_path" || true
+  case "$placement" in
+    herdr:*)
+      pane="${placement#herdr:}"
+      case "$pane" in
+        *:*) workspace="${pane%%:*}"; [ -n "$workspace" ] && [ -n "${pane#*:}" ] || {
+          AGMSG_CAP_CODEX_PANE_EVIDENCE="$(agmsg_delivery_capability_evidence placement unknown invalid_herdr_placement)"
+          return 0
+        } ;;
+        *)
+          AGMSG_CAP_CODEX_PANE_EVIDENCE="$(agmsg_delivery_capability_evidence placement unknown invalid_herdr_placement)"
+          return 0
+          ;;
+      esac
+      ;;
+    *)
+      AGMSG_CAP_CODEX_PANE_EVIDENCE="$(agmsg_delivery_capability_evidence placement unknown non_herdr_placement)"
+      return 0
+      ;;
+  esac
+
+  if ! probe="$("$SKILL_DIR/scripts/pane-liveness.sh" "$workspace" "$pane" 2>/dev/null)"; then
+    AGMSG_CAP_CODEX_PANE_EVIDENCE="$(agmsg_delivery_capability_evidence pane unknown pane_probe_unavailable)"
+    return 0
+  fi
+  state="$(printf '%s\n' "$probe" | sed -n 's/^.*pane_liveness=\([^[:space:]]*\).*$/\1/p' | tail -1)"
+  case "$state" in
+    live|crashed|unknown)
+      AGMSG_CAP_CODEX_PANE_LIVENESS="$state"
+      AGMSG_CAP_CODEX_PANE_EVIDENCE="$(agmsg_delivery_capability_evidence pane "$state")"
+      ;;
+    *)
+      AGMSG_CAP_CODEX_PANE_EVIDENCE="$(agmsg_delivery_capability_evidence pane unknown pane_probe_unavailable)"
+      ;;
+  esac
+}
+
 # Builds one seat and sets AGMSG_CAP_SEAT_* globals. The caller supplies the
 # already-derived configuration mode so all seats share the same configuration
 # evidence but get independent runtime/receipt evidence.
 agmsg_delivery_capability_seat() {
   local type="$1" project="$2" mode="$3" team="$4" name="$5"
-  local runtime liveness deliverable session evidence receipt
+  local runtime liveness deliverable session evidence receipt pane_liveness pane_evidence pane_json=""
   agmsg_delivery_capability_receipt "$team" "$name"
 
   case "$type" in
@@ -379,14 +430,21 @@ agmsg_delivery_capability_seat() {
     codex)
       if [ "$mode" != "monitor" ]; then
         runtime="missing"; liveness="missing"; deliverable="false"; session=""
+        pane_liveness="unknown"
         evidence="$(agmsg_delivery_capability_evidence configuration "$mode" no_live_monitor_runtime)"
       else
         agmsg_delivery_capability_codex_bridge "$team" "$name" "$project"
+        agmsg_delivery_capability_codex_pane_liveness "$team" "$name"
         runtime="$AGMSG_CAP_CODEX_RUNTIME"
         liveness="$AGMSG_CAP_CODEX_LIVENESS"
         deliverable="$AGMSG_CAP_CODEX_DELIVERABLE"
         session="$AGMSG_CAP_CODEX_SESSION"
-        evidence="$(agmsg_delivery_capability_evidence configuration "$mode"),$AGMSG_CAP_CODEX_EVIDENCE"
+        pane_liveness="$AGMSG_CAP_CODEX_PANE_LIVENESS"
+        pane_evidence="$AGMSG_CAP_CODEX_PANE_EVIDENCE"
+        if [ "$pane_liveness" = "crashed" ]; then
+          deliverable="false"
+        fi
+        evidence="$(agmsg_delivery_capability_evidence configuration "$mode"),$AGMSG_CAP_CODEX_EVIDENCE,$pane_evidence"
       fi
       ;;
     *)
@@ -406,7 +464,10 @@ agmsg_delivery_capability_seat() {
   AGMSG_CAP_SEAT_DELIVERABLE="$deliverable"
   AGMSG_CAP_SEAT_SESSION="$session"
   AGMSG_CAP_SEAT_EVIDENCE="[$evidence]"
-  AGMSG_CAP_SEAT_JSON="{\"team\":$(agmsg_delivery_capability_json_quote "$team"),\"name\":$(agmsg_delivery_capability_json_quote "$name"),\"runtime\":$(agmsg_delivery_capability_json_quote "$runtime"),\"sessionId\":$(agmsg_delivery_capability_json_or_null "$session"),\"deliverable\":$(agmsg_delivery_capability_json_delivery_value "$deliverable"),\"liveness\":$(agmsg_delivery_capability_json_quote "$liveness"),\"receipt\":$receipt,\"evidence\":$AGMSG_CAP_SEAT_EVIDENCE}"
+  if [ "$type" = "codex" ]; then
+    pane_json=",\"paneLiveness\":$(agmsg_delivery_capability_json_quote "$pane_liveness")"
+  fi
+  AGMSG_CAP_SEAT_JSON="{\"team\":$(agmsg_delivery_capability_json_quote "$team"),\"name\":$(agmsg_delivery_capability_json_quote "$name"),\"runtime\":$(agmsg_delivery_capability_json_quote "$runtime"),\"sessionId\":$(agmsg_delivery_capability_json_or_null "$session"),\"deliverable\":$(agmsg_delivery_capability_json_delivery_value "$deliverable"),\"liveness\":$(agmsg_delivery_capability_json_quote "$liveness")$pane_json,\"receipt\":$receipt,\"evidence\":$AGMSG_CAP_SEAT_EVIDENCE}"
 }
 
 agmsg_delivery_capability_aggregate_receipt() {
