@@ -78,7 +78,9 @@ safe-read list、destination resolver、argument parser、delete/edit/clone の 
 2. `label create` の list 項目だけを一時的に取り除き、`GHG-30` が non-zero になることを確認する（KILLED）。
    変更を残さず復元し、suite をもう一度 GREEN にする。
 3. `bash -n scripts/guards/gh-write-owner-guard.sh`、`shellcheck -s bash -e SC1091 scripts/guards/gh-write-owner-guard.sh`、
-   `bash scripts/test.sh`、`git diff --check <base>..<head>` を実行する。
+   `bats tests/test_gh_write_owner_guard.bats`、CI と同じ
+   `.github/scripts/shard-tests.sh <index> <total> [tests-dir]` で列挙した対象の `bats` 実行、
+   `git diff --check` を実行する。
 
 test runner の既存不安定性が現れた場合は、assertion failure と timeout を区別し、command・rc・対象 test を
 記録する。green でない HEAD を review へ出さない。
