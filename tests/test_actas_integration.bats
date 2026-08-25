@@ -100,6 +100,46 @@ fake_session() {
   [ "$(actas_lock_owner team-b alice)" = "sid-other" ]
 }
 
+@test "actas-claim: unavailable delivery gate is reported without claiming" {
+  fake_register T alice
+  local lock_path resource holder
+  lock_path="$(actas_lock_path T alice)"
+  resource="$(actas_lock_gate_resource "$lock_path")"
+  sleep 60 &
+  holder=$!
+  agmsg_runtime_lock_acquire "$resource" "$holder" >/dev/null
+
+  run bash "$SKILL_DIR/scripts/actas-claim.sh" /tmp/p1 claude-code alice "sid-mine"
+  local claim_status=$status
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+
+  [ "$claim_status" -eq 3 ]
+  printf '%s\n' "$output" | grep -q 'status=unavailable team=T reason=ownership_gate_unavailable'
+  [ ! -f "$lock_path" ]
+}
+
+@test "subscription: unavailable delivery gate refuses the active claim" {
+  fake_register T alice
+  # shellcheck disable=SC1090
+  source "$SKILL_DIR/scripts/lib/subscription.sh"
+  local lock_path resource holder
+  lock_path="$(actas_lock_path T alice)"
+  resource="$(actas_lock_gate_resource "$lock_path")"
+  sleep 60 &
+  holder=$!
+  agmsg_runtime_lock_acquire "$resource" "$holder" >/dev/null
+
+  run agmsg_subscription_pairs /tmp/p1 claude-code sid-mine alice claim
+  local claim_status=$status
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+
+  [ "$claim_status" -eq 3 ]
+  printf '%s\n' "$output" | grep -q 'ownership_gate_unavailable'
+  [ ! -f "$lock_path" ]
+}
+
 # --- reset.sh releases the lock when session_id is passed ---
 
 @test "reset: with session_id, releases the lock for the dropped role" {
@@ -119,6 +159,26 @@ fake_session() {
   bash "$SKILL_DIR/scripts/reset.sh" /tmp/p1 claude-code alice >/dev/null
 
   [ -f "$(actas_lock_path T alice)" ]
+  [ "$(actas_lock_owner T alice)" = "sid-me" ]
+}
+
+@test "reset: unavailable delivery gate leaves the actas lock untouched" {
+  fake_register T alice
+  actas_lock_claim T alice "sid-me"
+  local lock_path resource holder
+  lock_path="$(actas_lock_path T alice)"
+  resource="$(actas_lock_gate_resource "$lock_path")"
+  sleep 60 &
+  holder=$!
+  agmsg_runtime_lock_acquire "$resource" "$holder" >/dev/null
+
+  run bash "$SKILL_DIR/scripts/reset.sh" /tmp/p1 claude-code alice "sid-me"
+  local reset_status=$status
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+
+  [ "$reset_status" -ne 0 ]
+  printf '%s\n' "$output" | grep -q 'ownership gate unavailable'
   [ "$(actas_lock_owner T alice)" = "sid-me" ]
 }
 
@@ -226,33 +286,82 @@ fake_session() {
 # stdout is still an open pipe to a live session -- so the id is appended to
 # DELIVERED_IDS and the message is marked read. Nothing surfaces it. That is the
 # reported symptom: consumed, marked read, and never delivered.
-@test "watch: a pair claimed by another session is released, not consumed (#683)" {
+@test "watch: writer handover waits for the delivery gate (#683)" {
   skip_on_windows "actas watcher process mgmt under Git Bash (#182)"
   fake_register T alice
   fake_register T bob
 
-  AGMSG_WATCH_INTERVAL=1 bash "$SKILL_DIR/scripts/watch.sh" "sid-old" /tmp/p1 claude-code alice \
+  local barrier="$BATS_TEST_TMPDIR/delivery-gate"
+  local writer_started="$BATS_TEST_TMPDIR/writer.started"
+  local writer_returned="$BATS_TEST_TMPDIR/writer.release-returned"
+  local writer_done="$BATS_TEST_TMPDIR/writer.done"
+  local writer_out="$BATS_TEST_TMPDIR/writer.out"
+  local writer_err="$BATS_TEST_TMPDIR/writer.err"
+
+  # Seed the store before the watcher starts. The test barrier is entered only
+  # after the watcher has acquired the real delivery gate for T/alice.
+  bash "$SKILL_DIR/scripts/send.sh" T bob alice "before the barrier" >/dev/null
+  AGMSG_TEST_ACTAS_DELIVERY_GATE_BARRIER="$barrier" AGMSG_WATCH_INTERVAL=1 \
+    bash "$SKILL_DIR/scripts/watch.sh" "sid-old" /tmp/p1 claude-code alice \
     > "$BATS_TEST_TMPDIR/old.out" 2> "$BATS_TEST_TMPDIR/old.err" 3>&- &
   local old=$!
-  local i
-  for i in $(seq 1 50); do
-    [ "$(actas_lock_owner T alice)" = "sid-old" ] && break
-    sleep 0.1
-  done
+  wait_for_file "$barrier.reached"
   [ "$(actas_lock_owner T alice)" = "sid-old" ]
 
-  # A second session takes the role — what `/agmsg actas` does from a new
-  # session. It needs to look ALIVE, or the lock reads as stale and free.
   sleep 60 &
   local newpid=$!
   echo "sid-new" > "$RUN_DIR/cc-instance.$newpid"
-  echo "sid-new" > "$(actas_lock_path T alice)"
 
-  bash "$SKILL_DIR/scripts/send.sh" T bob alice "after the handover" >/dev/null
+  # A real writer process must not complete release/claim while the watcher
+  # owns the delivery gate. With writer gating absent, the return marker and
+  # lock mutation happen immediately and this control is RED.
+  (
+    : > "$writer_started"
+    if ! actas_lock_release T alice sid-old; then
+      printf 'release-failed\n' >> "$writer_out"
+      exit 1
+    fi
+    : > "$writer_returned"
+    result="$(actas_lock_claim T alice sid-new)"
+    claim_status=$?
+    printf 'claim-status=%s result=%s\n' "$claim_status" "$result" >> "$writer_out"
+    [ "$claim_status" -eq 0 ] || exit 1
+    : > "$writer_done"
+  ) >"$writer_out" 2>"$writer_err" &
+  local writer=$!
+  wait_for_file "$writer_started"
 
-  # Several poll cycles at the 1s interval set above.
-  sleep 4
+  # Observe non-completion while the barrier is held, using a bounded poll
+  # rather than a fixed handover sleep.
+  local i
+  for i in $(seq 1 40); do
+    [ -e "$writer_returned" ] && break
+    sleep 0.05
+  done
+  refute test -e "$writer_returned"
+  [ "$(actas_lock_owner T alice)" = "sid-old" ]
+
+  : > "$barrier.release"
+  wait_for_file "$writer_done" || {
+    cat "$writer_out" "$writer_err" >&2
+    printf 'gate-owner=%s lock-owner=%s\n' \
+      "$(agmsg_runtime_lock_owner "$(actas_lock_gate_resource "$(actas_lock_path T alice)")" 2>&1)" \
+      "$(actas_lock_owner T alice)" >&2
+    cat "$BATS_TEST_TMPDIR/old.err" >&2
+    false
+  }
+  wait "$writer"
+  [ "$(actas_lock_owner T alice)" = "sid-new" ]
+
+  # The old watcher must leave before the post-handover message is sent.
+  wait_for_pid_exit "$old" || {
+    cat "$BATS_TEST_TMPDIR/old.out" "$BATS_TEST_TMPDIR/old.err" >&2
+    ps -p "$old" -o pid=,stat=,command= >&2 || true
+    false
+  }
   kill "$newpid" 2>/dev/null || true
+  wait "$newpid" 2>/dev/null || true
+  bash "$SKILL_DIR/scripts/send.sh" T bob alice "after the handover" >/dev/null
 
   # It must not have taken a message addressed to a role it no longer owns.
   run cat "$BATS_TEST_TMPDIR/old.out"

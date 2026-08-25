@@ -21,6 +21,7 @@ agmsg_subscription_pairs() {
   local project="$1" type="$2" owner_id="$3" active_name="${4:-}" claim_mode="${5:-}"
   local scripts_dir="$SKILL_DIR/scripts"
   local pairs filtered skipped skip_facts held state result cc claimed_here
+  local claim_status=0 claim_failed=0 claim_failure_pair="" rollback_failed=0
 
   if [ -n "$active_name" ]; then
     pairs="$("$scripts_dir/identities.sh" "$project" "$type" --name "$active_name" --all-projects)" || return 1
@@ -62,13 +63,23 @@ agmsg_subscription_pairs() {
     esac
 
     if [ -n "$active_name" ] && [ "$claim_mode" = "claim" ]; then
-      result=$(actas_lock_claim "$team" "$agent" "$owner_id" 2>/dev/null || true)
+      claim_status=0
+      if result=$(actas_lock_claim "$team" "$agent" "$owner_id"); then
+        :
+      else
+        claim_status=$?
+      fi
       case "$result" in
         held:*)
           held="${held:+$held }${team}/${agent}(${result#held:})"
           continue
           ;;
       esac
+      if [ "$claim_status" -ne 0 ]; then
+        claim_failed=1
+        claim_failure_pair="${team}/${agent}"
+        break
+      fi
       if [ "$state" != "mine" ]; then
         claimed_here="$(printf '%s\n%s\t%s' "$claimed_here" "$team" "$agent")"
       fi
@@ -76,11 +87,21 @@ agmsg_subscription_pairs() {
 
     filtered="${filtered:+$filtered$'\n'}${team}"$'\t'"${agent}"
   done <<< "$pairs"
-  if [ -n "$held" ] && [ -n "$claimed_here" ]; then
+  if { [ -n "$held" ] || [ "$claim_failed" -ne 0 ]; } && [ -n "$claimed_here" ]; then
     while IFS=$'\t' read -r claimed_team claimed_agent; do
       [ -n "$claimed_team" ] || continue
-      actas_lock_release "$claimed_team" "$claimed_agent" "$owner_id" 2>/dev/null || true
+      if ! actas_lock_release "$claimed_team" "$claimed_agent" "$owner_id"; then
+        rollback_failed=1
+      fi
     done <<< "$claimed_here"
+  fi
+
+  if [ "$claim_failed" -ne 0 ]; then
+    if [ "$rollback_failed" -ne 0 ]; then
+      echo "agmsg watch: rollback failed; one or more ownership locks may remain." >&2
+    fi
+    echo "agmsg watch: ${claim_failure_pair}: ownership_gate_unavailable; refusing subscription claim." >&2
+    return 3
   fi
 
   if [ -n "$skipped" ]; then

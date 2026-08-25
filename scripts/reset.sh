@@ -218,7 +218,10 @@ for TEAM_CONFIG in "$TEAMS_DIR"/*/config.json; do
   # Release the actas lock for this (team, agent) pair so peer sessions can
   # claim it without waiting for owner-session-end / stale GC.
   if [ -n "$SESSION_ID" ]; then
-    actas_lock_release "$TEAM_NAME" "$TARGET_AGENT" "$SESSION_ID" 2>/dev/null || true
+    if ! actas_lock_release "$TEAM_NAME" "$TARGET_AGENT" "$SESSION_ID"; then
+      echo "Reset warning: ownership gate unavailable for $TEAM_NAME/$TARGET_AGENT; lock was not changed." >&2
+      LOCK_FAILED=1
+    fi
   fi
 done
 
@@ -230,7 +233,10 @@ if [ -n "$SESSION_ID" ] && [ -d "$TEAMS_DIR" ]; then
   for _LOCK_CONFIG in "$TEAMS_DIR"/*/config.json; do
     [ -f "$_LOCK_CONFIG" ] || continue
     _LOCK_TEAM="$(basename "$(dirname "$_LOCK_CONFIG")")"
-    actas_lock_release "$_LOCK_TEAM" "$TARGET_AGENT" "$SESSION_ID" 2>/dev/null || true
+    if ! actas_lock_release "$_LOCK_TEAM" "$TARGET_AGENT" "$SESSION_ID"; then
+      echo "Reset warning: ownership gate unavailable for $_LOCK_TEAM/$TARGET_AGENT; lock was not changed." >&2
+      LOCK_FAILED=1
+    fi
   done
 fi
 
