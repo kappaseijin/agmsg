@@ -262,6 +262,7 @@ _wait_for_file_contains() {
   local err="$TEST_SKILL_DIR/mt5-health.err"
   local ready="$TEST_SKILL_DIR/run/ready.health-a__alice"
   local sid="mt5-health-sid.$$"
+  local log="$TEST_SKILL_DIR/run/watch.$sid.log"
   # This is a standalone synthetic watcher, not a child of an agent process.
   # Keep the ambient CI Bats process tree out of the instance/project
   # resolution walk. The command-local overrides are intentional: this test
@@ -271,12 +272,13 @@ _wait_for_file_contains() {
     bash "$SCRIPTS/watch.sh" "$sid" "$proj_a" claude-code alice \
     >"$out" 2>"$err" 3>&- 4>&- &
   local watcher=$!
-  if ! _WAIT_TICKS=600 wait_for_file_contains "$err" "ERROR: cannot open message DB"; then
+  if ! _WAIT_TICKS=600 wait_for_file_contains "$log" "ERROR: cannot open message DB"; then
     _stop_watcher "$watcher"
     false
   fi
   wait_for_pid_exit "$watcher" || { _stop_watcher "$watcher"; false; }
-  grep -Fxc "ERROR: cannot open message DB $db" "$err" | grep -Fx 1
+  grep -Fc "ERROR: cannot open message DB $db" "$err" | grep -Fx 1
+  grep -Fc "ERROR: cannot open message DB $db" "$log" | grep -Fx 1
   refute grep -Fq "ERROR: cannot open message DB" "$out"
   [ ! -e "$ready" ]
   [ ! -e "$TEST_SKILL_DIR/run/ready.health-b__alice" ]
@@ -291,6 +293,7 @@ _wait_for_file_contains() {
   local db="$TEST_SKILL_DIR/db/messages.db"
   local out="$TEST_SKILL_DIR/runtime-db.out"
   local err="$TEST_SKILL_DIR/runtime-db.err"
+  local log="$TEST_SKILL_DIR/run/watch.runtime-db-sid.log"
   local ready="$TEST_SKILL_DIR/run/ready.team__alice"
   local lock_path="$TEST_SKILL_DIR/run/actas.team__alice.session"
   chmod 000 "$db"
@@ -299,7 +302,7 @@ _wait_for_file_contains() {
     bash "$SCRIPTS/watch.sh" "runtime-db-sid" "$PROJ" claude-code alice \
     >"$out" 2>"$err" 3>&- 4>&- &
   local watcher=$!
-  if ! _WAIT_TICKS=600 wait_for_file_contains "$err" "ERROR: cannot open message DB"; then
+  if ! _WAIT_TICKS=600 wait_for_file_contains "$log" "ERROR: cannot open message DB"; then
     _stop_watcher "$watcher"
     chmod 0644 "$db"
     false
@@ -314,7 +317,8 @@ _wait_for_file_contains() {
   chmod 0644 "$db"
 
   [ "$watcher_status" -ne 0 ]
-  grep -Fxc "ERROR: cannot open message DB $db" "$err" | grep -Fx 1
+  grep -Fc "ERROR: cannot open message DB $db" "$err" | grep -Fx 1
+  grep -Fc "ERROR: cannot open message DB $db" "$log" | grep -Fx 1
   refute grep -Fq "ERROR: cannot open message DB" "$out"
   [ ! -e "$ready" ]
   [ ! -e "$lock_path" ]
@@ -981,10 +985,11 @@ _record_handover_events() {
   chmod 000 "$DB"
   local out="$BATS_TEST_TMPDIR/hc.out"
   local err="$BATS_TEST_TMPDIR/hc.err"
+  local log="$TEST_SKILL_DIR/run/watch.$(_iid "sess-hc").log"
   AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "sess-hc" "$PROJ" claude-code \
     >"$out" 2>"$err" 3>&- 4>&- &
   local pid=$!
-  if ! _WAIT_TICKS=600 wait_for_file_contains "$err" "ERROR: cannot open message DB"; then
+  if ! _WAIT_TICKS=600 wait_for_file_contains "$log" "ERROR: cannot open message DB"; then
     _stop_watcher "$pid"
     chmod 644 "$DB" 2>/dev/null || true
     false
@@ -995,7 +1000,8 @@ _record_handover_events() {
   fi
   chmod 644 "$DB" 2>/dev/null || true
   # Exactly one line: 0 would mean a silent spin, >1 a re-emitting loop.
-  [ "$(grep -Fxc "ERROR: cannot open message DB $DB" "$err")" -eq 1 ]
+  [ "$(grep -Fc "ERROR: cannot open message DB $DB" "$err")" -eq 1 ]
+  [ "$(grep -Fc "ERROR: cannot open message DB $DB" "$log")" -eq 1 ]
   ! grep -Fq "ERROR: cannot open message DB" "$out"
 }
 

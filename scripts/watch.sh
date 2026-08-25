@@ -483,7 +483,7 @@ watch_check_existing_db() {
   if agmsg_sqlite "$db_path" "SELECT name FROM sqlite_master LIMIT 1;" >/dev/null 2>&1; then
     return 0
   fi
-  printf 'ERROR: cannot open message DB %s\n' "$db_path" >&2
+  watch_log "ERROR: cannot open message DB $db_path"
   return 1
 }
 
