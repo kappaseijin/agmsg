@@ -40,34 +40,42 @@ assert_default_read() {
   [ "$(cat "$HERDR_ARGS_LOG")" = "pane read pane-1" ]
 }
 
+pane_output_contains() {
+  printf '%s\n' "$output" | grep -qF -- "$1"
+}
+
+pane_output_absent() {
+  ! printf '%s\n' "$output" | grep -qF -- "$1"
+}
+
 @test "pane-liveness: captured resume failure is crashed" {
   run_liveness crashed-pane.txt
   [ "$status" -eq 0 ]
-  [[ "$output" == *"pane_liveness=crashed"* ]]
+  pane_output_contains "pane_liveness=crashed"
   assert_default_read
 }
 
 @test "pane-liveness: queued follow-up input is live" {
   run_liveness queued-live-pane.txt
   [ "$status" -eq 0 ]
-  [[ "$output" == *"pane_liveness=live"* ]]
-  [[ "$output" != *"pane_liveness=crashed"* ]]
+  pane_output_contains "pane_liveness=live"
+  pane_output_absent "pane_liveness=crashed"
   assert_default_read
 }
 
 @test "pane-liveness: quoted crash terms in history do not crash a healthy pane" {
   run_liveness quoted-crash-terms-pane.txt
   [ "$status" -eq 0 ]
-  [[ "$output" == *"pane_liveness=live"* ]]
-  [[ "$output" != *"pane_liveness=crashed"* ]]
+  pane_output_contains "pane_liveness=live"
+  pane_output_absent "pane_liveness=crashed"
   assert_default_read
 }
 
 @test "pane-liveness: quiet healthy pane is unknown" {
   run_liveness quiet-pane.txt
   [ "$status" -eq 0 ]
-  [[ "$output" == *"pane_liveness=unknown"* ]]
-  [[ "$output" != *"pane_liveness=crashed"* ]]
+  pane_output_contains "pane_liveness=unknown"
+  pane_output_absent "pane_liveness=crashed"
   assert_default_read
 }
 
@@ -78,7 +86,7 @@ assert_default_read() {
   run env PATH="$FAKE_BIN:$PATH" AGMSG_TEST_HERDR_ARGS_LOG="$HERDR_ARGS_LOG" \
     bash "$SCRIPTS/pane-liveness.sh" workspace-1 pane-1
   [ "$status" -eq 0 ]
-  [[ "$output" == *"pane_liveness=unknown"* ]]
+  pane_output_contains "pane_liveness=unknown"
   assert_default_read
 }
 
@@ -89,7 +97,7 @@ assert_default_read() {
   run env PATH="$FAKE_BIN:$PATH" AGMSG_TEST_HERDR_ARGS_LOG="$HERDR_ARGS_LOG" \
     bash "$SCRIPTS/pane-liveness.sh" workspace-1 pane-1
   [ "$status" -eq 0 ]
-  [[ "$output" == *"pane_liveness=unknown"* ]]
-  [[ "$output" != *"pane_liveness=crashed"* ]]
+  pane_output_contains "pane_liveness=unknown"
+  pane_output_absent "pane_liveness=crashed"
   assert_default_read
 }
