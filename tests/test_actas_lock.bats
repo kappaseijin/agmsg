@@ -25,6 +25,63 @@ fake_cc_instance() {
 # inside command substitution.
 live_pid() { echo "$$"; }
 
+# Install a local SQLite seam for gate error classification tests. The seam is
+# installed from inside one test, so it cannot affect the other tests in this
+# file. Successful acquire calls return this shell's PID; release calls return
+# one affected row. Error text is deliberately emitted on stderr, exactly as
+# sqlite3 does, so the gate must preserve and classify it rather than infer from
+# an empty owner value.
+install_runtime_lock_sqlite_stub() {
+  export AGMSG_TEST_GATE_STUB_MODE="$1"
+  export AGMSG_TEST_GATE_STUB_ATTEMPTS="$BATS_TEST_TMPDIR/gate-attempts"
+  export AGMSG_TEST_GATE_STUB_TIMEOUTS="$BATS_TEST_TMPDIR/gate-timeouts"
+  : > "$AGMSG_TEST_GATE_STUB_ATTEMPTS"
+  : > "$AGMSG_TEST_GATE_STUB_TIMEOUTS"
+
+  agmsg_storage_ensure_initialized() { return 0; }
+  agmsg_sqlite() {
+    local sql="${2:-}" count=0
+    [ -s "$AGMSG_TEST_GATE_STUB_ATTEMPTS" ] && count="$(cat "$AGMSG_TEST_GATE_STUB_ATTEMPTS")"
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$AGMSG_TEST_GATE_STUB_ATTEMPTS"
+    printf '%s\n' "${AGMSG_BUSY_TIMEOUT:-unset}" >> "$AGMSG_TEST_GATE_STUB_TIMEOUTS"
+
+    case "$AGMSG_TEST_GATE_STUB_MODE" in
+      busy-once)
+        if [ "$count" -eq 1 ]; then
+          printf 'Error: database is locked (5)\n' >&2
+          return 5
+        fi
+        ;;
+      always-busy)
+        printf 'Error: database is locked (5)\n' >&2
+        return 5
+        ;;
+      permanent)
+        printf 'Error: no such table: locks\n' >&2
+        return 1
+        ;;
+      unknown)
+        printf 'fixture: unexpected sqlite failure\n' >&2
+        return 1
+        ;;
+    esac
+
+    case "$sql" in
+      *"SELECT changes()"*) printf '1\n' ;;
+      *) printf '%s\n' "$$" ;;
+    esac
+  }
+}
+
+assert_output_contains() {
+  local output="$1" needle="$2"
+  case "$output" in
+    *"$needle"*) return 0 ;;
+    *) printf 'expected output to contain: %s\n%s\n' "$needle" "$output" >&2; return 1 ;;
+  esac
+}
+
 # --- path encoding ---
 
 @test "actas_lock_path: percent-encodes special bytes in team/agent" {
@@ -130,7 +187,8 @@ live_pid() { echo "$$"; }
   # slot is stale and is about to enter the cleanup. With the fix the
   # reclaim path now re-checks ownership *inside* this mutex, so even
   # if a peer made it through, sid-A's live lock would be respected.
-  local rd="$(actas_lock_path "T" "alice").reclaim.d"
+  local rd
+  rd="$(actas_lock_path "T" "alice").reclaim.d"
   mkdir "$rd"
 
   run actas_lock_claim "T" "alice" "sid-B"
@@ -159,6 +217,150 @@ live_pid() { echo "$$"; }
   fake_cc_instance "99999" "sid-A"  # very unlikely live pid
   run actas_lock_sid_alive "sid-A"
   [ "$status" -ne 0 ]
+}
+
+# --- delivery gate ---
+
+@test "delivery gate: watcher retries SQLITE_BUSY within its short budget" {
+  install_runtime_lock_sqlite_stub busy-once
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+
+  run actas_lock_gate_try_acquire "$lock_path"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$AGMSG_TEST_GATE_STUB_ATTEMPTS")" -eq 2 ]
+  [ "$(head -1 "$AGMSG_TEST_GATE_STUB_TIMEOUTS")" -lt 200 ]
+}
+
+@test "delivery gate: writer retries SQLITE_BUSY and succeeds" {
+  install_runtime_lock_sqlite_stub busy-once
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+
+  run actas_lock_gate_acquire "$lock_path"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$AGMSG_TEST_GATE_STUB_ATTEMPTS")" -eq 2 ]
+  [ "$(head -1 "$AGMSG_TEST_GATE_STUB_TIMEOUTS")" -le 100 ]
+}
+
+@test "delivery gate: permanent SQLite failure is not retried and is diagnosed" {
+  install_runtime_lock_sqlite_stub permanent
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+
+  run actas_lock_gate_try_acquire "$lock_path"
+  [ "$status" -ne 0 ]
+  [ "$(cat "$AGMSG_TEST_GATE_STUB_ATTEMPTS")" -eq 1 ]
+  assert_output_contains "$output" "operation=try-acquire"
+  assert_output_contains "$output" "resource=actas-delivery:$lock_path"
+  assert_output_contains "$output" "observed_owner=<none>"
+  assert_output_contains "$output" "pid=$$"
+  assert_output_contains "$output" "classification=permanent"
+  assert_output_contains "$output" "sqlite_error=Error: no such table: locks"
+}
+
+@test "delivery gate: unknown SQLite failure is fail-closed without retry" {
+  install_runtime_lock_sqlite_stub unknown
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+
+  run actas_lock_gate_try_acquire "$lock_path"
+  [ "$status" -ne 0 ]
+  [ "$(cat "$AGMSG_TEST_GATE_STUB_ATTEMPTS")" -eq 1 ]
+  assert_output_contains "$output" "classification=unknown"
+  assert_output_contains "$output" "sqlite_error=fixture: unexpected sqlite failure"
+}
+
+@test "runtime lock ABI preserves SQLite failure status and stderr" {
+  install_runtime_lock_sqlite_stub permanent
+  local resource="codex-dispatcher:diagnostic"
+
+  run agmsg_runtime_lock_acquire "$resource" 111
+  [ "$status" -ne 0 ]
+  assert_output_contains "$output" "Error: no such table: locks"
+
+  run agmsg_runtime_lock_owner "$resource"
+  [ "$status" -ne 0 ]
+  assert_output_contains "$output" "Error: no such table: locks"
+
+  run agmsg_runtime_lock_verify "$resource" 111
+  [ "$status" -ne 0 ]
+  assert_output_contains "$output" "Error: no such table: locks"
+
+  run agmsg_runtime_lock_release "$resource" 111
+  [ "$status" -ne 0 ]
+  assert_output_contains "$output" "Error: no such table: locks"
+}
+
+@test "delivery gate: transient retry exhaustion returns non-zero" {
+  install_runtime_lock_sqlite_stub always-busy
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+
+  run actas_lock_gate_try_acquire "$lock_path"
+  [ "$status" -ne 0 ]
+  [ "$(cat "$AGMSG_TEST_GATE_STUB_ATTEMPTS")" -eq 4 ]
+  assert_output_contains "$output" "classification=transient"
+  [ ! -f "$lock_path" ]
+}
+
+@test "delivery gate: writer waits for a live holder instead of reclaiming it" {
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+  local resource
+  resource="$(actas_lock_gate_resource "$lock_path")"
+  sleep 60 &
+  local holder=$!
+  agmsg_runtime_lock_acquire "$resource" "$holder" >/dev/null
+
+  (
+    if actas_lock_gate_acquire "$lock_path"; then
+      printf '%s\n' "acquired" > "$BATS_TEST_TMPDIR/gate-acquired"
+      actas_lock_gate_release "$lock_path"
+    fi
+  ) &
+  local waiter=$!
+  local _gate_tick
+  for _gate_tick in $(seq 1 20); do
+    [ ! -e "$BATS_TEST_TMPDIR/gate-acquired" ] || break
+    sleep 0.1
+  done
+  [ ! -e "$BATS_TEST_TMPDIR/gate-acquired" ]
+  [ "$(agmsg_runtime_lock_owner "$resource")" = "$holder" ]
+
+  agmsg_runtime_lock_release "$resource" "$holder"
+  wait "$waiter"
+  [ -f "$BATS_TEST_TMPDIR/gate-acquired" ]
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+}
+
+@test "delivery gate: reclaims only a confirmed-dead holder with CAS" {
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+  local resource
+  resource="$(actas_lock_gate_resource "$lock_path")"
+  bash -c 'exit 0' &
+  local dead=$!
+  wait "$dead"
+  agmsg_runtime_lock_acquire "$resource" "$dead" >/dev/null
+
+  actas_lock_gate_acquire "$lock_path"
+  [ "$(agmsg_runtime_lock_owner "$resource")" = "$$" ]
+  actas_lock_gate_release "$lock_path"
+  [ -z "$(agmsg_runtime_lock_owner "$resource")" ]
+}
+
+@test "delivery gate: release failure preserves a successor owner" {
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+  local resource
+  resource="$(actas_lock_gate_resource "$lock_path")"
+  sleep 60 &
+  local successor=$!
+  agmsg_runtime_lock_acquire "$resource" "$successor" >/dev/null
+
+  run actas_lock_gate_release "$lock_path"
+  [ "$status" -ne 0 ]
+  assert_output_contains "$output" "operation=release"
+  assert_output_contains "$output" "classification=permanent"
+  [ "$(agmsg_runtime_lock_owner "$resource")" = "$successor" ]
+
+  agmsg_runtime_lock_release "$resource" "$successor"
+  kill "$successor" 2>/dev/null || true
+  wait "$successor" 2>/dev/null || true
 }
 
 # --- release / release_all ---

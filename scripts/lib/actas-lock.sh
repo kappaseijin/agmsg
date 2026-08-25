@@ -33,6 +33,13 @@
 # shellcheck disable=SC1091
 . "$SKILL_DIR/scripts/lib/instance-id.sh"
 
+# The delivery gate is backed by the runtime-lock ABI. Keep the dependency
+# local because some callers source actas-lock.sh before storage.sh.
+if ! declare -F agmsg_runtime_lock_acquire >/dev/null 2>&1; then
+  # shellcheck disable=SC1091
+  . "$SKILL_DIR/scripts/lib/storage.sh"
+fi
+
 _actas_lock_dir() { printf '%s/run' "$SKILL_DIR"; }
 
 # Encode a team or agent name into a filesystem-safe form. Anything outside
@@ -98,6 +105,214 @@ actas_lock_owner() {
 # no change. Empty token → not alive.
 actas_lock_sid_alive() {
   agmsg_instance_alive "$1"
+}
+
+# The delivery critical section is keyed by the exact actas lock path. This
+# lets release-all and stale GC protect each file without decoding arbitrary
+# team/agent bytes back out of its filename.
+actas_lock_gate_resource() {
+  printf 'actas-delivery:%s' "$1"
+}
+
+_actas_lock_gate_classify_error() {
+  local error="$1"
+  case "$error" in
+    *SQLITE_BUSY*|*SQLITE_LOCKED*|*"database is busy"*|*"database"*"locked"*)
+      printf 'transient'
+      ;;
+    *"no such "*|*"unable to open database"*|*"permission denied"*|*"not authorized"*|\
+      *"readonly"*|*"malformed"*|*"syntax error"*|*"constraint failed"*|*"disk I/O error"*|\
+      *"not a database"*|*"expected one owned row"*)
+      printf 'permanent'
+      ;;
+    *)
+      printf 'unknown'
+      ;;
+  esac
+}
+
+_actas_lock_gate_diagnostic() {
+  local operation="$1" resource="$2" observed_owner="$3"
+  local classification="$4" sqlite_error="$5" reason="${6:-}"
+  [ -n "$observed_owner" ] || observed_owner='<none>'
+  [ -n "$sqlite_error" ] || sqlite_error='<not-invoked>'
+  printf 'actas gate failure operation=%s resource=%s observed_owner=%s pid=%s classification=%s sqlite_error=%s' \
+    "$operation" "$resource" "$observed_owner" "$$" "$classification" "$sqlite_error" >&2
+  [ -n "$reason" ] && printf ' reason=%s' "$reason" >&2
+  printf '\n' >&2
+}
+
+# Run exactly one storage ABI operation with a caller-selected SQLite busy
+# timeout. The assignment is exported inside this subshell so init scripts and
+# sqlite3 itself account for the same timeout as the outer gate deadline.
+_actas_lock_gate_run() {
+  local operation="$1" resource="$2" owner_pid="$3" expected_owner="$4"
+  local busy_timeout="$5"
+  AGMSG_BUSY_TIMEOUT="$busy_timeout"
+  export AGMSG_BUSY_TIMEOUT
+  case "$operation" in
+    try-acquire|acquire)
+      if [ -n "$expected_owner" ]; then
+        agmsg_runtime_lock_acquire "$resource" "$owner_pid" "$expected_owner"
+      else
+        agmsg_runtime_lock_acquire "$resource" "$owner_pid"
+      fi
+      ;;
+    release)
+      agmsg_runtime_lock_release_owned "$resource" "$owner_pid"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# Capture one attempt's stderr without dropping it. The caller classifies the
+# raw text and reports it on every non-zero path.
+_actas_lock_gate_attempt() {
+  local operation="$1" resource="$2" owner_pid="$3" expected_owner="$4"
+  local busy_timeout="$5" error_file output rc
+  ACTAS_LOCK_GATE_LAST_OWNER=''
+  ACTAS_LOCK_GATE_LAST_SQLITE_ERROR='<not-invoked>'
+  error_file="$(mktemp "${TMPDIR:-/tmp}/agmsg-gate.XXXXXX" 2>/dev/null)" || return 1
+
+  if output="$(_actas_lock_gate_run "$operation" "$resource" "$owner_pid" \
+    "$expected_owner" "$busy_timeout" 2>"$error_file")"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  ACTAS_LOCK_GATE_LAST_OWNER="$output"
+  if ! ACTAS_LOCK_GATE_LAST_SQLITE_ERROR="$(cat "$error_file" 2>/dev/null)"; then
+    ACTAS_LOCK_GATE_LAST_SQLITE_ERROR='<diagnostic-unreadable>'
+  fi
+  rm -f "$error_file" 2>/dev/null || :
+  return "$rc"
+}
+
+# Try to acquire a delivery gate for a watcher. A watcher never waits for a
+# holder. SQLite BUSY/LOCKED is retried within four 40 ms attempts (<=200 ms);
+# all other errors and every non-owned result fail closed for this poll.
+actas_lock_gate_try_acquire() {
+  local lock_path="$1" resource owner classification attempts=0 rc
+  resource="$(actas_lock_gate_resource "$lock_path")"
+  while [ "$attempts" -lt 4 ]; do
+    _actas_lock_gate_attempt try-acquire "$resource" "$$" '' 40
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+      owner="$ACTAS_LOCK_GATE_LAST_OWNER"
+      if [ "$owner" = "$$" ]; then
+        return 0
+      fi
+      _actas_lock_gate_diagnostic try-acquire "$resource" "$owner" \
+        live-holder '<not-invoked>' 'gate-held-by-another-owner'
+      return 1
+    fi
+
+    classification="$(_actas_lock_gate_classify_error "$ACTAS_LOCK_GATE_LAST_SQLITE_ERROR")"
+    _actas_lock_gate_diagnostic try-acquire "$resource" \
+      "$ACTAS_LOCK_GATE_LAST_OWNER" "$classification" \
+      "$ACTAS_LOCK_GATE_LAST_SQLITE_ERROR" 'sqlite-attempt-failed'
+    [ "$classification" = transient ] || return 1
+    attempts=$((attempts + 1))
+  done
+  return 1
+}
+
+# Acquire a delivery gate for an ownership writer. A live holder is waited on
+# in 100 ms slices; SQLite BUSY/LOCKED consumes the same 100 ms budget per SQL
+# attempt. Fifty attempts therefore bound the total wait to five seconds rather
+# than adding a second timeout around sqlite's own busy timeout.
+actas_lock_gate_acquire() {
+  local lock_path="$1" resource owner next_owner classification
+  local attempts=0 rc
+  resource="$(actas_lock_gate_resource "$lock_path")"
+
+  while [ "$attempts" -lt 50 ]; do
+    attempts=$((attempts + 1))
+    _actas_lock_gate_attempt acquire "$resource" "$$" '' 100
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      classification="$(_actas_lock_gate_classify_error "$ACTAS_LOCK_GATE_LAST_SQLITE_ERROR")"
+      _actas_lock_gate_diagnostic acquire "$resource" \
+        "$ACTAS_LOCK_GATE_LAST_OWNER" "$classification" \
+        "$ACTAS_LOCK_GATE_LAST_SQLITE_ERROR" 'sqlite-attempt-failed'
+      [ "$classification" = transient ] || return 1
+      continue
+    fi
+
+    owner="$ACTAS_LOCK_GATE_LAST_OWNER"
+    case "$owner" in
+      "$$") return 0 ;;
+      ''|*[!0-9]*)
+        _actas_lock_gate_diagnostic acquire "$resource" "$owner" \
+          permanent '<not-invoked>' 'invalid-owner-result'
+        return 1
+        ;;
+    esac
+
+    if _agmsg_pid_alive_local "$owner"; then
+      if [ "$attempts" -lt 50 ]; then
+        sleep 0.1 || return 1
+      fi
+      continue
+    fi
+
+    # A confirmed-dead owner may be replaced only by the storage ABI's
+    # expected-owner CAS. This is a second SQL attempt and shares the same
+    # bounded budget; it never deletes an unknown/live successor.
+    if [ "$attempts" -ge 50 ]; then
+      break
+    fi
+    attempts=$((attempts + 1))
+    _actas_lock_gate_attempt acquire "$resource" "$$" "$owner" 100
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      classification="$(_actas_lock_gate_classify_error "$ACTAS_LOCK_GATE_LAST_SQLITE_ERROR")"
+      _actas_lock_gate_diagnostic acquire "$resource" "$owner" \
+        "$classification" "$ACTAS_LOCK_GATE_LAST_SQLITE_ERROR" \
+        'sqlite-cas-attempt-failed'
+      [ "$classification" = transient ] || return 1
+      continue
+    fi
+    next_owner="$ACTAS_LOCK_GATE_LAST_OWNER"
+    [ "$next_owner" = "$$" ] && return 0
+    case "$next_owner" in
+      ''|*[!0-9]*)
+        _actas_lock_gate_diagnostic acquire "$resource" "$next_owner" \
+          permanent '<not-invoked>' 'invalid-cas-owner-result'
+        return 1
+        ;;
+    esac
+  done
+
+  _actas_lock_gate_diagnostic acquire "$resource" "${owner:-}" \
+    transient "${ACTAS_LOCK_GATE_LAST_SQLITE_ERROR:-<not-invoked>}" \
+    'retry-deadline-exhausted'
+  return 1
+}
+
+# Release only the current runtime owner. Transient SQLite failures are retried
+# under the same five-second writer budget; a logical owner mismatch or an
+# unknown error is reported and returned without touching a successor row.
+actas_lock_gate_release() {
+  local lock_path="$1" resource classification
+  local attempts=0 rc
+  resource="$(actas_lock_gate_resource "$lock_path")"
+  while [ "$attempts" -lt 50 ]; do
+    attempts=$((attempts + 1))
+    _actas_lock_gate_attempt release "$resource" "$$" '' 100
+    rc=$?
+    [ "$rc" -eq 0 ] && return 0
+    classification="$(_actas_lock_gate_classify_error "$ACTAS_LOCK_GATE_LAST_SQLITE_ERROR")"
+    _actas_lock_gate_diagnostic release "$resource" "$$" "$classification" \
+      "$ACTAS_LOCK_GATE_LAST_SQLITE_ERROR" 'sqlite-attempt-failed'
+    [ "$classification" = transient ] || return 1
+  done
+  _actas_lock_gate_diagnostic release "$resource" "$$" transient \
+    "${ACTAS_LOCK_GATE_LAST_SQLITE_ERROR:-<not-invoked>}" \
+    'retry-deadline-exhausted'
+  return 1
 }
 
 # Internal: attempt one atomic claim. Echoes "ok" on success, "held:<sid>"
