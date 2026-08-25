@@ -28,7 +28,7 @@ utf8_locale_name() {
   normal_out="$BATS_TEST_TMPDIR/normal.out"
   error_file="$BATS_TEST_TMPDIR/stderr"
 
-  printf '{"type":"message_sent","id":"import-utf8","team":"testteam","from":"alice","to":"bob","body":"\xff\rY","at":"2026-08-25T00:00:00Z"}\n' > "$import_file"
+  printf '{"type":"message_sent","id":"import-utf8","team":"testteam","from":"alice","to":"bob","body":"\xff\\rY","at":"2026-08-25T00:00:00Z"}\n' > "$import_file"
 
   run env LANG="$locale_name" LC_ALL="$locale_name" bash -c '
     set -e
