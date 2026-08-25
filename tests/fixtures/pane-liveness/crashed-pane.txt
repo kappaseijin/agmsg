@@ -1,0 +1,2 @@
+tui.resume_cwd = 'current' requires --cd
+$
