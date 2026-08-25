@@ -10,12 +10,17 @@ setup() {
   export AGMSG_AGENT_PID=""
   export TEST_PROJECT="$(mktemp -d)"
   DELIVERY_TEST_WATCH_PID=""
+  DELIVERY_TEST_BRIDGE_PID=""
 }
 
 teardown() {
   if [ -n "${DELIVERY_TEST_WATCH_PID:-}" ]; then
     kill "$DELIVERY_TEST_WATCH_PID" 2>/dev/null || true
     wait "$DELIVERY_TEST_WATCH_PID" 2>/dev/null || true
+  fi
+  if [ -n "${DELIVERY_TEST_BRIDGE_PID:-}" ]; then
+    kill "$DELIVERY_TEST_BRIDGE_PID" 2>/dev/null || true
+    wait "$DELIVERY_TEST_BRIDGE_PID" 2>/dev/null || true
   fi
   teardown_test_env
   rm -rf "$TEST_PROJECT"
@@ -63,6 +68,48 @@ assert_json_object() {
   escaped=$(printf '%s' "$document" | sed "s/'/''/g")
   [ "$(sqlite_mem "SELECT json_valid('$escaped');")" = "1" ]
   [ "$(sqlite_mem "SELECT json_type('$escaped');")" = "object" ]
+}
+
+setup_fake_codex_pane() {
+  local fixture="$1"
+  local fake_bin="$TEST_PROJECT/fake-bin"
+
+  skip_on_windows "pane liveness integration uses the POSIX fake herdr (#159)"
+  mkdir -p "$fake_bin" "$TEST_SKILL_DIR/run"
+  export FAKE_HERDR_FIXTURE="$fixture"
+  export FAKE_HERDR_LOG="$TEST_PROJECT/herdr.log"
+  export FAKE_HERDR_PANE="w59:pC"
+  cat > "$fake_bin/herdr" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$FAKE_HERDR_LOG"
+[ "${1:-}" = "pane" ]
+[ "${2:-}" = "read" ]
+[ "${3:-}" = "$FAKE_HERDR_PANE" ]
+cat "$FAKE_HERDR_FIXTURE"
+EOF
+  chmod +x "$fake_bin/herdr"
+  export PATH="$fake_bin:$PATH"
+
+  bash "$SCRIPTS/join.sh" team alice codex "$TEST_PROJECT" >/dev/null
+  bash "$SCRIPTS/delivery.sh" set monitor codex "$TEST_PROJECT" >/dev/null
+  _seed_role_record team alice codex-pane-session "$TEST_PROJECT" codex
+
+  sleep 60 3>&- &
+  DELIVERY_TEST_BRIDGE_PID=$!
+  printf '%s\n' "$DELIVERY_TEST_BRIDGE_PID" > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.pid"
+  cat > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.meta" <<EOF
+pid=$DELIVERY_TEST_BRIDGE_PID
+project=$TEST_PROJECT
+team=team
+name=alice
+type=codex
+EOF
+  printf 'herdr:w59:pC\t%s\tcodex\n' "$TEST_PROJECT" > "$TEST_SKILL_DIR/run/spawn.team__alice"
+}
+
+assert_fake_herdr_read() {
+  [ "$(cat "$FAKE_HERDR_LOG")" = "pane read $FAKE_HERDR_PANE" ]
 }
 
 # --- set <mode> ---
@@ -355,10 +402,70 @@ EOF
   [ "$(json_value "$output" '$.deliverable')" = "1" ]
   [ "$(json_value "$output" '$.sessionId')" = "codex-session-1" ]
   [ "$(json_value "$output" '$.seats[0].liveness')" = "alive" ]
+  [ "$(json_value "$output" '$.seats[0].paneLiveness')" = "unknown" ]
 
   kill "$bpid" 2>/dev/null || true
   wait "$bpid" 2>/dev/null || true
   trap - EXIT
+}
+
+@test "delivery status JSON: crashed Codex pane vetoes deliverable" {
+  setup_fake_codex_pane "$BATS_TEST_DIRNAME/fixtures/pane-liveness/crashed-pane.txt"
+
+  run bash "$SCRIPTS/delivery.sh" status codex "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.seats[0].paneLiveness')" = "crashed" ]
+  [ "$(json_value "$output" '$.seats[0].deliverable')" = "0" ]
+  [ "$(json_value "$output" '$.deliverable')" = "0" ]
+  [ "$(json_value "$output" '$.seats[0].evidence[3].source')" = "pane" ]
+  [ "$(json_value "$output" '$.seats[0].evidence[3].state')" = "crashed" ]
+  [ "$(json_value "$output" '$.paneLiveness')" = "" ]
+  assert_fake_herdr_read
+}
+
+@test "delivery status JSON: queued Codex pane remains live and deliverable" {
+  setup_fake_codex_pane "$BATS_TEST_DIRNAME/fixtures/pane-liveness/queued-live-pane.txt"
+
+  run bash "$SCRIPTS/delivery.sh" status codex "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.seats[0].paneLiveness')" = "live" ]
+  [ "$(json_value "$output" '$.seats[0].deliverable')" = "1" ]
+  [ "$(json_value "$output" '$.deliverable')" = "1" ]
+  assert_fake_herdr_read
+}
+
+@test "delivery status JSON: missing Codex placement stays unknown without a veto" {
+  setup_fake_codex_pane "$BATS_TEST_DIRNAME/fixtures/pane-liveness/crashed-pane.txt"
+  rm "$TEST_SKILL_DIR/run/spawn.team__alice"
+
+  run bash "$SCRIPTS/delivery.sh" status codex "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.seats[0].paneLiveness')" = "unknown" ]
+  [ "$(json_value "$output" '$.seats[0].deliverable')" = "1" ]
+  [ "$(json_value "$output" '$.deliverable')" = "1" ]
+  [ ! -s "$FAKE_HERDR_LOG" ]
+}
+
+@test "delivery status JSON: quiet Codex pane is unknown without vetoing deliverable" {
+  setup_fake_codex_pane "$BATS_TEST_DIRNAME/fixtures/pane-liveness/quiet-pane.txt"
+
+  run bash "$SCRIPTS/delivery.sh" status codex "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.seats[0].paneLiveness')" = "unknown" ]
+  [ "$(json_value "$output" '$.seats[0].deliverable')" = "1" ]
+  [ "$(json_value "$output" '$.deliverable')" = "1" ]
+  assert_fake_herdr_read
+}
+
+@test "delivery status JSON: quoted crash terms do not crash a live Codex pane" {
+  setup_fake_codex_pane "$BATS_TEST_DIRNAME/fixtures/pane-liveness/quoted-crash-terms-pane.txt"
+
+  run bash "$SCRIPTS/delivery.sh" status codex "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.seats[0].paneLiveness')" = "live" ]
+  [ "$(json_value "$output" '$.seats[0].deliverable')" = "1" ]
+  [ "$(json_value "$output" '$.deliverable')" = "1" ]
+  assert_fake_herdr_read
 }
 
 @test "delivery status JSON: stale Claude readiness is not a live receiver" {
