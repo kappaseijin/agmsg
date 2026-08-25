@@ -344,6 +344,23 @@ agmsg_runtime_lock_release() {
     >/dev/null 2>&1 || true
 }
 
+# Delete a runtime lock only when it is still owned by the caller.  The
+# owner-conditional DELETE and its result check are one database operation, so
+# release does not have a verify-then-delete window and a database error cannot
+# be mistaken for a successful cleanup.
+agmsg_runtime_lock_release_owned() {
+  local resource_sql result
+  case "$2" in *[!0-9]*|'') return 1 ;; esac
+  resource_sql="$(_agmsg_runtime_lock_resource_sql "$1")"
+  result="$(
+    set -o pipefail
+    agmsg_sqlite "$(_agmsg_runtime_db_path)" \
+      "DELETE FROM locks WHERE resource = '$resource_sql' AND owner_pid = $2; SELECT changes();" \
+      2>/dev/null | tr -d '\r'
+  )" || return 1
+  [ "$result" = "1" ]
+}
+
 # In-memory sqlite for JSON parsing / scalar lookups whose stdout is captured in
 # a command substitution ($(...)). On Windows, sqlite3.exe writes stdout in text
 # mode and turns every \n into \r\n; command substitution strips the trailing \n

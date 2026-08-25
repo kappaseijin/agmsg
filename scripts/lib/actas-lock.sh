@@ -161,8 +161,7 @@ actas_lock_gate_acquire() {
 actas_lock_gate_release() {
   local lock_path="$1" resource
   resource="$(actas_lock_gate_resource "$lock_path")"
-  agmsg_runtime_lock_verify "$resource" "$$" || return 1
-  agmsg_runtime_lock_release "$resource" "$$" || return 1
+  agmsg_runtime_lock_release_owned "$resource" "$$" || return 1
 }
 
 # Internal: attempt one atomic claim. Echoes "ok" on success, "held:<sid>"
