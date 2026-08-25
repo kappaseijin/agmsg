@@ -799,11 +799,11 @@ while true; do
         DESPAWN_TARGET="$to"
         continue
       fi
-      if ! printf '%s | %s | %s → %s | %s\n' "$ts" "$team" "$from" "$to" "$body"; then
-        if ! _watch_release_gate; then
+      if ! ( printf '%s | %s | %s → %s | %s\n' "$ts" "$team" "$from" "$to" "$body" ); then
+        _watch_release_gate || {
           cleanup
           exit 1
-        fi
+        }
         cleanup
         exit 0
       fi
