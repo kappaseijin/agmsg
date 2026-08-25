@@ -270,7 +270,7 @@ agmsg_delivery_capability_claude_watcher() {
 # session it belongs to. Neither half can establish delivery by itself.
 agmsg_delivery_capability_codex_bridge() {
   local team="$1" name="$2" project="$3" base pidfile metafile pid
-  local meta_pid meta_project meta_type meta_team meta_name record_type binding=0
+  local meta_pid meta_project meta_type meta_identities record_type binding=0
   AGMSG_CAP_CODEX_RUNTIME="unknown"
   AGMSG_CAP_CODEX_LIVENESS="unknown"
   AGMSG_CAP_CODEX_DELIVERABLE="unknown"
@@ -324,13 +324,11 @@ agmsg_delivery_capability_codex_bridge() {
   meta_pid="$(agmsg_delivery_capability_file_field "$metafile" pid)"
   meta_project="$(agmsg_delivery_capability_file_field "$metafile" project)"
   meta_type="$(agmsg_delivery_capability_file_field "$metafile" type)"
-  meta_team="$(agmsg_delivery_capability_file_field "$metafile" team)"
-  meta_name="$(agmsg_delivery_capability_file_field "$metafile" name)"
+  meta_identities="$(agmsg_delivery_capability_file_field "$metafile" identities)"
   if [ "$meta_pid" != "$pid" ] \
       || ! agmsg_delivery_capability_same_project "$project" "$meta_project" \
       || [ "$meta_type" != "codex" ] \
-      || [ "$meta_team" != "$team" ] \
-      || [ "$meta_name" != "$name" ]; then
+      || [ "$meta_identities" != "$team/$name" ]; then
     AGMSG_CAP_CODEX_RUNTIME="stale"
     AGMSG_CAP_CODEX_LIVENESS="stale"
     AGMSG_CAP_CODEX_DELIVERABLE="false"
