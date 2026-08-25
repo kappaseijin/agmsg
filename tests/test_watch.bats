@@ -26,7 +26,7 @@ teardown() {
 # Returns once the watcher has been stopped.
 run_watcher_for() {
   local sid="$1" out="$2" secs="$3"
-  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "$sid" "$PROJ" claude-code >"$out" 2>/dev/null 3>&- 4>&- &
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "$sid" "$PROJ" claude-code >"$out" 2>"$out.err" 3>&- 4>&- &
   local pid=$!
   sleep "$secs"
   kill "$pid" 2>/dev/null || true
@@ -62,27 +62,33 @@ _stop_watcher() {
 # Stop once <file> exists.
 run_watcher_until_file() {
   local sid="$1" out="$2" file="$3" pid rc=0
-  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "$sid" "$PROJ" claude-code >"$out" 2>/dev/null 3>&- &
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "$sid" "$PROJ" claude-code >"$out" 2>"$out.err" 3>&- &
   pid=$!
   wait_for_file "$file" || rc=1
   _stop_watcher "$pid"
+  if [ "$rc" -ne 0 ]; then
+    cat "$out.err" >&2
+  fi
   return "$rc"
 }
 
 # Stop once <out> contains <needle>.
 run_watcher_until_contains() {
   local sid="$1" out="$2" needle="$3" pid rc=0
-  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "$sid" "$PROJ" claude-code >"$out" 2>/dev/null 3>&- &
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "$sid" "$PROJ" claude-code >"$out" 2>"$out.err" 3>&- &
   pid=$!
   wait_for_file_contains "$out" "$needle" || rc=1
   _stop_watcher "$pid"
+  if [ "$rc" -ne 0 ]; then
+    cat "$out.err" >&2
+  fi
   return "$rc"
 }
 
 run_watcher_until() {
   local sid="$1" out="$2" needle="$3" before
   before=$(_read_cursor team alice 2>/dev/null || echo 0)
-  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "$sid" "$PROJ" claude-code >"$out" 2>/dev/null 3>&- 4>&- &
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "$sid" "$PROJ" claude-code >"$out" 2>"$out.err" 3>&- 4>&- &
   local pid=$!
   _wait_for_file_contains "$out" "$needle"
   local found=$?
@@ -97,6 +103,9 @@ run_watcher_until() {
   fi
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
+  if [ "$found" -ne 0 ]; then
+    cat "$out.err" >&2
+  fi
   return "$found"
 }
 
@@ -366,18 +375,48 @@ _wait_for_file_contains() {
   local sid="sess-stdout-closed"
   local iid="$(_iid "$sid")"
   local pf="$TEST_SKILL_DIR/run/watch.$iid.pid"
+  local lock_path="$TEST_SKILL_DIR/run/actas.team__alice.session"
+  local holder_ready="$TEST_SKILL_DIR/gate-holder.ready"
+  local holder_release="$TEST_SKILL_DIR/gate-holder.release"
+  local err="$TEST_SKILL_DIR/closed-stdout.err"
+
+  SKILL_DIR="$TEST_SKILL_DIR" bash -c '
+    . "$SKILL_DIR/scripts/lib/actas-lock.sh"
+    actas_lock_gate_acquire "$1" || exit 1
+    : > "$2"
+    while [ ! -e "$3" ]; do sleep 0.05; done
+    actas_lock_gate_release "$1"
+  ' _ "$lock_path" "$holder_ready" "$holder_release" &
+  local holder=$!
+  if ! wait_for_file "$holder_ready"; then
+    kill "$holder" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+    false
+  fi
 
   AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "$sid" "$PROJ" claude-code \
-    1>&- 2>/dev/null 3>&- 4>&- &
+    1>&- 2>"$err" 3>&- 4>&- &
   local w=$!
 
   _wait_for_file "$pf"
   [ -f "$pf" ]
   local initial="$(_read_cursor team alice)"
 
+  if ! wait_for_file_contains "$err" "ownership_gate_unavailable"; then
+    kill "$w" 2>/dev/null || true
+    wait "$w" 2>/dev/null || true
+    : > "$holder_release"
+    wait "$holder" 2>/dev/null || true
+    cat "$err" >&2
+    false
+  fi
+
   bash "$SCRIPTS/send.sh" team bob alice "M-after-closed-stdout" >/dev/null
+  : > "$holder_release"
+  wait "$holder" 2>/dev/null || true
 
   _wait_for_missing "$pf" || {
+    cat "$err" >&2
     kill "$w" 2>/dev/null || true
     wait "$w" 2>/dev/null || true
     false

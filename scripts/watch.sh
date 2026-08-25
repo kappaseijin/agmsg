@@ -371,7 +371,18 @@ fi
 # subscription is resolved; removed on exit so the file is present iff a live
 # watcher is currently receiving for that role.
 READY_FILES=""
+GATE_UNAVAILABLE_REPORTED=""
+WATCH_HELD_GATE_PATH=""
+WATCH_HELD_GATE_LABEL=""
 cleanup() {
+  # A signal can arrive while the poll owns its delivery gate. Release it before
+  # removing watcher metadata; a failed release remains fail-closed and the
+  # dead PID can be reclaimed by the next writer's CAS.
+  if [ -n "$WATCH_HELD_GATE_PATH" ]; then
+    if ! _watch_release_gate; then
+      :
+    fi
+  fi
   # EXIT only removes the pidfile if it still records our pid. A successor
   # watcher (Monitor re-invoked for the same session_id) overwrites $PIDFILE
   # with its own pid before signalling us, so this read sees the successor's
@@ -567,6 +578,30 @@ _held_elsewhere_without() {
   printf '%s' "$out"
 }
 
+_watch_gate_unavailable_once() {
+  local label="$1" line
+  while IFS= read -r line; do
+    [ "$line" = "$label" ] && return 0
+  done <<< "$GATE_UNAVAILABLE_REPORTED"
+  GATE_UNAVAILABLE_REPORTED="${GATE_UNAVAILABLE_REPORTED:+$GATE_UNAVAILABLE_REPORTED$'\n'}$label"
+  watch_log "$label: ownership_gate_unavailable; skipping fetch, output, consume, and receipt."
+}
+
+_watch_release_gate() {
+  local lock_path="$WATCH_HELD_GATE_PATH"
+  local label="$WATCH_HELD_GATE_LABEL"
+  [ -n "$lock_path" ] || return 0
+  # Clear before the operation so an EXIT trap does not perform a second
+  # release after this path has already made its best bounded attempt.
+  WATCH_HELD_GATE_PATH=""
+  WATCH_HELD_GATE_LABEL=""
+  if actas_lock_gate_release "$lock_path"; then
+    return 0
+  fi
+  watch_log "${label:-$lock_path}: ownership gate release failed; watcher is stopping."
+  return 1
+}
+
 while true; do
   # The installation changed under us (#684). Say it on STDOUT, not stderr:
   # stdout is the delivery channel the session is reading, and this watcher's
@@ -606,6 +641,32 @@ while true; do
     if [ -z "$ACTIVE_NAME" ] && [ -e "$(agmsg_ready_path "$pair_team" "$pair_agent")" ]; then
       continue
     fi
+    # Per team: with a store per team, "one team has no store yet" is a
+    # normal state, and a single check outside this loop would silence
+    # delivery for every OTHER team as well.
+    # Skipped, and said once. The same "stop quietly" shape as the guard above
+    # (#692): a team with no store yet is a normal state, but a team that
+    # silently stops being delivered every cycle is not distinguishable from
+    # one that is fine. Once per pair per process -- a line every poll interval
+    # would bury the log this exists to make readable.
+    if ! storage_store_exists "$pair_team"; then
+      case " $NO_STORE_REPORTED " in
+        *" $pair_team:$pair_agent "*) ;;
+        *) NO_STORE_REPORTED="$NO_STORE_REPORTED $pair_team:$pair_agent"
+           watch_log "${pair_team}/${pair_agent}: no store yet; skipping this pair until one exists." ;;
+      esac
+      continue
+    fi
+    READ_CURSOR="$(storage_read_cursor_get "$pair_team" "$pair_agent" 2>/dev/null || true)"
+    [ -n "$READ_CURSOR" ] || READ_CURSOR=0
+    GATE_LOCK_PATH="$(actas_lock_path "$pair_team" "$pair_agent")"
+    GATE_LABEL="${pair_team}/${pair_agent}"
+    if ! actas_lock_gate_try_acquire "$GATE_LOCK_PATH"; then
+      _watch_gate_unavailable_once "$GATE_LABEL"
+      continue
+    fi
+    WATCH_HELD_GATE_PATH="$GATE_LOCK_PATH"
+    WATCH_HELD_GATE_LABEL="$GATE_LABEL"
     # Ownership is re-read every cycle, because it can change under a running
     # watcher and nothing else notices. The subscription set and the startup
     # lock check both happen once, above; a session that claims this role
@@ -622,10 +683,19 @@ while true; do
     # Only the lock file is read here, not the whole subscription set: losing a
     # pair is the half a running process can detect for the price of a file
     # read. Gaining one is the caller's job, at the point it creates the team.
-    pair_state="$(actas_lock_state "$pair_team" "$pair_agent" "$SESSION_ID" 2>/dev/null || echo free)"
+    if ! pair_state="$(actas_lock_state "$pair_team" "$pair_agent" "$SESSION_ID")"; then
+      watch_log "$GATE_LABEL: ownership state unavailable; skipping this poll."
+      if ! _watch_release_gate; then
+        exit 1
+      fi
+      continue
+    fi
     case "$pair_state" in
       other:*)
         if [ -n "$ACTIVE_NAME" ]; then
+          if ! _watch_release_gate; then
+            exit 1
+          fi
           # This watcher exists to serve exactly this role and no longer owns
           # it. Stop -- and say so: stderr is the only place a reason survives,
           # and a watcher that ends without one is indistinguishable from one
@@ -654,9 +724,12 @@ while true; do
 }${pair_team}/${pair_agent}"
           echo "agmsg watch: ${pair_team}/${pair_agent} was claimed by session ${pair_state#other:}; not serving it while they hold it." >&2
         fi
+        if ! _watch_release_gate; then
+          exit 1
+        fi
         continue
         ;;
-      *)
+      free|mine)
         # Free or ours. If we had stepped aside for it, say that we are taking
         # it back -- otherwise the log shows a role leaving and never returning,
         # which reads as a permanent drop.
@@ -665,25 +738,14 @@ while true; do
           echo "agmsg watch: ${pair_team}/${pair_agent} is unheld again; serving it here." >&2
         fi
         ;;
+      *)
+        watch_log "$GATE_LABEL: ownership state '$pair_state' is not usable; skipping this poll."
+        if ! _watch_release_gate; then
+          exit 1
+        fi
+        continue
+        ;;
     esac
-    # Per team: with a store per team, "one team has no store yet" is a
-    # normal state, and a single check outside this loop would silence
-    # delivery for every OTHER team as well.
-    # Skipped, and said once. The same "stop quietly" shape as the guard above
-    # (#692): a team with no store yet is a normal state, but a team that
-    # silently stops being delivered every cycle is not distinguishable from
-    # one that is fine. Once per pair per process -- a line every poll interval
-    # would bury the log this exists to make readable.
-    if ! storage_store_exists "$pair_team"; then
-      case " $NO_STORE_REPORTED " in
-        *" $pair_team:$pair_agent "*) ;;
-        *) NO_STORE_REPORTED="$NO_STORE_REPORTED $pair_team:$pair_agent"
-           watch_log "${pair_team}/${pair_agent}: no store yet; skipping this pair until one exists." ;;
-      esac
-      continue
-    fi
-    READ_CURSOR="$(storage_read_cursor_get "$pair_team" "$pair_agent" 2>/dev/null || true)"
-    [ -n "$READ_CURSOR" ] || READ_CURSOR=0
     OUT="$(storage_watch_after "$READ_CURSOR" "$pair_team:$pair_agent" 2>/dev/null || true)"
     if [ -n "$OUT" ]; then
     # The quote is held in a variable, never written as \' in the pattern: bash 3.2
@@ -737,7 +799,11 @@ while true; do
         DESPAWN_TARGET="$to"
         continue
       fi
-      if ! printf '%s | %s | %s → %s | %s\n' "$ts" "$team" "$from" "$to" "$body"; then
+      if ! ( printf '%s | %s | %s → %s | %s\n' "$ts" "$team" "$from" "$to" "$body" ); then
+        _watch_release_gate || {
+          cleanup
+          exit 1
+        }
         cleanup
         exit 0
       fi
@@ -765,6 +831,9 @@ while true; do
       placed_id=""
       spawn_rec="$(agmsg_spawn_path "$pair_team" "$DESPAWN_TARGET" 2>/dev/null || true)"
       [ -f "$spawn_rec" ] && IFS=$'\t' read -r placed_id _ _ < "$spawn_rec"
+      if ! _watch_release_gate; then
+        watch_log "$GATE_LABEL: continuing despawn role drop after gate release failure."
+      fi
       "$SCRIPT_DIR/reset.sh" "$PROJECT_PATH" "$AGENT_TYPE" "$DESPAWN_TARGET" "$SESSION_ID" >/dev/null 2>&1 || true
       if [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then
         tmux kill-pane -t "$TMUX_PANE" 2>/dev/null || true
@@ -777,6 +846,9 @@ while true; do
       fi
       exit 0
     fi
+    fi
+    if ! _watch_release_gate; then
+      exit 1
     fi
   done <<< "$PAIRS"
 

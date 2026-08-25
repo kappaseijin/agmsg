@@ -36,9 +36,10 @@ teardown() {
   # the developer's environment would inherit the REAL pane id and close the
   # session running the tests. With both empty, the handler takes the "close
   # manually" branch — role-drop is still asserted.
+  local watch_err="$TEST_SKILL_DIR/despawn-graceful.err"
   AGMSG_WATCH_INTERVAL=1 env -u TMUX_PANE -u HERDR_PANE_ID -u HERDR_ENV \
     bash "$SCRIPTS/watch.sh" sess-m "$PROJ" claude-code alice \
-    >/dev/null 2>&1 3>&- &
+    >"$TEST_SKILL_DIR/despawn-graceful.out" 2>"$watch_err" 3>&- &
   local wpid=$! i
   # Wait for the watcher to attach (it claims the lock + writes the ready sentinel).
   for i in 1 2 3 4 5 6 7 8 9 10; do [ -e "$RUN/ready.team__alice" ] && break; sleep 0.5; done
@@ -46,6 +47,10 @@ teardown() {
   [ -f "$RUN/actas.team__alice.session" ]
 
   run bash "$SCRIPTS/despawn.sh" team leader alice --timeout 10
+  if [ "$status" -ne 0 ]; then
+    cat "$watch_err" >&2
+    false
+  fi
   [ "$status" -eq 0 ]
   [[ "$output" == *"status=ok"* ]]
 
@@ -79,13 +84,18 @@ _control_row_exists_for_alice() {
   bash "$SCRIPTS/join.sh" team leader claude-code "$PROJ" >/dev/null
   setup_live_owner "$RUN" sess-m
 
+  local watch_err="$TEST_SKILL_DIR/despawn-control.err"
   AGMSG_WATCH_INTERVAL=1 env -u TMUX_PANE bash "$SCRIPTS/watch.sh" sess-m "$PROJ" claude-code alice \
-    >/dev/null 2>&1 3>&- &
+    >"$TEST_SKILL_DIR/despawn-control.out" 2>"$watch_err" 3>&- &
   local wpid=$! i
   for i in 1 2 3 4 5 6 7 8 9 10; do [ -e "$RUN/ready.team__alice" ] && break; sleep 0.5; done
   [ -e "$RUN/ready.team__alice" ]
 
   run bash "$SCRIPTS/despawn.sh" team leader alice --timeout 10
+  if [ "$status" -ne 0 ]; then
+    cat "$watch_err" >&2
+    false
+  fi
   [ "$status" -eq 0 ]
 
   # The ctrl:despawn row itself must not be left permanently unread — a
