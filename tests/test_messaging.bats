@@ -13,6 +13,38 @@ teardown() {
   teardown_test_env
 }
 
+seed_invalid_utf8_display_events() {
+  bash -c 'source "$1/lib/storage.sh"; agmsg_storage_load; storage_init testteam >/dev/null' _ "$SCRIPTS"
+  sqlite3 -bail "$DBPATH" <<'SQL'
+INSERT INTO events(type,id,team,from_agent,to_agent,body,at) VALUES
+  ('message_sent','utf8-before','testteam','alice','bob','before-valid','2026-08-25T00:00:01Z'),
+  ('message_sent','utf8-invalid','testteam','alice','bob',CAST(X'E696B02048454144208082' AS TEXT),'2026-08-25T00:00:02Z'),
+  ('message_sent','utf8-after','testteam','alice','bob','after-valid','2026-08-25T00:00:03Z');
+SQL
+}
+
+seed_valid_utf8_display_event() {
+  bash -c 'source "$1/lib/storage.sh"; agmsg_storage_load; storage_init testteam >/dev/null' _ "$SCRIPTS"
+  sqlite3 -bail "$DBPATH" <<'SQL'
+INSERT INTO events(type,id,team,from_agent,to_agent,body,at)
+VALUES ('message_sent','utf8-valid','testteam','alice','bob','正常な本文','2026-08-25T00:00:01Z');
+SQL
+}
+
+assert_display_contains() {
+  case "$1" in
+    *"$2"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+assert_display_lacks() {
+  case "$1" in
+    *"$2"*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
 # --- send.sh ---
 
 @test "send: delivers a message" {
@@ -26,6 +58,46 @@ teardown() {
 @test "send: fails without required args" {
   run bash "$SCRIPTS/send.sh"
   [ "$status" -ne 0 ]
+}
+
+@test "inbox: replaces malformed UTF-8 while preserving surrounding rows" {
+  seed_invalid_utf8_display_events
+
+  run bash "$SCRIPTS/inbox.sh" testteam bob
+  [ "$status" -eq 0 ]
+  assert_display_contains "$output" "before-valid"
+  assert_display_contains "$output" "HEAD"
+  assert_display_contains "$output" "after-valid"
+  local replacement=$'\357\277\275'
+  assert_display_contains "$output" "${replacement}${replacement}"
+  [ "$(sqlite3 "$DBPATH" "SELECT hex(body) FROM events WHERE id='utf8-invalid';")" = "E696B02048454144208082" ]
+}
+
+@test "history: replaces malformed UTF-8 while preserving surrounding rows" {
+  seed_invalid_utf8_display_events
+
+  run bash "$SCRIPTS/history.sh" testteam
+  [ "$status" -eq 0 ]
+  assert_display_contains "$output" "before-valid"
+  assert_display_contains "$output" "HEAD"
+  assert_display_contains "$output" "after-valid"
+  local replacement=$'\357\277\275'
+  assert_display_contains "$output" "${replacement}${replacement}"
+}
+
+@test "display sanitizer: valid UTF-8 remains unchanged in inbox and history" {
+  seed_valid_utf8_display_event
+  local replacement=$'\357\277\275'
+
+  run bash "$SCRIPTS/inbox.sh" testteam bob
+  [ "$status" -eq 0 ]
+  assert_display_contains "$output" "正常な本文"
+  assert_display_lacks "$output" "$replacement"
+
+  run bash "$SCRIPTS/history.sh" testteam
+  [ "$status" -eq 0 ]
+  assert_display_contains "$output" "正常な本文"
+  assert_display_lacks "$output" "$replacement"
 }
 
 # --- send.sh: roster validation (#355) ---
