@@ -18,6 +18,11 @@
 
 # --- helpers ---------------------------------------------------------------
 
+if ! declare -F agmsg_sanitize_utf8 >/dev/null 2>&1; then
+  # shellcheck disable=SC1091
+  . "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib" && pwd)/utf8.sh"
+fi
+
 _sqlite_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # <team> is the storage selector (see agmsg_db_path). Passed explicitly rather
 # than held in a driver-wide variable: these run inside command substitutions,
@@ -68,6 +73,13 @@ _sqlite_data() {
 # interactive prompt, and the point of this path is that nobody is watching.
 _sqlite_data_stdin() {
   ( set -o pipefail; printf '%s\n' "$2" | agmsg_sqlite -batch "$(_sqlite_db "$1")" | LC_ALL=C tr -d '\r' )
+}
+
+# Display-only JSONL boundary. Storage transport, export/import, and sync keep
+# the byte-preserving _sqlite_data path; only the two user-facing readers need
+# malformed text converted before their second SQLite JSON parse.
+_sqlite_display_data() {
+  ( set -o pipefail; agmsg_sqlite "$(_sqlite_db "$1")" "$2" | LC_ALL=C tr -d '\r' | agmsg_sanitize_utf8 )
 }
 
 # IN (...) list of "team:agent" pairs.
@@ -369,7 +381,7 @@ storage_list_unread() {
   case "$limit" in ''|*[!0-9]*) limit="" ;; esac
   storage_init "$team" >/dev/null
   local tl al; tl="$(_sqlite_lit "$team")"; al="$(_sqlite_lit "$agent")"
-  _sqlite_data "$team" "
+  _sqlite_display_data "$team" "
     SELECT j FROM (
       SELECT json_object('type','message_sent','id',e.id,'team',e.team,
                'from',e.from_agent,'to',e.to_agent,'body',e.body,'at',e.at) AS j,
@@ -555,7 +567,7 @@ storage_history() {
   # --limit returns the most RECENT N (inner DESC + LIMIT), re-sorted to
   # chronological order for output — the intuitive "recent history" semantics,
   # not the oldest N.
-  _sqlite_data "$team" "
+  _sqlite_display_data "$team" "
     SELECT j FROM (
       SELECT j, ts, src, ord FROM (
         SELECT json_object('type','message_sent','id',id,'team',team,'from',from_agent,
