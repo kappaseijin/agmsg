@@ -1245,6 +1245,50 @@ The message store path resolves as **`AGMSG_STORAGE_PATH` (env) > built-in defau
 AGMSG_STORAGE_PATH=/tmp/agmsg-sandbox ./scripts/send.sh myteam alice bob "hi"
 ```
 
+### Repairing invalid UTF-8 already in a store
+
+Use the repair command for the selected `<team>` when a stopped agent's `history.sh` or `inbox.sh` fails
+with malformed-JSON or invalid-UTF-8 errors. The display sanitizer keeps future
+reads available, but it does not rewrite an already-corrupt database row.
+
+Stop the agents using the store before changing it. The command is SQLite-only
+and resolves the database from `AGMSG_STORAGE_PATH` (or the installed skill's
+`db/messages.db` when the variable is unset):
+
+```bash
+SKILL=~/.agents/skills/agmsg
+
+# Read-only: inspect both the events and legacy messages tables.
+"$SKILL/scripts/repair-invalid-utf8.sh" --check <team>
+
+# Explicit write: choose a backup path that does not exist yet.
+"$SKILL/scripts/repair-invalid-utf8.sh" --apply <team> \
+  --backup /path/to/new/messages.db.backup
+```
+
+`--check` returns zero when the scan completed; inspect
+`repairable_count=0 unsupported_count=0` rather than using the exit code alone
+to decide that the store is clean. It never initializes, updates, or marks a
+message read. `--apply` first requires a new backup file and a successful
+SQLite `integrity_check`, then repairs only invalid `body` fields inside a
+`BEGIN IMMEDIATE` transaction. It uses the original primary key and original
+body bytes as an update guard. Invalid bytes in team, sender, recipient, id,
+or timestamp fields are reported as `unsupported_corruption` and cause a
+no-write failure.
+
+After a successful apply, run `--check` again and use the read-only history
+command to verify the result:
+
+```bash
+"$SKILL/scripts/repair-invalid-utf8.sh" --check <team>
+"$SKILL/scripts/history.sh" <team> [agent_id] [limit]
+```
+
+Do not use `inbox.sh` as the production post-check: it changes read/receipt
+state. If apply, an integrity check, or the post-check fails, stop and restore
+the saved backup manually while the agents remain stopped. The repair command
+does not perform an automatic production rollback.
+
 ### Sandbox compatibility (Claude Code)
 
 Claude Code's sandbox restricts filesystem writes to the project directory. In `monitor` mode, `watch.sh` runs inside the sandbox and needs to write pidfiles and SQLite WAL files under `~/.agents/skills/agmsg/`. If you have sandboxing enabled, add an allowlist entry to your settings:

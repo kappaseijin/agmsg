@@ -538,6 +538,34 @@ Windows/MSYS2 の挙動は未検証の既知の制約である。
 AGMSG_STORAGE_PATH=/tmp/agmsg-sandbox ./scripts/send.sh myteam alice bob "hi"
 ```
 
+### 既存ストアの不正UTF-8修復
+
+指定した `<team>` の停止中エージェントで `history.sh` または `inbox.sh` が malformed JSON や不正UTF-8で失敗する場合は、修復コマンドを使う。表示用 sanitizer は以後の読み出しを継続可能にするが、すでに壊れたDB行は書き換えない。
+
+対象ストアを使うエージェントを停止してから実行する。このコマンドはSQLite専用で、`AGMSG_STORAGE_PATH`（未設定ならインストール済みスキルの `db/messages.db`）からDBを解決する。
+
+```bash
+SKILL=~/.agents/skills/agmsg
+
+# 読み取り専用: events と legacy messages の両テーブルを検査
+"$SKILL/scripts/repair-invalid-utf8.sh" --check <team>
+
+# 明示的な書き込み: まだ存在しないバックアップ先を指定
+"$SKILL/scripts/repair-invalid-utf8.sh" --apply <team> \
+  --backup /path/to/new/messages.db.backup
+```
+
+`--check` は検査が完了したときに0を返す。ストアが正常かどうかは終了コードだけで判断せず、`repairable_count=0 unsupported_count=0` を確認する。DBの初期化・更新・既読化は行わない。`--apply` は新規バックアップ先とSQLiteの `integrity_check` 成功を先に要求し、その後 `BEGIN IMMEDIATE` トランザクション内で不正な `body` だけを修復する。更新には元の主キーと元のbody bytesを同時にガードとして使う。team、sender、recipient、id、timestampなどbody以外の不正は `unsupported_corruption` として報告し、書き込みを行わず失敗する。
+
+apply成功後は、もう一度 `--check` を実行し、読み取り専用の履歴コマンドで確認する。
+
+```bash
+"$SKILL/scripts/repair-invalid-utf8.sh" --check <team>
+"$SKILL/scripts/history.sh" <team> [agent_id] [limit]
+```
+
+本番DBの事後確認に `inbox.sh` は使わない。既読・receipt stateを変更するためである。apply、integrity check、事後確認のいずれかが失敗したらエージェントを停止したまま作業を止め、保存したバックアップから人間が手動で復元する。修復コマンドは本番DBを自動rollbackしない。
+
 ### サンドボックス互換性（Claude Code）
 
 Claude Codeのサンドボックスはファイルシステムへの書き込みをプロジェクトディレクトリに制限する。`monitor` モードでは、`watch.sh` はサンドボックス内で動作し、`~/.agents/skills/agmsg/` 配下にpidfileとSQLite WALファイルを書き込む必要がある。サンドボックスを有効にしている場合は、設定にallowlistエントリを追加すること:
