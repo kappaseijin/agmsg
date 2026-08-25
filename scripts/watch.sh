@@ -475,6 +475,23 @@ _install_changed() {
 
 # Resolve the project-scoped or active-name all-team subscription and apply the
 # same lock/claim policy used by the actas pre-flight.
+RUNTIME_DB="$(agmsg_runtime_db_path)" || exit $?
+
+watch_check_existing_db() {
+  local db_path="$1"
+  [ -f "$db_path" ] || return 0
+  if agmsg_sqlite "$db_path" "SELECT name FROM sqlite_master LIMIT 1;" >/dev/null 2>&1; then
+    return 0
+  fi
+  watch_log "ERROR: cannot open message DB $db_path"
+  return 1
+}
+
+# Check the shared runtime store before claim can initialize or use it. Do not
+# reinterpret a later subscription failure: ownership, roster, and gate errors
+# have their own contracts and must remain visible to their callers.
+watch_check_existing_db "$RUNTIME_DB" || exit $?
+
 PAIRS="$(agmsg_subscription_pairs "$PROJECT_PATH" "$AGENT_TYPE" "$SESSION_ID" "$ACTIVE_NAME" claim)" || exit 1
 
 # The shared helper above applies the actas lock policy: a broad watcher skips
@@ -494,21 +511,11 @@ fi
 # consumed independently so a broad watcher cannot advance one role merely by
 # delivering another role's traffic.
 
-# DB-open healthcheck (#197). The main loop guards every query with
-# `2>/dev/null || true`, so when sqlite3 cannot open the store the watcher keeps
-# spinning and silently delivers nothing — a silent outage. The native
-# sqlite3.exe / Git Bash path mismatch behind #197 is one trigger (now fixed in
-# agmsg_db_path), but permissions, a missing binary, or a corrupt file fail the
-# same way. A *missing* DB file is normal (no messages sent yet), so only flag
-# the case where the file exists but a schema read cannot run: emit one line
-# on stdout (the Monitor event stream) and exit, turning the silent failure into
-# a visible one. Done before the ready sentinel so we never signal "ready" for a
-# watcher that cannot read the store. A constant-only query such as `SELECT 1`
-# is deliberately not enough: SQLite 3.45 accepts that query against a file
-# with no valid database header, while reading sqlite_master rejects it.
-# Resolve and check every distinct team in the subscription. A missing store
-# remains normal, but an existing unreadable store must prevent readiness for
-# the whole multi-team watcher rather than silently dropping one team.
+# The shared runtime DB was checked before subscription claim above. Keep the
+# partitioned team-store healthcheck too: a missing store remains normal, but an
+# existing unreadable store must prevent readiness for the whole watcher rather
+# than silently dropping one team. The same helper keeps the diagnostic on
+# stderr and limits it to one line per failing check.
 HEALTH_TEAMS=""
 while IFS=$'\t' read -r _health_team _health_agent; do
   [ -n "$_health_team" ] || continue
@@ -519,10 +526,7 @@ while IFS=$'\t' read -r _health_team _health_agent; do
   [ "$_health_seen" -eq 0 ] || continue
   HEALTH_TEAMS="$(printf '%s\n%s' "$HEALTH_TEAMS" "$_health_team")"
   DB="$(agmsg_db_path "$_health_team")" || exit 1
-  if [ -f "$DB" ] && ! agmsg_sqlite "$DB" "SELECT name FROM sqlite_master LIMIT 1;" >/dev/null 2>&1; then
-    echo "ERROR: cannot open message DB $DB"
-    exit 1
-  fi
+  watch_check_existing_db "$DB" || exit $?
 done <<< "$PAIRS"
 
 # Signal readiness. Once the subscription is resolved and the watcher is live,

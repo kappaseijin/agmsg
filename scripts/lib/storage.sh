@@ -148,6 +148,11 @@ EOF
 # let two teams in the same project take the same lock.
 _agmsg_runtime_db_path() { _agmsg_db_file; }
 
+# Public facade for callers that need the shared runtime store without a team
+# selector. Keep path resolution in the internal helper so AGMSG_STORAGE_PATH
+# and Windows path conversion remain defined in one place.
+agmsg_runtime_db_path() { _agmsg_runtime_db_path; }
+
 # Join a store-relative path onto the storage directory. Defaults to the
 # pre-split shared file, which is what the runtime store still is.
 #
