@@ -202,6 +202,10 @@ actas_lock_gate_try_acquire() {
     if [ "$rc" -eq 0 ]; then
       owner="$ACTAS_LOCK_GATE_LAST_OWNER"
       if [ "$owner" = "$$" ]; then
+        if ! _actas_lock_gate_test_barrier; then
+          actas_lock_gate_release "$lock_path" || return 1
+          return 1
+        fi
         return 0
       fi
       _actas_lock_gate_diagnostic try-acquire "$resource" "$owner" \
@@ -217,6 +221,20 @@ actas_lock_gate_try_acquire() {
     attempts=$((attempts + 1))
   done
   return 1
+}
+
+# Test-only synchronization point. It is intentionally in the shared gate
+# primitive so a test can stop a real watcher immediately after it owns the
+# gate without changing watch.sh. Production never sets this variable.
+_actas_lock_gate_test_barrier() {
+  local barrier="${AGMSG_TEST_ACTAS_DELIVERY_GATE_BARRIER:-}" waited=0
+  [ -n "$barrier" ] || return 0
+  : > "$barrier.reached" || return 1
+  while [ ! -e "$barrier.release" ]; do
+    sleep 0.05 || return 1
+    waited=$((waited + 1))
+    [ "$waited" -lt 200 ] || return 1
+  done
 }
 
 # Acquire a delivery gate for an ownership writer. A live holder is waited on
@@ -352,15 +370,17 @@ _actas_lock_try_claim() {
 # Exit codes:
 #   0  — claimed (now owned by this sid, was already ours, or stale-replaced).
 #   1  — held by another live session. Stdout: "held:<other_sid>".
+#   3  — ownership delivery gate unavailable; no lock mutation was attempted.
 actas_lock_claim() {
   local team="$1" agent="$2" sid="$3"
-  local attempts=0 result lock_path reclaim_dir _owner
+  local attempts=0 result lock_path reclaim_dir _owner mutation_rc=2
   lock_path="$(actas_lock_path "$team" "$agent")"
   reclaim_dir="${lock_path}.reclaim.d"
+  actas_lock_gate_acquire "$lock_path" || return 3
   while [ "$attempts" -lt 3 ]; do
     result="$(_actas_lock_try_claim "$team" "$agent" "$sid")"
     case "$result" in
-      ok) return 0 ;;
+      ok) mutation_rc=0; break ;;
       stale)
         # Stale removal needs a re-check-under-mutex. A naked rm (or even an
         # atomic mv) reads-then-removes whatever sits at lock_path, with no
@@ -389,23 +409,32 @@ actas_lock_claim() {
         ;;
       held:*)
         printf '%s\n' "$result"
-        return 1
+        mutation_rc=1
+        break
         ;;
     esac
-    return 1
+    mutation_rc=2
+    break
   done
-  return 1
+  actas_lock_gate_release "$lock_path" || return 3
+  return "$mutation_rc"
 }
 
-# Release a lock if we own it. Idempotent.
+# Release a lock if we own it. Idempotent. The owner check and deletion are
+# serialized behind the same delivery gate as the watcher.
 actas_lock_release() {
   local team="$1" agent="$2" sid="$3"
-  local lock owner
+  local lock owner mutation_rc=0
   lock="$(actas_lock_path "$team" "$agent")"
-  [ -f "$lock" ] || return 0
-  owner="$(actas_lock_owner "$team" "$agent")"
-  [ "$owner" = "$sid" ] && rm -f "$lock"
-  return 0
+  actas_lock_gate_acquire "$lock" || return 3
+  if [ -f "$lock" ]; then
+    owner="$(actas_lock_owner "$team" "$agent")"
+    if [ "$owner" = "$sid" ] && ! rm -f "$lock"; then
+      mutation_rc=1
+    fi
+  fi
+  actas_lock_gate_release "$lock" || return 3
+  return "$mutation_rc"
 }
 
 # Release every lock currently owned by the given session_id. Used by
@@ -414,13 +443,23 @@ actas_lock_release_all() {
   local sid="$1"
   local dir; dir="$(_actas_lock_dir)"
   [ -d "$dir" ] || return 0
-  local f owner
+  local f owner failed=0
   for f in "$dir"/actas.*.session; do
     [ -f "$f" ] || continue
-    owner="$(head -1 "$f" 2>/dev/null || true)"
-    [ "$owner" = "$sid" ] && rm -f "$f"
+    if ! actas_lock_gate_acquire "$f"; then
+      failed=1
+      continue
+    fi
+    if owner="$(head -1 "$f")"; then
+      if [ "$owner" = "$sid" ] && ! rm -f "$f"; then
+        failed=1
+      fi
+    else
+      failed=1
+    fi
+    actas_lock_gate_release "$f" || failed=1
   done
-  return 0
+  return "$failed"
 }
 
 # Garbage-collect locks whose owner session_id is no longer alive.
@@ -428,16 +467,30 @@ actas_lock_release_all() {
 actas_lock_gc_stale() {
   local dir; dir="$(_actas_lock_dir)"
   [ -d "$dir" ] || { echo 0; return 0; }
-  local f owner count=0
+  local f owner stale count=0 failed=0
   for f in "$dir"/actas.*.session; do
     [ -f "$f" ] || continue
-    owner="$(head -1 "$f" 2>/dev/null || true)"
-    if [ -z "$owner" ] || ! actas_lock_sid_alive "$owner"; then
-      rm -f "$f"
-      count=$((count + 1))
+    if ! actas_lock_gate_acquire "$f"; then
+      failed=1
+      continue
     fi
+    if owner="$(head -1 "$f")"; then
+      stale=0
+      if [ -z "$owner" ] || ! actas_lock_sid_alive "$owner"; then
+        stale=1
+      fi
+      if [ "$stale" -eq 1 ] && rm -f "$f"; then
+        count=$((count + 1))
+      elif [ "$stale" -eq 1 ]; then
+        failed=1
+      fi
+    else
+      failed=1
+    fi
+    actas_lock_gate_release "$f" || failed=1
   done
   echo "$count"
+  return "$failed"
 }
 
 # Classify a (team, agent) pair relative to the calling session.

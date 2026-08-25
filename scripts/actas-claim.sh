@@ -22,6 +22,7 @@ set -euo pipefail
 #   0 — status=ok
 #   1 — status=held (callers should NOT proceed with the actas flow)
 #   2 — status=not_registered (callers should run join.sh first)
+#   3 — status=unavailable (ownership delivery gate could not be acquired)
 
 PROJECT="${1:?Usage: actas-claim.sh <project> <type> <name> <session_id>}"
 TYPE="${2:?Missing type}"
@@ -67,20 +68,45 @@ fi
 # offending team — callers should resolve that before retrying. Releases
 # already-claimed pairs in this same attempt so partial state doesn't leak.
 claimed=""
+rollback_claims() {
+  local c_team rollback_failed=0
+  while IFS= read -r c_team; do
+    [ -z "$c_team" ] && continue
+    if ! actas_lock_release "$c_team" "$NAME" "$SESSION_ID"; then
+      rollback_failed=1
+    fi
+  done <<< "$claimed"
+  return "$rollback_failed"
+}
 while IFS= read -r team; do
   [ -z "$team" ] && continue
-  result=$(actas_lock_claim "$team" "$NAME" "$SESSION_ID" 2>/dev/null || true)
+  claim_status=0
+  if result=$(actas_lock_claim "$team" "$NAME" "$SESSION_ID"); then
+    :
+  else
+    claim_status=$?
+  fi
   case "$result" in
     held:*)
       # Roll back any partial claims so the user can retry cleanly.
-      while IFS= read -r c_team; do
-        [ -z "$c_team" ] && continue
-        actas_lock_release "$c_team" "$NAME" "$SESSION_ID" 2>/dev/null || true
-      done <<< "$claimed"
+      if ! rollback_claims; then
+        echo "actas-claim: rollback failed; one or more ownership locks may remain." >&2
+      fi
       printf 'status=held team=%s owner=%s\n' "$team" "${result#held:}"
       exit 1
       ;;
   esac
+  if [ "$claim_status" -ne 0 ]; then
+    if ! rollback_claims; then
+      echo "actas-claim: rollback failed; one or more ownership locks may remain." >&2
+    fi
+    if [ "$claim_status" -eq 3 ]; then
+      printf 'status=unavailable team=%s reason=ownership_gate_unavailable\n' "$team"
+      exit 3
+    fi
+    printf 'status=error team=%s reason=ownership_mutation_failed\n' "$team" >&2
+    exit 2
+  fi
   claimed="${claimed:+$claimed$'\n'}$team"
 done <<< "$TEAMS"
 

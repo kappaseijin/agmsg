@@ -363,6 +363,57 @@ assert_output_contains() {
   wait "$successor" 2>/dev/null || true
 }
 
+# --- writer mutation gate ---
+
+@test "claim: unavailable delivery gate leaves the lock untouched" {
+  install_runtime_lock_sqlite_stub permanent
+  local lock_path
+  lock_path="$(actas_lock_path T alice)"
+
+  run actas_lock_claim T alice sid-mine
+  [ "$status" -eq 3 ]
+  [ ! -f "$lock_path" ]
+  assert_output_contains "$output" "operation=acquire"
+}
+
+@test "release: unavailable delivery gate leaves the lock owner untouched" {
+  local lock_path
+  lock_path="$(actas_lock_path T alice)"
+  printf '%s\n' sid-mine > "$lock_path"
+  install_runtime_lock_sqlite_stub permanent
+
+  run actas_lock_release T alice sid-mine
+  [ "$status" -eq 3 ]
+  [ "$(actas_lock_owner T alice)" = sid-mine ]
+  assert_output_contains "$output" "operation=acquire"
+}
+
+@test "release_all: unavailable delivery gate leaves owned locks untouched" {
+  local first second
+  first="$(actas_lock_path T alice)"
+  second="$(actas_lock_path T bob)"
+  printf '%s\n' sid-mine > "$first"
+  printf '%s\n' sid-mine > "$second"
+  install_runtime_lock_sqlite_stub permanent
+
+  run actas_lock_release_all sid-mine
+  [ "$status" -ne 0 ]
+  [ -f "$first" ]
+  [ -f "$second" ]
+}
+
+@test "gc_stale: unavailable delivery gate leaves stale locks untouched" {
+  local lock_path
+  lock_path="$(actas_lock_path T alice)"
+  printf '%s\n' sid-dead > "$lock_path"
+  install_runtime_lock_sqlite_stub permanent
+
+  run actas_lock_gc_stale
+  [ "$status" -ne 0 ]
+  [ "$(printf '%s\n' "$output" | tail -1)" = 0 ]
+  [ -f "$lock_path" ]
+}
+
 # --- release / release_all ---
 
 @test "release: removes a lock we own" {
