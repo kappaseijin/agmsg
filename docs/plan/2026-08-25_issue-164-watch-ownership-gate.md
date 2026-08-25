@@ -4,6 +4,7 @@ title: "Issue #164: watch poll と actas ownership mutation を同一 gate で�
 status: proposed
 issue: "https://github.com/kappaseijin/agmsg/issues/164"
 timestamp: "2026-08-25T23:31:58+09:00"
+updated: "2026-08-26T01:05:58+09:00"
 ---
 
 # Issue #164: watch poll と actas ownership mutation を同一 gate で直列化する
@@ -69,25 +70,59 @@ sequenceDiagram
 
 ## gate 契約
 
-### 1. acquisition と stale reclaim
+### I164B: 一時的な SQLite 競合を恒久停止にしない
+
+PR #165 の CI 失敗は gate の直列化そのものを否定しない。前任 watcher の終了直後に、後任 watcher
+または despawn の writer が同じ runtime gate を取るとき、現在の実装は SQLite の一時的な
+`BUSY` / `LOCKED` を通常の gate 不可と同じ non-zero に畳み込む。さらに `2>/dev/null` と `|| true`
+が SQLite の理由を捨てるため、原因を区別できない。
+
+ここでの fail-closed は、**分類できた確定失敗、または有界 retry を尽くした一時失敗では side effect を
+行わない**ことである。一度の `BUSY` を「以後配信しない」または「role drop をしない」に変換することではない。
+
+### 1. acquisition、失敗の分類、stale reclaim
 
 `scripts/lib/actas-lock.sh` に、lock file path を受ける小さな helper を置く。
 
-- watcher 用 `try-acquire` は待たない。live gate holder、runtime DB error、owner PID の
-  liveness が判断不能のいずれでも non-zero を返す。
-- ownership writer 用 acquire は短い bounded wait をする。live holder は待機し、dead PID を
-  確認できたときだけ既存 runtime-lock の `expected_owner` CAS で reclaim する。
+- `scripts/lib/storage.sh` の runtime-lock ABI は SQLite の exit status と stderr を gate helper まで
+  保持する。`tr` を末尾にした pipeline、`2>/dev/null`、`|| true` で acquire / owner / verify /
+  release の SQL failure を成功に変換しない。これは gate primitive の前提であり、watcher / writer の
+  統合には含めない。
+- gate helper は各 SQL 試行を `transient`（SQLite の raw stderr が `SQLITE_BUSY` / `SQLITE_LOCKED`、
+  または同じ SQLite error code を表す `database is busy` / `database is locked`）、`permanent`、
+  `unknown` に分ける。`unknown` は retry せず fail-closed とする。live holder は SQL failure ではなく
+  正常な contention として区別する。
+- `try-acquire`、writer acquire、release の**全 non-zero return**は stderr に operation、resource、
+  観測 owner、呼出し PID（`$$`）、classification と SQLite の未加工 stderr を残す。SQL を実行して
+  いない経路は `sqlite_error=<not-invoked>` と理由を明示する。resource は
+  `actas-delivery:<lock path>`、owner は PID だけであり、秘密値を含めない。
+- watcher 用 `try-acquire` は live holder を待たず当該 poll を skip する。ただし transient error では、
+  SQLite 待ち時間を含めて **200 ms 以下**の deadline 内で retry する。deadline 後はその poll だけを
+  fail-closed で skip し、次 poll では改めて試す。
+- ownership writer 用 acquire と通常 release は、既存の 50 x 0.1 s と同じ **5 s 以下の総 deadline**で
+  transient を retry する。SQLite 内の busy timeout もこの deadline に算入し、外側の 50 回待機で
+  さらに 5 s を重ねない。live holder は待機し、dead PID を確認できたときだけ既存 runtime-lock の
+  `expected_owner` CAS で reclaim する。
 - liveness を確認できない runtime lock は stale とみなさない。reclaim せず non-zero にする。
 - release は runtime-lock row が自分の `$$` を持つ場合だけ行う。trap/cleanup が途中で走っても
   successor の gate を削除しない。
 
 gate acquisition failure は fail-closed とする。
 watcher はその pair の fetch・表示・consume・receipt 記録を一切行わず次 poll へ進む。
-ownership writer は lock file を変更せず non-zero を返す。`actas-claim.sh` と
+通常の ownership writer は lock file を変更せず non-zero を返す。despawn は後述の role-drop 例外とする。`actas-claim.sh` と
 `agmsg_subscription_pairs` はこの non-zero を `status=ok` と解釈してはならず、monitor の
 停止・再起動へ進まない。`actas-claim.sh` は
 `status=unavailable team=<team> reason=ownership_gate_unavailable` と exit 3 を返す。
-diagnostic は pair と `ownership_gate_unavailable` を一度だけ残す。
+watcher の利用者向け diagnostic は pair と `ownership_gate_unavailable` を一度だけ残す。
+上記の gate-operation diagnostic は、失敗の分類に必要な stderr として毎回残す。
+
+**despawn は例外的に role drop を優先する。** control row を読んだ watcher は gate release が
+transient / permanent のどちらで失敗しても、その失敗だけで `exit 1` して `reset.sh` を飛ばさない。
+registration の drop と「live owner を残さない」処理を完了させて watcher を終了することが安全側である。
+graceful `despawn.sh` は既存の `--timeout` 内で、registration が消え、lock owner が absent または
+confirmed-dead であることを確認してから成功にする。runtime gate の stale reclaim は old watcher PID が
+死んだことを確認した後の CAS に限る。release failure のために二重の 5 s 待機を重ねたり、10 s timeout を
+延長したりしない。
 
 ### 2. watcher の critical section
 
@@ -125,22 +160,24 @@ state と後続の side effect は同じ ownership snapshot に属する。
 
 ## 実装計画
 
-### 1. gate helper と caller failure を RED で固定する
+### 1. gate primitive を先に固定する（PR-1）
 
-変更対象は次の 7 file とする。
+I164B 後の実装は primitive・watcher・writer を三つの独立した PR に分ける。PR #165 は閉じず、
+分割後にどの commit を採るかは PM が決める。
 
-| file | 変更責務 |
-| --- | --- |
-| `scripts/lib/actas-lock.sh` | runtime-lock を包む per-path gate、claim/release/release-all/GC の gate 化 |
-| `scripts/watch.sh` | gate 内の state→fetch→print→consume と cleanup、test barrier |
-| `scripts/actas-claim.sh` | gate failure を `status=ok` にしない fail-closed mapping |
-| `scripts/lib/subscription.sh` | active watcher startup で claim failure を購読成功にしない |
-| `scripts/drivers/types/claude-code/template.md` | `ownership_gate_unavailable` を actas failure として扱い、既存 Monitor を止めない指示 |
-| `README.md` | ownership を検証できない actas は delivery を変えず retry する、という利用上の結果 |
-| `docs/actas.md` | gate の線形化点、短時間の retry、unknown gate holder を奪わない recovery 境界 |
+| PR | 一つの主張 | 変更対象 | 受入・非対象 |
+| --- | --- | --- | --- |
+| PR-1 | gate primitive は raw SQLite failure を分類・記録し、transient だけを有界 retry する | `scripts/lib/storage.sh`、`scripts/lib/actas-lock.sh`、`tests/test_actas_lock.bats`、必要最小限の `docs/actas.md` | watcher、claim、reset、template は触らない。runtime-lock release の `|| true` を残さない。 |
+| PR-2 | watcher は診断可能な gate result を用いて poll を直列化し、despawn で role drop を飛ばさない | `scripts/watch.sh`、`scripts/despawn.sh`、`tests/test_actas_integration.bats`、`tests/test_watch.bats`、`tests/test_despawn.bats`、対応する docs | `actas_lock_*` の primitive 実装と writer caller は触らない。既存 timeout を延長しない。 |
+| PR-3 | ownership writer は gate failure を成功扱いせず、retry 後の failure を呼出し元へ正しく返す | `scripts/actas-claim.sh`、`scripts/lib/subscription.sh`、`scripts/reset.sh`、`scripts/drivers/types/claude-code/template.md`、`README.md`、対応する docs と focused tests | watcher の poll / barrier は触らない。 |
 
-`tests/test_actas_lock.bats` には、live gate owner を CAS reclaim しないこと、dead PID の gate は
-CAS で reclaim できること、release が自己 owner に限定されることを追加する。
+PR-1 の `tests/test_actas_lock.bats` には、live gate owner を CAS reclaim しないこと、dead PID の
+gate は CAS で reclaim できること、release が自己 owner に限定されることに加え、次を置く。
+
+1. controlled `SQLITE_BUSY` / `SQLITE_LOCKED` stderr では deadline 内に再試行して成功する。
+2. retry を尽くした transient と permanent / unknown error は side effect なしで non-zero となり、
+   raw SQLite stderr・resource・owner・`$$` を含む diagnostic を残す。
+3. release の SQLite failure を成功に偽装しない。successor owner の row / lock file を消さない。
 
 ### 2. #683 regression を観測可能な barrier で広げる
 
@@ -162,11 +199,21 @@ barrier は `AGMSG_TEST_` 名の test seam であり、未設定の production p
 `sleep 4` は削除し、marker / `wait_for_pid_exit` だけで状態を観測する。これは race を隠すための
 待ち短縮ではなく、race の中心を毎回同じ位置へ置くための同期である。
 
+PR-2 は watcher の stderr を `$BATS_TEST_TMPDIR` の file に取る。`test_watch` の closed-stdout case と
+`test_despawn` の graceful case から `2>/dev/null` / `>/dev/null 2>&1` を除き、失敗時にはその file を
+assertion diagnostic として表示する。CI rerun は診断を捨てないこの状態で一度だけ行い、人工的な負荷再現・
+timeout 延長・sleep 増量はしない。
+
 ### 3. negative control と fixed-HEAD verification
 
 GREEN 後、ownership writer 側の gate acquire/release だけを一時的に外す。
 handover が旧 watcher の barrier 中に完了するため、step 3 の `done` 不在 assertion が落ちる（KILLED）。
 変更を残さず復元し、同じ test と suite をもう一度 GREEN にする。
+
+I164B の KILLED も二つ残す。PR-1 で transient classifier を permanent に変えると controlled busy test が
+retry 回数 / success assertion で落ちる。PR-2 で despawn の release-error branch を旧 `exit 1` に戻すと、
+graceful test は registration と logical ownership が消える assertion で落ちる。どちらも production DB や
+live team data を使わない。
 
 以下はこの checkout の current HEAD で実行可能であることを確認済みの command である。
 
@@ -174,11 +221,19 @@ handover が旧 watcher の barrier 中に完了するため、step 3 の `done`
 bash -n scripts/lib/actas-lock.sh
 bash -n scripts/watch.sh
 bats tests/test_actas_lock.bats
-bats tests/test_actas_integration.bats
+bats tests/test_actas_integration.bats tests/test_watch.bats tests/test_despawn.bats
+bats tests/test_delivery.bats
 rtk git diff --check
 ```
 
-baseline は順に syntax pass、22/22 pass、15/15 pass、diff check pass だった。
+I164B の plan-only baseline は syntax pass、`test_actas_lock.bats` 22/22、
+`test_actas_integration.bats` / `test_watch.bats` / `test_despawn.bats` は 57/58、
+`test_delivery.bats` 199/199、diff check pass だった。57/58 の既存失敗は
+`test_watch.bats` の #197（unopenable DB diagnostic）であり、focused 再実行も 1/1 fail した。
+この checkout の `54ea9d9..HEAD` に `tests/` / `scripts/` 差分は無く、今回の plan-only 差分の
+回帰ではない。PR-2 の stderr capture は gate failure の証跡を残すためのものであり、#197 を直した
+ことにはしない。#197 は別途 triage し、I164B では timeout 延長や assertion 緩和で隠さない。
+
 実装時は RED / GREEN / KILLED / restore-GREEN の command、rc、final `HEAD` を残す。
 `~/.agents/skills/agmsg`、live team data、production watcher を test bed にしない。
 
@@ -191,8 +246,8 @@ baseline は順に syntax pass、22/22 pass、15/15 pass、diff check pass だ�
 
 ## PR 契約
 
-- 1 PR = 「watch poll と actas ownership mutation を同一 gate で直列化する」だけ。
+- 1 PR = 上表の一つの主張だけ。PR-1 → PR-2 → PR-3 の順に、前 PR の fixed HEAD を次 PR の base にする。
 - producer: `agmsg_programmer_codex`、opener: `kappaseijin4codex`。
 - formal reviewer: `agmsg_reviewer_claude`、review account: `kappaseijin4claude`。
-- review は final `headRefOid` の全差分と上記 failure behavior を対象に一括で行う。新 HEAD ごとに
+- review は各 final `headRefOid` の全差分と、その PR の failure behavior を対象に一括で行う。新 HEAD ごとに
   test、CI、formal approval を再取得する。
