@@ -583,6 +583,25 @@ DECOY
   done
 }
 
+@test "GHG-30: allows label create only for an allowed repository owner" {
+  run_guard label create blocked:reproduction --repo kappaseijin/fixture --color B60205 --description "runtime state"
+  [ "$status" -eq 0 ]
+  grep -Fq 'label create blocked:reproduction --repo kappaseijin/fixture --color B60205 --description runtime state' "$FAKE_WRITE_LOG"
+
+  : > "$FAKE_WRITE_LOG"
+  run_guard label create blocked:reproduction --repo thirdparty/fixture --color B60205 --description "runtime state"
+  [ "$status" -ne 0 ]
+  printf '%s\n' "$output" | grep -Fq 'repository owner or host is not allowed'
+  [ ! -s "$FAKE_WRITE_LOG" ]
+}
+
+@test "GHG-31: keeps label delete rejected as an unclassified write" {
+  run_guard label delete blocked:reproduction --repo kappaseijin/fixture
+  [ "$status" -ne 0 ]
+  printf '%s\n' "$output" | grep -Fq 'operation is not classified as a safe read or destination-checked write: label delete'
+  [ ! -s "$FAKE_WRITE_LOG" ]
+}
+
 @test "owner guard launcher rejects unresolved placeholders" {
   run "$LAUNCHER_TEMPLATE" issue view 10
   [ "$status" -ne 0 ]
