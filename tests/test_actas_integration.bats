@@ -86,8 +86,14 @@ fake_session() {
   run env AGMSG_STORAGE_PATH="$broken_store" \
     bash "$SKILL_DIR/scripts/actas-claim.sh" /tmp/p1 claude-code alice "sid-me"
   [ "$status" -eq 3 ]
-  [[ "$output" =~ "status=unavailable" ]]
-  [[ "$output" =~ "reason=ownership_gate_unavailable" ]]
+  case "$output" in
+    *"status=unavailable"*) ;;
+    *) false ;;
+  esac
+  case "$output" in
+    *"reason=ownership_gate_unavailable"*) ;;
+    *) false ;;
+  esac
   [ ! -f "$(actas_lock_path T alice)" ]
 }
 
