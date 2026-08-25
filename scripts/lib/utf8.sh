@@ -11,6 +11,7 @@ _AGMSG_UTF8_SH=1
 # JSON quotes, escapes, or field names.
 agmsg_sanitize_utf8() {
   (
+    # shellcheck disable=SC2030
     export LC_ALL=C
     local line i n c1 c2 c3 c4 b1 b2 b3 b4 replacement valid_second
     # Bash 3.2 can report bytes >= 0x80 as negative from printf '%d'; each
@@ -143,5 +144,133 @@ agmsg_sanitize_utf8() {
       done
       printf '\n'
     done
+  )
+}
+
+# Convert an ASCII-hex byte string to its UTF-8-sanitized ASCII-hex form.
+# Keeping the scan in hex avoids placing malformed bytes in a shell variable.
+# The byte policy is deliberately identical to agmsg_sanitize_utf8: a valid
+# sequence is preserved and each malformed input byte becomes EFBFBD.
+agmsg_sanitize_utf8_hex() {
+  (
+    # shellcheck disable=SC2030,SC2031
+    export LC_ALL=C
+    local hex="${1-}" i=0 n b1 b2 b3 b4 valid_second out=""
+    case "$hex" in
+      '' ) printf '%s' ''; return 0 ;;
+      *[!0123456789ABCDEF]* ) return 2 ;;
+    esac
+    n=${#hex}
+    [ $((n % 2)) -eq 0 ] || return 2
+
+    while [ "$i" -lt "$n" ]; do
+      printf -v b1 '%d' "0x${hex:$i:2}"
+
+      if [ "$b1" -le 127 ]; then
+        out="${out}${hex:$i:2}"
+        i=$((i + 2))
+        continue
+      fi
+
+      if [ "$b1" -ge 194 ] && [ "$b1" -le 223 ]; then
+        if [ $((i + 2)) -ge "$n" ]; then
+          out="${out}EFBFBD"
+          i=$n
+          continue
+        fi
+        printf -v b2 '%d' "0x${hex:$((i + 2)):2}"
+        if [ "$b2" -ge 128 ] && [ "$b2" -le 191 ]; then
+          out="${out}${hex:$i:4}"
+          i=$((i + 4))
+        else
+          out="${out}EFBFBD"
+          i=$((i + 2))
+        fi
+        continue
+      fi
+
+      if [ "$b1" -ge 224 ] && [ "$b1" -le 239 ]; then
+        if [ $((i + 2)) -ge "$n" ]; then
+          out="${out}EFBFBD"
+          i=$n
+          continue
+        fi
+        printf -v b2 '%d' "0x${hex:$((i + 2)):2}"
+        case "$b1" in
+          224) [ "$b2" -ge 160 ] && [ "$b2" -le 191 ] && valid_second=1 || valid_second=0 ;;
+          237) [ "$b2" -ge 128 ] && [ "$b2" -le 159 ] && valid_second=1 || valid_second=0 ;;
+          *)   [ "$b2" -ge 128 ] && [ "$b2" -le 191 ] && valid_second=1 || valid_second=0 ;;
+        esac
+        if [ "$valid_second" -eq 0 ]; then
+          out="${out}EFBFBD"
+          i=$((i + 2))
+          continue
+        fi
+        if [ $((i + 4)) -ge "$n" ]; then
+          out="${out}EFBFBDEFBFBD"
+          i=$n
+          continue
+        fi
+        printf -v b3 '%d' "0x${hex:$((i + 4)):2}"
+        if [ "$b3" -ge 128 ] && [ "$b3" -le 191 ]; then
+          out="${out}${hex:$i:6}"
+          i=$((i + 6))
+        else
+          out="${out}EFBFBDEFBFBD"
+          i=$((i + 4))
+        fi
+        continue
+      fi
+
+      if [ "$b1" -ge 240 ] && [ "$b1" -le 244 ]; then
+        if [ $((i + 2)) -ge "$n" ]; then
+          out="${out}EFBFBD"
+          i=$n
+          continue
+        fi
+        printf -v b2 '%d' "0x${hex:$((i + 2)):2}"
+        case "$b1" in
+          240) [ "$b2" -ge 144 ] && [ "$b2" -le 191 ] && valid_second=1 || valid_second=0 ;;
+          244) [ "$b2" -ge 128 ] && [ "$b2" -le 143 ] && valid_second=1 || valid_second=0 ;;
+          *)   [ "$b2" -ge 128 ] && [ "$b2" -le 191 ] && valid_second=1 || valid_second=0 ;;
+        esac
+        if [ "$valid_second" -eq 0 ]; then
+          out="${out}EFBFBD"
+          i=$((i + 2))
+          continue
+        fi
+        if [ $((i + 4)) -ge "$n" ]; then
+          out="${out}EFBFBDEFBFBD"
+          i=$n
+          continue
+        fi
+        printf -v b3 '%d' "0x${hex:$((i + 4)):2}"
+        if [ "$b3" -lt 128 ] || [ "$b3" -gt 191 ]; then
+          out="${out}EFBFBDEFBFBD"
+          i=$((i + 4))
+          continue
+        fi
+        if [ $((i + 6)) -ge "$n" ]; then
+          out="${out}EFBFBDEFBFBDEFBFBD"
+          i=$n
+          continue
+        fi
+        printf -v b4 '%d' "0x${hex:$((i + 6)):2}"
+        if [ "$b4" -ge 128 ] && [ "$b4" -le 191 ]; then
+          out="${out}${hex:$i:8}"
+          i=$((i + 8))
+        else
+          out="${out}EFBFBDEFBFBDEFBFBD"
+          i=$((i + 6))
+        fi
+        continue
+      fi
+
+      # Continuation bytes, overlong leads, and code points above U+10FFFF
+      # are each malformed input bytes and therefore each become one marker.
+      out="${out}EFBFBD"
+      i=$((i + 2))
+    done
+    printf '%s' "$out"
   )
 }
