@@ -657,6 +657,23 @@ while true; do
     # Only the lock file is read here, not the whole subscription set: losing a
     # pair is the half a running process can detect for the price of a file
     # read. Gaining one is the caller's job, at the point it creates the team.
+    # Per team: with a store per team, "one team has no store yet" is a
+    # normal state, and a single check outside this loop would silence
+    # delivery for every OTHER team as well.
+    # Skipped, and said once. The same "stop quietly" shape as the guard above
+    # (#692): a team with no store yet is a normal state, but a team that
+    # silently stops being delivered every cycle is not distinguishable from
+    # one that is fine. Once per pair per process -- a line every poll interval
+    # would bury the log this exists to make readable.
+    if ! storage_store_exists "$pair_team"; then
+      case " $NO_STORE_REPORTED " in
+        *" $pair_team:$pair_agent "*) ;;
+        *) NO_STORE_REPORTED="$NO_STORE_REPORTED $pair_team:$pair_agent"
+           watch_log "${pair_team}/${pair_agent}: no store yet; skipping this pair until one exists." ;;
+      esac
+      continue
+    fi
+
     pair_lock_path="$(actas_lock_path "$pair_team" "$pair_agent")"
     if ! actas_lock_gate_try_acquire "$pair_lock_path"; then
       watch_log "ownership gate unavailable for ${pair_team}/${pair_agent}; skipping without delivery."
@@ -712,23 +729,6 @@ while true; do
     if ! _watch_test_delivery_barrier; then
       _watch_release_gate || true
       exit 1
-    fi
-    # Per team: with a store per team, "one team has no store yet" is a
-    # normal state, and a single check outside this loop would silence
-    # delivery for every OTHER team as well.
-    # Skipped, and said once. The same "stop quietly" shape as the guard above
-    # (#692): a team with no store yet is a normal state, but a team that
-    # silently stops being delivered every cycle is not distinguishable from
-    # one that is fine. Once per pair per process -- a line every poll interval
-    # would bury the log this exists to make readable.
-    if ! storage_store_exists "$pair_team"; then
-      case " $NO_STORE_REPORTED " in
-        *" $pair_team:$pair_agent "*) ;;
-        *) NO_STORE_REPORTED="$NO_STORE_REPORTED $pair_team:$pair_agent"
-           watch_log "${pair_team}/${pair_agent}: no store yet; skipping this pair until one exists." ;;
-      esac
-      _watch_release_gate || exit 1
-      continue
     fi
     READ_CURSOR="$(storage_read_cursor_get "$pair_team" "$pair_agent" 2>/dev/null || true)"
     [ -n "$READ_CURSOR" ] || READ_CURSOR=0
