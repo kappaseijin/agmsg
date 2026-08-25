@@ -1,13 +1,26 @@
 ---
 type: Design
 title: "Issue #144: Codex pane liveness を delivery capability の gate にする設計"
-status: proposed
+status: on_hold
 issue: "https://github.com/kappaseijin/agmsg/issues/144"
 timestamp: "2026-08-25T07:12:21+09:00"
-updated: "2026-08-25T08:37:08+09:00"
+updated: "2026-08-25T15:17:23+09:00"
 ---
 
 # Issue #144: Codex pane liveness を delivery capability の gate にする設計
+
+## Controlled reproduction の結果
+
+この設計の CRASHED 正例は controlled reproduction の実 tail を前提としていた。
+訂正後の隔離実測では `HERDR_ENV` 未設定でも自分用 workspace を作成できたが、temporary
+`resume_cwd = "current"` profile で real session を `codex resume` した結果は live TUI であり、
+`requires --cd` も bare shell fallback も得られなかった。healthy control は `CONTROL_OK` を返した。
+
+さらに clone に登録した temporary role を spawned child の `$agmsg actas` が見つけられず、
+bridge / role-session を通る control を isolation 内で測定できなかった。このため crash は 0/必要 2
+であり、fixture の provenance 条件を満たさない。案 B の合成 fixture へは戻らず、実装全体を
+**on hold** とする。詳細な値・command・限界は
+`docs/plan/2026-08-25_issue-144-controlled-reproduction-preflight.md` に記録する。
 
 ## 主張
 
