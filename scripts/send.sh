@@ -24,9 +24,18 @@ BODY="${AGMSG_POSITIONAL_ARGS[3]}"
 FORCE="$AGMSG_OPTION_FORCE"
 
 # shellcheck disable=SC1091
-source "$SCRIPT_DIR/lib/storage.sh"
-# shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/validate.sh"
+
+# Validate every positional input before loading storage, resolving a DB path,
+# initializing a DB, or consulting the roster. --force bypasses roster
+# membership only; malformed UTF-8 is never accepted (#146).
+agmsg_validate_utf8 "team" "$TEAM" || exit 1
+agmsg_validate_utf8 "from agent" "$FROM" || exit 1
+agmsg_validate_utf8 "to agent" "$TO" || exit 1
+agmsg_validate_utf8 "message body" "$BODY" || exit 1
+
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/storage.sh"
 
 # #414: TEAM becomes a path segment (teams/$TEAM/config.json) below whether or
 # not --force is given, so validate it unconditionally, before any config-path

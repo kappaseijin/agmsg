@@ -45,6 +45,27 @@ assert_display_lacks() {
   esac
 }
 
+assert_output_contains() {
+  case "$1" in
+    *"$2"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+assert_output_lacks() {
+  case "$1" in
+    *"$2"*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+assert_no_storage_database() {
+  local root="$1"
+  [ ! -e "$root/messages.db" ]
+  [ ! -e "$root/messages.db-wal" ]
+  [ ! -e "$root/messages.db-shm" ]
+}
+
 # --- send.sh ---
 
 @test "send: delivers a message" {
@@ -58,6 +79,73 @@ assert_display_lacks() {
 @test "send: fails without required args" {
   run bash "$SCRIPTS/send.sh"
   [ "$status" -ne 0 ]
+}
+
+@test "send: rejects invalid UTF-8 in message body before storage initialization" {
+  local isolated_store="$TEST_SKILL_DIR/invalid-body-store"
+  mkdir -p "$isolated_store"
+
+  run env LC_ALL=C AGMSG_STORAGE_PATH="$isolated_store" \
+    bash "$SCRIPTS/send.sh" --force probe alice bob $'before\x80after'
+  [ "$status" -eq 1 ]
+  assert_output_contains "$output" "message body"
+  assert_output_contains "$output" "byte 7"
+  assert_output_contains "$output" "0x80"
+  assert_output_contains "$output" "not queued"
+  assert_output_lacks "$output" $'\x80'
+  assert_no_storage_database "$isolated_store"
+}
+
+@test "send: rejects invalid UTF-8 in team before storage initialization" {
+  local isolated_store="$TEST_SKILL_DIR/invalid-team-store"
+  mkdir -p "$isolated_store"
+
+  run env LC_ALL=C AGMSG_STORAGE_PATH="$isolated_store" \
+    bash "$SCRIPTS/send.sh" --force $'probe\x80' alice bob body
+  [ "$status" -eq 1 ]
+  assert_output_contains "$output" "team"
+  assert_output_contains "$output" "byte 6"
+  assert_output_contains "$output" "0x80"
+  assert_output_contains "$output" "not queued"
+  assert_no_storage_database "$isolated_store"
+}
+
+@test "send: rejects invalid UTF-8 in from agent before storage initialization" {
+  local isolated_store="$TEST_SKILL_DIR/invalid-from-store"
+  mkdir -p "$isolated_store"
+
+  run env LC_ALL=C AGMSG_STORAGE_PATH="$isolated_store" \
+    bash "$SCRIPTS/send.sh" --force probe $'alice\x80' bob body
+  [ "$status" -eq 1 ]
+  assert_output_contains "$output" "from agent"
+  assert_output_contains "$output" "byte 6"
+  assert_output_contains "$output" "0x80"
+  assert_output_contains "$output" "not queued"
+  assert_no_storage_database "$isolated_store"
+}
+
+@test "send: rejects invalid UTF-8 in to agent before storage initialization" {
+  local isolated_store="$TEST_SKILL_DIR/invalid-to-store"
+  mkdir -p "$isolated_store"
+
+  run env LC_ALL=C AGMSG_STORAGE_PATH="$isolated_store" \
+    bash "$SCRIPTS/send.sh" --force probe alice $'bob\x80' body
+  [ "$status" -eq 1 ]
+  assert_output_contains "$output" "to agent"
+  assert_output_contains "$output" "byte 4"
+  assert_output_contains "$output" "0x80"
+  assert_output_contains "$output" "not queued"
+  assert_no_storage_database "$isolated_store"
+}
+
+@test "send: preserves valid multibyte input under the C locale" {
+  run env LC_ALL=C bash "$SCRIPTS/send.sh" testteam alice bob "正常な本文。"
+  [ "$status" -eq 0 ]
+  assert_output_contains "$output" "Queued message"
+
+  local body_hex
+  body_hex="$(sqlite3 "$DBPATH" "SELECT hex(body) FROM events WHERE team='testteam' AND from_agent='alice' AND to_agent='bob' ORDER BY at DESC LIMIT 1;")"
+  [ "$body_hex" = "E6ADA3E5B8B8E381AAE69CACE69687E38082" ]
 }
 
 @test "inbox: replaces malformed UTF-8 while preserving surrounding rows" {
