@@ -101,8 +101,7 @@ EOF
   cat > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.meta" <<EOF
 pid=$DELIVERY_TEST_BRIDGE_PID
 project=$TEST_PROJECT
-team=team
-name=alice
+identities=team/alice
 type=codex
 EOF
   printf 'herdr:w59:pC\t%s\tcodex\n' "$TEST_PROJECT" > "$TEST_SKILL_DIR/run/spawn.team__alice"
@@ -384,15 +383,11 @@ eperm_pid() {
   _seed_role_record team alice codex-session-1 "$TEST_PROJECT" codex
   mkdir -p "$TEST_SKILL_DIR/run"
 
-  sleep 60 3>&- &
-  local bpid=$!
-  trap "kill $bpid 2>/dev/null || true; wait $bpid 2>/dev/null || true" EXIT
-  printf '%s\n' "$bpid" > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.pid"
+  printf '%s\n' "$$" > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.pid"
   cat > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.meta" <<EOF
-pid=$bpid
+pid=$$
 project=$TEST_PROJECT
-team=team
-name=alice
+identities=team/alice
 type=codex
 EOF
 
@@ -403,6 +398,32 @@ EOF
   [ "$(json_value "$output" '$.sessionId')" = "codex-session-1" ]
   [ "$(json_value "$output" '$.seats[0].liveness')" = "alive" ]
   [ "$(json_value "$output" '$.seats[0].paneLiveness')" = "unknown" ]
+
+}
+
+@test "delivery status JSON: a live bridge for another identity is not deliverable" {
+  skip_on_windows "codex bridge status liveness under Git Bash (#39)"
+  bash "$SCRIPTS/join.sh" team alice codex "$TEST_PROJECT" >/dev/null
+  bash "$SCRIPTS/delivery.sh" set monitor codex "$TEST_PROJECT" >/dev/null
+  _seed_role_record team alice codex-session-other-identity "$TEST_PROJECT" codex
+  mkdir -p "$TEST_SKILL_DIR/run"
+
+  sleep 60 3>&- &
+  local bpid=$!
+  trap "kill $bpid 2>/dev/null || true; wait $bpid 2>/dev/null || true" EXIT
+  printf '%s\n' "$bpid" > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.pid"
+  cat > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.meta" <<EOF
+pid=$bpid
+project=$TEST_PROJECT
+identities=team/bob
+type=codex
+EOF
+
+  run bash "$SCRIPTS/delivery.sh" status codex "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.seats[0].deliverable')" = "0" ]
+  [ "$(json_value "$output" '$.seats[0].liveness')" = "stale" ]
+  [ "$(json_value "$output" '$.seats[0].evidence[1].reason')" = "metadata_mismatch" ]
 
   kill "$bpid" 2>/dev/null || true
   wait "$bpid" 2>/dev/null || true
@@ -498,8 +519,7 @@ EOF
   cat > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.meta" <<EOF
 pid=$bpid
 project=$TEST_PROJECT-other
-team=team
-name=alice
+identities=team/alice
 type=codex
 EOF
 
@@ -559,8 +579,7 @@ EOF
   cat > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.meta" <<EOF
 pid=$dead_pid
 project=$TEST_PROJECT
-team=team
-name=alice
+identities=team/alice
 type=codex
 EOF
 
@@ -568,6 +587,7 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(json_value "$output" '$.deliverable')" = "0" ]
   [ "$(json_value "$output" '$.liveness')" = "stale" ]
+  [ "$(json_value "$output" '$.seats[0].evidence[1].reason')" = "bridge_pid_not_alive" ]
 }
 
 @test "delivery status JSON: reports receiver handoff separately from task completion" {
@@ -2617,8 +2637,7 @@ EOF
   cat > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.meta" <<EOF
 pid=$bpid
 project=$TEST_PROJECT
-team=team
-name=alice
+identities=team/alice
 type=codex
 EOF
   printf '%s\n' 99999999 > "$TEST_SKILL_DIR/run/watch.fake.pid"
@@ -2647,8 +2666,7 @@ EOF
   cat > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.meta" <<EOF
 pid=$dead_pid
 project=$TEST_PROJECT
-team=team
-name=alice
+identities=team/alice
 type=codex
 EOF
 
@@ -2668,8 +2686,7 @@ EOF
   cat > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.meta" <<EOF
 pid=$$
 project=$TEST_PROJECT-other
-team=team
-name=alice
+identities=team/alice
 type=codex
 EOF
 
@@ -2691,8 +2708,7 @@ EOF
   cat > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.meta" <<EOF
 pid=$$
 project=$TEST_PROJECT/
-team=team
-name=alice
+identities=team/alice
 type=codex
 EOF
 
@@ -2717,8 +2733,7 @@ EOF
   cat > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.meta" <<EOF
 pid=$$
 project=$win_project
-team=team
-name=alice
+identities=team/alice
 type=codex
 EOF
 
@@ -2832,8 +2847,7 @@ EOF
   cat > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.meta" <<EOF
 pid=$bpid
 project=$TEST_PROJECT
-team=team
-name=alice
+identities=team/alice
 type=codex
 EOF
 
@@ -2861,8 +2875,7 @@ EOF
   cat > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.meta" <<EOF
 pid=$bpid
 project=$TEST_PROJECT
-team=team
-name=alice
+identities=team/alice
 type=codex
 EOF
 
