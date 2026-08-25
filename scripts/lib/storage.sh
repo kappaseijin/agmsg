@@ -300,15 +300,29 @@ agmsg_storage_ensure_initialized() {
   AGMSG_STORAGE_PATH="$(agmsg_storage_dir)" AGMSG_DISPATCH_MIGRATION_DONE=1 bash "$init_script" >/dev/null
 }
 
+_agmsg_runtime_sql_result() {
+  local db="$1" sql="$2" result rc
+  if result="$(agmsg_sqlite "$db" "$sql")"; then
+    rc=0
+  else
+    rc=$?
+  fi
+
+  # Strip Windows CR bytes from stdout only after the sqlite exit status has
+  # been saved. The old `agmsg_sqlite | tr` pipeline returned tr's status and
+  # made a failed database operation look successful to its caller.
+  printf '%s\n' "$result" | tr -d '\r'
+  return "$rc"
+}
+
 agmsg_runtime_lock_acquire() {
-  local resource owner_pid expected_owner db resource_sql
+  local resource owner_pid expected_owner db resource_sql sql result rc
   resource="$1"; owner_pid="$2"; expected_owner="${3:-}"
   case "$owner_pid:$expected_owner" in *[!0-9:]*) return 1 ;; esac
   agmsg_storage_ensure_initialized || return 1
   db="$(_agmsg_runtime_db_path)"
   resource_sql="$(_agmsg_runtime_lock_resource_sql "$resource")"
-  agmsg_sqlite "$db" <<SQL | tr -d '\r'
-CREATE TABLE IF NOT EXISTS locks (
+  sql="CREATE TABLE IF NOT EXISTS locks (
   resource TEXT PRIMARY KEY,
   owner_pid INTEGER NOT NULL,
   acquired_at TEXT NOT NULL
@@ -318,21 +332,38 @@ $(if [ -n "$expected_owner" ]; then printf "DELETE FROM locks WHERE resource = '
 INSERT OR IGNORE INTO locks(resource, owner_pid, acquired_at)
 VALUES('$resource_sql', $owner_pid, strftime('%Y-%m-%dT%H:%M:%SZ','now'));
 SELECT owner_pid FROM locks WHERE resource = '$resource_sql';
-COMMIT;
-SQL
+COMMIT;"
+  if result="$(_agmsg_runtime_sql_result "$db" "$sql")"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  printf '%s\n' "$result"
+  return "$rc"
 }
 
 agmsg_runtime_lock_owner() {
-  local resource_sql
+  local resource_sql db result rc
   resource_sql="$(_agmsg_runtime_lock_resource_sql "$1")"
-  agmsg_sqlite "$(_agmsg_runtime_db_path)" \
-    "SELECT owner_pid FROM locks WHERE resource = '$resource_sql';" 2>/dev/null \
-    | tr -d '\r'
+  db="$(_agmsg_runtime_db_path)"
+  if result="$(_agmsg_runtime_sql_result "$db" \
+    "SELECT owner_pid FROM locks WHERE resource = '$resource_sql';")"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  printf '%s\n' "$result"
+  return "$rc"
 }
 
 agmsg_runtime_lock_verify() {
+  local owner
   case "$2" in *[!0-9]*|'') return 1 ;; esac
-  [ "$(agmsg_runtime_lock_owner "$1" 2>/dev/null || true)" = "$2" ]
+  if owner="$(agmsg_runtime_lock_owner "$1")"; then
+    [ "$owner" = "$2" ]
+  else
+    return $?
+  fi
 }
 
 agmsg_runtime_lock_release() {
@@ -340,8 +371,30 @@ agmsg_runtime_lock_release() {
   case "$2" in *[!0-9]*|'') return 1 ;; esac
   resource_sql="$(_agmsg_runtime_lock_resource_sql "$1")"
   agmsg_sqlite "$(_agmsg_runtime_db_path)" \
-    "DELETE FROM locks WHERE resource = '$resource_sql' AND owner_pid = $2;" \
-    >/dev/null 2>&1 || true
+    "DELETE FROM locks WHERE resource = '$resource_sql' AND owner_pid = $2;"
+}
+
+# Delete a runtime lock only when it is still owned by the caller. The
+# owner-conditional DELETE and its result check are one database operation, so
+# release does not have a verify-then-delete window and a database error cannot
+# be mistaken for a successful cleanup.
+agmsg_runtime_lock_release_owned() {
+  local resource_sql db result rc
+  case "$2" in *[!0-9]*|'') return 1 ;; esac
+  resource_sql="$(_agmsg_runtime_lock_resource_sql "$1")"
+  db="$(_agmsg_runtime_db_path)"
+  if result="$(_agmsg_runtime_sql_result "$db" \
+    "DELETE FROM locks WHERE resource = '$resource_sql' AND owner_pid = $2; SELECT changes();")"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  [ "$rc" -eq 0 ] || return "$rc"
+  if [ "$result" = "1" ]; then
+    return 0
+  fi
+  printf 'runtime lock release: expected one owned row, changes=%s\n' "${result:-0}" >&2
+  return 1
 }
 
 # In-memory sqlite for JSON parsing / scalar lookups whose stdout is captured in
