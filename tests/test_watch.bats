@@ -147,6 +147,12 @@ _team_store() {
     agmsg_db_path "$1" )
 }
 
+@test "storage: runtime resolver returns the shared messages DB" {
+  run bash -c "source '$SCRIPTS/lib/storage.sh'; agmsg_runtime_db_path"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$TEST_SKILL_DIR/db/messages.db" ]
+}
+
 _wait_for_file() {
   local file="$1" i
   for i in $(seq 1 100); do
@@ -253,6 +259,7 @@ _wait_for_file_contains() {
   printf 'not a database' > "$db"
 
   local out="$TEST_SKILL_DIR/mt5-health.out"
+  local err="$TEST_SKILL_DIR/mt5-health.err"
   local ready="$TEST_SKILL_DIR/run/ready.health-a__alice"
   local sid="mt5-health-sid.$$"
   # This is a standalone synthetic watcher, not a child of an agent process.
@@ -262,19 +269,55 @@ _wait_for_file_contains() {
   # the environment of any later test.
   AGMSG_AGENT_PID="" AGMSG_RESOLVE_PROJECT=0 AGMSG_WATCH_INTERVAL=1 \
     bash "$SCRIPTS/watch.sh" "$sid" "$proj_a" claude-code alice \
-    >"$out" 2>&1 3>&- 4>&- &
+    >"$out" 2>"$err" 3>&- 4>&- &
   local watcher=$!
-  if ! _WAIT_TICKS=600 wait_for_file_contains "$out" "ERROR: cannot open message DB"; then
+  if ! _WAIT_TICKS=600 wait_for_file_contains "$err" "ERROR: cannot open message DB"; then
     _stop_watcher "$watcher"
     false
   fi
   wait_for_pid_exit "$watcher" || { _stop_watcher "$watcher"; false; }
-  case "$(cat "$out")" in
-    *"ERROR: cannot open message DB"*) : ;;
-    *) false ;;
-  esac
+  grep -Fxc "ERROR: cannot open message DB $db" "$err" | grep -Fx 1
+  refute grep -Fq "ERROR: cannot open message DB" "$out"
   [ ! -e "$ready" ]
   [ ! -e "$TEST_SKILL_DIR/run/ready.health-b__alice" ]
+}
+
+@test "watch: existing shared runtime DB failure is diagnosed once on stderr (#197)" {
+  skip_on_windows "watcher process management under Git Bash (#182)"
+  if [ "$(id -u)" -eq 0 ]; then
+    skip "running as root: permission bits do not restrict the DB"
+  fi
+
+  local db="$TEST_SKILL_DIR/db/messages.db"
+  local out="$TEST_SKILL_DIR/runtime-db.out"
+  local err="$TEST_SKILL_DIR/runtime-db.err"
+  local ready="$TEST_SKILL_DIR/run/ready.team__alice"
+  local lock_path="$TEST_SKILL_DIR/run/actas.team__alice.session"
+  chmod 000 "$db"
+
+  AGMSG_AGENT_PID="" AGMSG_RESOLVE_PROJECT=0 AGMSG_WATCH_INTERVAL=1 \
+    bash "$SCRIPTS/watch.sh" "runtime-db-sid" "$PROJ" claude-code alice \
+    >"$out" 2>"$err" 3>&- 4>&- &
+  local watcher=$!
+  if ! _WAIT_TICKS=600 wait_for_file_contains "$err" "ERROR: cannot open message DB"; then
+    _stop_watcher "$watcher"
+    chmod 0644 "$db"
+    false
+  fi
+  wait_for_pid_exit "$watcher" || { _stop_watcher "$watcher"; chmod 0644 "$db"; false; }
+  local watcher_status=0
+  if wait "$watcher"; then
+    watcher_status=0
+  else
+    watcher_status=$?
+  fi
+  chmod 0644 "$db"
+
+  [ "$watcher_status" -ne 0 ]
+  grep -Fxc "ERROR: cannot open message DB $db" "$err" | grep -Fx 1
+  refute grep -Fq "ERROR: cannot open message DB" "$out"
+  [ ! -e "$ready" ]
+  [ ! -e "$lock_path" ]
 }
 
 @test "watch: restart delivers messages that arrived while the watcher was down" {
@@ -937,14 +980,23 @@ _record_handover_events() {
   [ -f "$DB" ]
   chmod 000 "$DB"
   local out="$BATS_TEST_TMPDIR/hc.out"
-  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "sess-hc" "$PROJ" claude-code >"$out" 2>/dev/null 3>&- 4>&- &
+  local err="$BATS_TEST_TMPDIR/hc.err"
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "sess-hc" "$PROJ" claude-code \
+    >"$out" 2>"$err" 3>&- 4>&- &
   local pid=$!
-  sleep 2                     # > one poll interval; a spinning watcher would re-emit
-  kill "$pid" 2>/dev/null || true   # no-op if the healthcheck already exited
-  wait "$pid" 2>/dev/null || true
+  if ! _WAIT_TICKS=600 wait_for_file_contains "$err" "ERROR: cannot open message DB"; then
+    _stop_watcher "$pid"
+    chmod 644 "$DB" 2>/dev/null || true
+    false
+  fi
+  wait_for_pid_exit "$pid" || { _stop_watcher "$pid"; chmod 644 "$DB" 2>/dev/null || true; false; }
+  if wait "$pid"; then
+    false
+  fi
   chmod 644 "$DB" 2>/dev/null || true
   # Exactly one line: 0 would mean a silent spin, >1 a re-emitting loop.
-  [ "$(grep -c 'ERROR: cannot open message DB' "$out")" -eq 1 ]
+  [ "$(grep -Fxc "ERROR: cannot open message DB $DB" "$err")" -eq 1 ]
+  ! grep -Fq "ERROR: cannot open message DB" "$out"
 }
 
 # Empty session_id fallback (#236 grok monitor): Grok's `monitor` tool may run

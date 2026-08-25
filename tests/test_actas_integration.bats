@@ -250,6 +250,7 @@ fake_session() {
   [ "$status" -eq 1 ]
   [[ "$output" =~ "cannot claim" ]]
   [[ "$output" =~ "T/alice" ]]
+  refute grep -Fq "ERROR: cannot open message DB" <<<"$output"
   # Lock was not stolen.
   [ "$(actas_lock_owner T alice)" = "sid-other" ]
 }
@@ -271,6 +272,7 @@ fake_session() {
 
   kill "$wpid" 2>/dev/null || true
   wait "$wpid" 2>/dev/null || true
+  refute grep -Fq "ERROR: cannot open message DB" "$BATS_TEST_TMPDIR/watch.err"
 }
 
 # --- watch.sh releasing a pair it no longer owns (#683) ---
