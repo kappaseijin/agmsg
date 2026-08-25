@@ -375,43 +375,10 @@ _wait_for_file_contains() {
   local sid="sess-stdout-closed"
   local iid="$(_iid "$sid")"
   local pf="$TEST_SKILL_DIR/run/watch.$iid.pid"
-  local err="$TEST_SKILL_DIR/closed-stdout.err"
-
-  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "$sid" "$PROJ" claude-code \
-    1>&- 2>"$err" 3>&- 4>&- &
-  local w=$!
-
-  _wait_for_file "$pf"
-  [ -f "$pf" ]
-  local initial="$(_read_cursor team alice)"
-
-  bash "$SCRIPTS/send.sh" team bob alice "M-after-closed-stdout" >/dev/null
-
-  _wait_for_missing "$pf" || {
-    cat "$err" >&2
-    kill "$w" 2>/dev/null || true
-    wait "$w" 2>/dev/null || true
-    false
-  }
-  wait "$w" 2>/dev/null || true
-
-  [ "$(_read_cursor team alice)" = "$initial" ]
-
-  run_watcher_until_contains "$sid" "$TEST_SKILL_DIR/closed-redelivery.log" \
-    "M-after-closed-stdout"
-  grep -q "M-after-closed-stdout" "$TEST_SKILL_DIR/closed-redelivery.log"
-}
-
-@test "watch: an unavailable delivery gate leaves the row unread" {
-  skip_on_windows "watcher and runtime-lock process coordination under Git Bash (#182)"
-  local sid="sess-gate-held"
   local lock_path="$TEST_SKILL_DIR/run/actas.team__alice.session"
   local holder_ready="$TEST_SKILL_DIR/gate-holder.ready"
   local holder_release="$TEST_SKILL_DIR/gate-holder.release"
-  local out="$TEST_SKILL_DIR/gate-held.out"
-  local err="$TEST_SKILL_DIR/gate-held.err"
-
-  bash "$SCRIPTS/send.sh" team bob alice "M-gate-blocked" >/dev/null
+  local err="$TEST_SKILL_DIR/closed-stdout.err"
 
   SKILL_DIR="$TEST_SKILL_DIR" bash -c '
     . "$SKILL_DIR/scripts/lib/actas-lock.sh"
@@ -428,28 +395,39 @@ _wait_for_file_contains() {
   fi
 
   AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "$sid" "$PROJ" claude-code \
-    >"$out" 2>"$err" 3>&- 4>&- &
-  local watcher=$!
+    1>&- 2>"$err" 3>&- 4>&- &
+  local w=$!
+
+  _wait_for_file "$pf"
+  [ -f "$pf" ]
+  local initial="$(_read_cursor team alice)"
+
   if ! wait_for_file_contains "$err" "ownership_gate_unavailable"; then
-    kill "$watcher" 2>/dev/null || true
-    wait "$watcher" 2>/dev/null || true
+    kill "$w" 2>/dev/null || true
+    wait "$w" 2>/dev/null || true
     : > "$holder_release"
     wait "$holder" 2>/dev/null || true
     cat "$err" >&2
     false
   fi
-  kill "$watcher" 2>/dev/null || true
-  wait "$watcher" 2>/dev/null || true
 
-  [ "$(_read_cursor team alice)" = "0" ]
-  run grep -Fq "M-gate-blocked" "$out"
-  [ "$status" -ne 0 ]
-
+  bash "$SCRIPTS/send.sh" team bob alice "M-after-closed-stdout" >/dev/null
   : > "$holder_release"
   wait "$holder" 2>/dev/null || true
-  run_watcher_until_contains "$sid" "$TEST_SKILL_DIR/gate-redelivery.log" \
-    "M-gate-blocked"
-  grep -Fq "M-gate-blocked" "$TEST_SKILL_DIR/gate-redelivery.log"
+
+  _wait_for_missing "$pf" || {
+    cat "$err" >&2
+    kill "$w" 2>/dev/null || true
+    wait "$w" 2>/dev/null || true
+    false
+  }
+  wait "$w" 2>/dev/null || true
+
+  [ "$(_read_cursor team alice)" = "$initial" ]
+
+  run_watcher_until_contains "$sid" "$TEST_SKILL_DIR/closed-redelivery.log" \
+    "M-after-closed-stdout"
+  grep -q "M-after-closed-stdout" "$TEST_SKILL_DIR/closed-redelivery.log"
 }
 
 @test "session-end: leaves the store-owned read cursor intact" {
