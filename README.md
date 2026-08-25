@@ -449,6 +449,8 @@ See [docs/opencode.md](docs/opencode.md) for full setup instructions.
 
 `send.sh` takes four positional arguments — `<team> <from> <to> "<message>"` — plus an optional `--force`. The flag may appear before, between, or after the positional arguments. Unknown options and extra arguments fail with a diagnostic; use `--` before a positional value that intentionally starts with `-`. Quote the message so the shell sees it as one argument; an unquoted message with spaces will be misparsed. Both `from` and `to` must already be registered in `<team>`; an unregistered name errors out (listing the currently registered names) instead of silently storing an undeliverable message. Pass `--force` to bypass this check for an intentional pre-registration send.
 
+All four positional inputs must be valid UTF-8. `send.sh` checks them before loading storage or creating a database; malformed input exits non-zero, reports the field, 1-based byte position, offending byte in hexadecimal, and a repair instruction, and is not queued. `--force` bypasses roster membership only and cannot bypass this UTF-8 check. Fix the caller's string construction and retry the command.
+
 ### Machine-readable team roster
 
 New teams created by `join.sh` have a versioned roster contract. Give a
