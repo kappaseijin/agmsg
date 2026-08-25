@@ -10,6 +10,46 @@ teardown() {
   teardown_test_env
 }
 
+utf8_locale_name() {
+  locale -a 2>/dev/null | LC_ALL=C awk 'tolower($0) ~ /utf[._-]?8/ { print; exit }'
+}
+
+@test "storage: SQLite CR stripping is byte-safe under a UTF-8 locale" {
+  source "$SCRIPTS/lib/storage.sh"
+  local locale_name malformed_sql normal_sql import_file direct_out stdin_out normal_out error_file
+  locale_name="$(utf8_locale_name)"
+  [ -n "$locale_name" ] || skip "no UTF-8 locale installed"
+
+  malformed_sql="SELECT CAST(X'FF0D41FF' AS TEXT);"
+  normal_sql="SELECT 'before'||char(13)||'after';"
+  import_file="$BATS_TEST_TMPDIR/malformed-import.jsonl"
+  direct_out="$BATS_TEST_TMPDIR/direct.out"
+  stdin_out="$BATS_TEST_TMPDIR/stdin.out"
+  normal_out="$BATS_TEST_TMPDIR/normal.out"
+  error_file="$BATS_TEST_TMPDIR/stderr"
+
+  printf '{"type":"message_sent","id":"import-utf8","team":"testteam","from":"alice","to":"bob","body":"\xff\\rY","at":"2026-08-25T00:00:00Z"}\n' > "$import_file"
+
+  run env LANG="$locale_name" LC_ALL="$locale_name" bash -c '
+    set -e
+    exec 2>"$8"
+    source "$1/lib/storage.sh"
+    agmsg_storage_load
+    storage_init testteam >/dev/null
+    _sqlite_data testteam "$2" > "$3"
+    _sqlite_data_stdin testteam "$2" > "$4"
+    _sqlite_data testteam "$5" > "$6"
+    storage_import testteam "$7"
+  ' _ "$SCRIPTS" "$malformed_sql" "$direct_out" "$stdin_out" "$normal_sql" "$normal_out" "$import_file" "$error_file"
+  [ "$status" -eq 0 ]
+
+  [ "$(LC_ALL=C od -An -tx1 "$direct_out" | tr -d ' \n')" = "ff41ff0a" ]
+  [ "$(LC_ALL=C od -An -tx1 "$stdin_out" | tr -d ' \n')" = "ff41ff0a" ]
+  [ "$(LC_ALL=C od -An -tx1 "$normal_out" | tr -d ' \n')" = "6265666f726561667465720a" ]
+  [ "$(LC_ALL=C grep -c 'Illegal byte sequence' "$error_file")" -eq 0 ]
+  [ "$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT COUNT(*) FROM events WHERE id='import-utf8';")" -eq 1 ]
+}
+
 # --- agmsg_db_path() resolution ---
 
 @test "storage: default path resolves under the skill dir" {
