@@ -1,0 +1,10 @@
+tui.resume_cwd = 'current' requires --cd
+conversation history continues
+the preceding error was quoted, not emitted by this pane
+history line 1
+history line 2
+history line 3
+history line 4
+history line 5
+history line 6
+› Ask Codex to do anything
