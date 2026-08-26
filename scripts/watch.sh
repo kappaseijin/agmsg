@@ -726,7 +726,7 @@ while true; do
         if ! _held_elsewhere_has "${pair_team}/${pair_agent}"; then
           HELD_ELSEWHERE="${HELD_ELSEWHERE:+$HELD_ELSEWHERE
 }${pair_team}/${pair_agent}"
-          echo "agmsg watch: ${pair_team}/${pair_agent} was claimed by session ${pair_state#other:}; not serving it while they hold it." >&2
+          watch_log "${pair_team}/${pair_agent} was claimed by session ${pair_state#other:}; not serving it while they hold it."
         fi
         if ! _watch_release_gate; then
           exit 1
@@ -739,7 +739,7 @@ while true; do
         # which reads as a permanent drop.
         if _held_elsewhere_has "${pair_team}/${pair_agent}"; then
           HELD_ELSEWHERE="$(_held_elsewhere_without "${pair_team}/${pair_agent}")"
-          echo "agmsg watch: ${pair_team}/${pair_agent} is unheld again; serving it here." >&2
+          watch_log "${pair_team}/${pair_agent} is unheld again; serving it here."
         fi
         ;;
       *)
