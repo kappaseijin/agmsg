@@ -4,6 +4,7 @@ title: R-series ledger and closure の事実検証
 status: changes_requested
 target: "/Users/kappa/Dropbox/data/dev/agmsg/docs/decisions/2026-08-26T235500_r-series-ledger-and-closure.md"
 timestamp: "2026-08-26T22:56:04+09:00"
+updated: "2026-08-26T22:58:18+09:00"
 ---
 
 # R-series ledger and closure の事実検証
@@ -34,3 +35,11 @@ timestamp: "2026-08-26T22:56:04+09:00"
 - source: GitHub Issue #176 comments（breaker断定）、Issue #169 close comment、GitHub Issue/PR state、target文書、R5-P8/P9設計。
 - command: `gh issue list --label root:R{1,2,3,4,5} --state all`、`gh issue view 176,178,181,189,169`、`gh pr view 191,196`、`gh api repos/kappaseijin/agmsg/issues/{176,169}/comments`。
 - limitation: targetは未コミットのためGitHub artifactではない。#181/#189の最終close可否は、この検証では判定しない。
+
+## 再検証
+
+PMはレビュー後、R5-C1/C2と#189の文言を訂正した。両方ともtarget本文で確認済みである。
+
+ただし、stub無し10並行fan-outのvalid attempt 51で、#181のactual packetが `expected=10` / `actual=9`、child 1件のexit 1、`team-work dispatch migration requires both legacy tables` を示した。これはfinal retry SQLite busyではなく初期化/migration経路である。したがってtargetの#181節は、値の変更を待つ段階ではなく、**retry修復を停止しmigration failureを別に分類する**現在の根拠へ更新しなければならない。
+
+targetのfrontmatter時刻は再検証時にも未来であり、R5-P4〜P7のreopen条件もpath別に未分化のままである。この2点と#181節が残るため、検証結果は引き続き`changes_requested`である。
