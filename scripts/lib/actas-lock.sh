@@ -494,11 +494,25 @@ actas_lock_gc_stale() {
 }
 
 # Classify a (team, agent) pair relative to the calling session.
-# Echoes one of: free | mine | other:<sid>
+# Echoes one of: free | mine | other:<sid>. An existing lock whose owner
+# cannot be read is reported as unknown on stdout and returns non-zero.
 actas_lock_state() {
   local team="$1" agent="$2" sid="$3"
-  local owner
-  owner="$(actas_lock_owner "$team" "$agent")"
+  local lock owner
+  lock="$(actas_lock_path "$team" "$agent")"
+  if [ -f "$lock" ]; then
+    if ! owner="$(actas_lock_owner "$team" "$agent")"; then
+      printf 'unknown\n'
+      return 1
+    fi
+    # An existing lock with no readable owner is not permission to clean up.
+    if [ -z "$owner" ]; then
+      printf 'unknown\n'
+      return 1
+    fi
+  else
+    owner=""
+  fi
   if [ -z "$owner" ]; then
     echo "free"; return 0
   fi
