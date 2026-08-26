@@ -142,7 +142,7 @@ _actas_lock_gate_diagnostic() {
   printf '\n' >&2
 }
 
-_ACTAS_LOCK_GATE_DEFAULT_DEADLINE_S=5
+_ACTAS_LOCK_GATE_DEFAULT_DEADLINE_S=30
 _ACTAS_LOCK_GATE_BUSY_SLICE_MS=100
 
 _actas_lock_gate_deadline_s() {
@@ -264,7 +264,7 @@ _actas_lock_gate_test_barrier() {
   done
 }
 
-# Acquire a delivery gate for an ownership writer. The five-second deadline is
+# Acquire a delivery gate for an ownership writer. The thirty-second deadline is
 # fixed at invocation start. A live holder is waited on in 100 ms slices, and
 # SQLite BUSY/LOCKED consumes the same short slice without extending the outer
 # deadline.
@@ -361,7 +361,7 @@ actas_lock_gate_acquire() {
 }
 
 # Release only the current runtime owner. Transient SQLite failures are retried
-# under the same five-second writer budget; a logical owner mismatch or an
+# under the same thirty-second writer budget; a logical owner mismatch or an
 # unknown error is reported and returned without touching a successor row.
 actas_lock_gate_release() {
   local lock_path="$1" resource classification

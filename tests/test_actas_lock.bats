@@ -223,6 +223,11 @@ assert_output_contains() {
 
 # --- delivery gate ---
 
+@test "delivery gate: default writer deadline is thirty seconds" {
+  unset AGMSG_TEST_ACTAS_GATE_DEADLINE_S
+  [ "$(_actas_lock_gate_deadline_s)" -eq 30 ]
+}
+
 @test "delivery gate: watcher retries SQLITE_BUSY within its short budget" {
   install_runtime_lock_sqlite_stub busy-once
   local lock_path="$RUN_DIR/actas.T__alice.session"
