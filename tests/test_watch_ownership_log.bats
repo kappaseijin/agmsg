@@ -160,3 +160,47 @@ teardown() {
   run grep -F "cannot open message DB" "$log"
   [ "$status" -ne 0 ]
 }
+
+@test "watch: persists DB-open failure without subscription misdiagnosis" {
+  local out="$BATS_TEST_TMPDIR/watch-db-open.out"
+  local log="$RUN_DIR/watch.sid-db-open.log"
+  local cfg="$TEST_SKILL_DIR/teams/team/config.json"
+  local updated db watcher watcher_status
+
+  # Keep selector resolution valid, then corrupt only the existing per-team
+  # store. This reaches watch_check_existing_db after subscription resolution,
+  # providing the positive DB-open control for the two selector-failure tests.
+  updated="$(sqlite_mem "SELECT json_set(CAST(readfile('$(rf "$cfg")') AS TEXT), '\$.drivers.partition', 'per-team');")"
+  printf '%s\n' "$updated" > "$cfg"
+  source "$SCRIPTS/lib/storage.sh"
+  agmsg_storage_load
+  db="$(agmsg_db_path team)"
+  mkdir -p "$(dirname "$db")"
+  printf '%s\n' 'not a sqlite database' > "$db"
+
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" sid-db-open "$PROJ" claude-code \
+    >"$out" 2>/dev/null 3>&- 4>&- &
+  watcher=$!
+  if ! wait_for_file_contains "$log" "cannot open message DB"; then
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+    cat "$out" "$log" >&2 2>/dev/null || true
+    false
+  fi
+
+  if wait "$watcher"; then
+    watcher_status=0
+  else
+    watcher_status="$?"
+  fi
+  [ "$watcher_status" -ne 0 ]
+
+  # The real DB-open diagnostic is present, while neither startup resolver
+  # failure label is allowed to stand in for it.
+  run grep -F "cannot open message DB" "$log"
+  [ "$status" -eq 0 ]
+  run grep -F "agmsg_subscription_pairs" "$log"
+  [ "$status" -ne 0 ]
+  run grep -F "agmsg_db_path failed" "$log"
+  [ "$status" -ne 0 ]
+}
