@@ -63,8 +63,193 @@ setup_test_env() {
   mkdir -p "$HOME"
 }
 
+snapshot_test_env_runtime() {
+  local skill_dir="${1:-}" run_dir artifact artifact_name artifact_content artifact_rc
+  local artifact_pid ps_record ps_rc tasklist_record tasklist_rc
+  local process_table process_rc matching_processes matching_rc
+  local parse_output parse_rc
+
+  printf '%s\n' 'runtime snapshot before rm'
+  if [ -z "$skill_dir" ]; then
+    printf '%s\n' '  snapshot marker: TEST_SKILL_DIR is unavailable'
+    return 0
+  fi
+
+  run_dir="$skill_dir/run"
+  if [ ! -d "$run_dir" ]; then
+    printf '  run directory: %s (absent)\n' "$run_dir"
+    return 0
+  fi
+  printf '  run directory: %s\n' "$run_dir"
+
+  for artifact in "$run_dir"/codex-app-server.*.pid \
+    "$run_dir"/codex-bridge.*.pid "$run_dir"/codex-bridge-lease.*; do
+    [ -f "$artifact" ] || continue
+    artifact_name="${artifact##*/}"
+    printf '  runtime artifact: %s\n' "$artifact"
+
+    if artifact_content="$(cat "$artifact" 2>&1)"; then
+      artifact_rc=0
+    else
+      artifact_rc="$?"
+    fi
+    if [ "$artifact_rc" -ne 0 ]; then
+      printf '    snapshot marker: cannot read artifact (rc=%s): %s\n' \
+        "$artifact_rc" "$artifact_content"
+      continue
+    fi
+    printf '    content: %s\n' "$artifact_content"
+
+    artifact_pid=''
+    case "$artifact_name" in
+      *.pid)
+        if parse_output="$(printf '%s\n' "$artifact_content" \
+          | awk 'NR == 1 { gsub(/[[:space:]]/, ""); print; exit }')"; then
+          parse_rc=0
+        else
+          parse_rc="$?"
+          parse_output=''
+        fi
+        if [ "$parse_rc" -ne 0 ]; then
+          printf '    snapshot marker: cannot parse PID (rc=%s)\n' "$parse_rc"
+          continue
+        fi
+        artifact_pid="$parse_output"
+        ;;
+      *)
+        if parse_output="$(printf '%s\n' "$artifact_content" \
+          | awk -F= '$1 == "pid" { print $2; exit }')"; then
+          parse_rc=0
+        else
+          parse_rc="$?"
+          parse_output=''
+        fi
+        if [ "$parse_rc" -ne 0 ]; then
+          printf '    snapshot marker: cannot parse lease PID (rc=%s)\n' "$parse_rc"
+          continue
+        fi
+        artifact_pid="$parse_output"
+        ;;
+    esac
+
+    case "$artifact_pid" in
+      '' )
+        ;;
+      *[!0-9]*)
+        printf '    snapshot marker: invalid PID value: %s\n' "$artifact_pid"
+        ;;
+      *)
+        if ps_record="$(ps -p "$artifact_pid" -o pid=,ppid=,stat=,args= 2>&1)"; then
+          ps_rc=0
+        else
+          ps_rc="$?"
+        fi
+        if [ "$ps_rc" -eq 0 ]; then
+          printf '    ps record for pid=%s:\n%s\n' "$artifact_pid" "$ps_record"
+        else
+          printf '    snapshot marker: ps lookup failed for pid=%s (rc=%s): %s\n' \
+            "$artifact_pid" "$ps_rc" "$ps_record"
+        fi
+        if command -v tasklist >/dev/null 2>&1; then
+          if tasklist_record="$(MSYS_NO_PATHCONV=1 tasklist /FI "PID eq $artifact_pid" 2>&1)"; then
+            tasklist_rc=0
+          else
+            tasklist_rc="$?"
+          fi
+          if [ "$tasklist_rc" -eq 0 ]; then
+            printf '    tasklist record for pid=%s:\n%s\n' \
+              "$artifact_pid" "$tasklist_record"
+          else
+            printf '    snapshot marker: tasklist lookup failed for pid=%s (rc=%s): %s\n' \
+              "$artifact_pid" "$tasklist_rc" "$tasklist_record"
+          fi
+        fi
+        ;;
+    esac
+  done
+
+  printf '  process command lines containing %s:\n' "$skill_dir"
+  if process_table="$(ps -Ao pid=,ppid=,stat=,args= 2>&1)"; then
+    process_rc=0
+  else
+    process_rc="$?"
+  fi
+  if [ "$process_rc" -ne 0 ]; then
+    printf '    snapshot marker: process table unavailable (rc=%s): %s\n' \
+      "$process_rc" "$process_table"
+  else
+    if matching_processes="$(printf '%s\n' "$process_table" \
+      | grep -F -- "$skill_dir")"; then
+      matching_rc=0
+    else
+      matching_rc="$?"
+    fi
+    case "$matching_rc" in
+      0)
+        printf '%s\n' "$matching_processes"
+        ;;
+      1)
+        printf '%s\n' '    <none>'
+        ;;
+      *)
+        printf '    snapshot marker: process filter failed (rc=%s): %s\n' \
+          "$matching_rc" "$matching_processes"
+        ;;
+    esac
+  fi
+  return 0
+}
+
 teardown_test_env() {
-  rm -rf "$TEST_SKILL_DIR"
+  local snapshot rm_stdout rm_stderr rm_rc residual_tree residual_rc
+  local stdout_file="$TEST_SKILL_DIR/.teardown.stdout.$$"
+  local stderr_file="$TEST_SKILL_DIR/.teardown.stderr.$$"
+
+  snapshot="$(snapshot_test_env_runtime "$TEST_SKILL_DIR")"
+  if rm -rf "$TEST_SKILL_DIR" >"$stdout_file" 2>"$stderr_file"; then
+    return 0
+  else
+    rm_rc="$?"
+  fi
+
+  if rm_stdout="$(cat "$stdout_file" 2>&1)"; then
+    :
+  else
+    rm_stdout="snapshot marker: cannot read captured rm stdout (rc=$?)"
+  fi
+  if rm_stderr="$(cat "$stderr_file" 2>&1)"; then
+    :
+  else
+    rm_stderr="snapshot marker: cannot read captured rm stderr (rc=$?)"
+  fi
+  printf '%s\n' 'teardown_test_env: rm -rf failed' >&2
+  printf 'rm exit status: %s\n' "$rm_rc" >&2
+  printf '%s\n' 'rm stdout:' >&2
+  if [ -n "$rm_stdout" ]; then
+    printf '%s\n' "$rm_stdout" >&2
+  else
+    printf '%s\n' '  <empty>' >&2
+  fi
+  printf '%s\n' 'rm stderr:' >&2
+  if [ -n "$rm_stderr" ]; then
+    printf '%s\n' "$rm_stderr" >&2
+  else
+    printf '%s\n' '  <empty>' >&2
+  fi
+  printf '%s\n' "$snapshot" >&2
+  printf '%s\n' 'residual tree after rm:' >&2
+  if residual_tree="$(find "$TEST_SKILL_DIR" -print 2>&1)"; then
+    residual_rc=0
+  else
+    residual_rc="$?"
+  fi
+  if [ "$residual_rc" -eq 0 ]; then
+    printf '%s\n' "$residual_tree" >&2
+  else
+    printf '  snapshot marker: residual tree unavailable (rc=%s): %s\n' \
+      "$residual_rc" "$residual_tree" >&2
+  fi
+  return "$rm_rc"
 }
 
 # Skip a test on native Windows / Git Bash (MSYS/MINGW/Cygwin). Use ONLY for
