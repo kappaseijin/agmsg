@@ -76,6 +76,12 @@ INSERT INTO team_work_dispatch_revisions VALUES
 SQL
 }
 
+write_partial_legacy_dispatch_db() {
+  local db="$1"
+  write_legacy_dispatch_db "$db"
+  sqlite3 "$db" "DROP TABLE team_work_dispatch_revisions;"
+}
+
 ensure_store() {
   local store="$1" fail_copy="${2:-0}"
   run env AGMSG_STORAGE_PATH="$store" AGMSG_TEAM_WORK_MIGRATION_FAIL_COPY="$fail_copy" bash -c '
@@ -134,4 +140,17 @@ ensure_store() {
   [ -z "$(sqlite3 "$db" "PRAGMA table_info(team_work_dispatch_current);" | awk -F'|' '$2 == "recovery_evidence" {print $2}')" ]
   [ "$(sqlite3 "$db" "SELECT delivery_evidence_json FROM team_work_dispatch_current;")" = "{not-json}" ]
   [ "$(sqlite3 "$db" "SELECT snapshot_json FROM team_work_dispatch_revisions;")" = "{not-json}" ]
+}
+
+@test "team-work dispatch migration: one legacy table fails closed" {
+  local store="$BATS_TEST_TMPDIR/legacy-partial-schema"
+  local db="$store/messages.db"
+  mkdir -p "$store"
+  write_partial_legacy_dispatch_db "$db"
+
+  run env AGMSG_STORAGE_PATH="$store" bash "$SCRIPTS/internal/migrate-team-work-dispatch.sh"
+  [ "$status" -ne 0 ]
+  printf '%s\n' "$output" | grep -Fq "team-work dispatch migration requires both legacy tables"
+  [ "$(sqlite3 "$db" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='team_work_dispatch_current';")" = 1 ]
+  [ "$(sqlite3 "$db" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='team_work_dispatch_revisions';")" = 0 ]
 }
