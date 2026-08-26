@@ -1,19 +1,21 @@
 ---
 type: Verification
 title: R-series ledger and closure の事実検証
-status: changes_requested
+status: passed
 target: "/Users/kappa/Dropbox/data/dev/agmsg/docs/decisions/2026-08-26T225926_r-series-ledger-and-closure.md"
 timestamp: "2026-08-26T22:56:04+09:00"
-updated: "2026-08-26T23:05:19+09:00"
+updated: "2026-08-26T23:20:46+09:00"
 ---
 
 # R-series ledger and closure の事実検証
 
 ## 結論
 
-**changes requested。** epic close 前に、R5-C1/C2 の分類、#189 の状態、#181 の判断境界、frontmatter時刻を直す必要がある。
+**PASS（LGFIN 再検証済み）。** 最終訂正で、3 区分、R5-C1/C2 の分類、#189 の進行中表現、#181 の旧/現 HEAD を分けた実 packet、frontmatter 時刻が揃った。
 
-## 指摘
+この PASS は台帳の事実記述に対する判定である。GitHub の #176 / #178 を今 close してよいという判定ではない。#181 / #189 は live で OPEN のままであり、台帳も未解決として正しく明示している。
+
+## 初回指摘（訂正済みの履歴）
 
 | 優先度 | 対象 | 検証結果 | 必要な訂正 |
 | --- | --- | --- | --- |
@@ -44,7 +46,7 @@ PMはレビュー後、R5-C1/C2と#189の文言を訂正した。両方ともtar
 
 targetのfrontmatter時刻は再検証時にも未来であり、R5-P4〜P7のreopen条件もpath別に未分化のままである。この2点と#181節が残るため、検証結果は引き続き`changes_requested`である。
 
-## 最終再検証
+## 中間再検証（訂正前の履歴）
 
 targetは `2026-08-26T225926_r-series-ledger-and-closure.md` へ改名され、frontmatter時刻、R5-P4〜P7のpath別reopen、R5-C1/C2、#189の進行中表現は訂正済みである。
 
@@ -61,7 +63,7 @@ breakerはpacketとsourceを照合し、#181を別Issueにせず、同じIssue�
 
 よってactive項目の#181行には、producer=programmer、前提=PR #201の診断merge後、修復=初期化の原子化、verification=verifierによるdiagnostic付きfan-out 60回、close不可理由=修復PRとfixed-HEAD検証が未完了、と記す必要がある。#189も実装中のactive項目として同じ区分へ置く。
 
-## 判定保留の最終1点
+## 判定保留だった最終1点（訂正済み）
 
 targetは未解決表を追加した一方、冒頭で「実際には2種類」とし、分類表も修正・決着の2行だけである。未解決は第3区分なので、冒頭を3種類へ改め、`未解決（実害あり、修復または検証中、epic closeで解決扱いにしない）` の表行を追加するまでPASSにしない。
 
@@ -70,3 +72,13 @@ targetは未解決表を追加した一方、冒頭で「実際には2種類」�
 verifierはlive HEAD `2d3bb346c11b2271d64315604a11998be977982c` を、旧HEAD `ea72704a6f4736932ccde72d077aa7230cbe03dc` と分けて再測定した。10-wayは60/60成功、40-wayはattempt 6で `expected=40` / `actual=39`、child 1件のmigration stderrを得た。これは現HEADの独立証跡であり、旧HEAD packetを新HEAD根拠に変換したものではない。
 
 targetがpacketを載せるなら、旧HEAD節を上書きせず、この現HEADの `value / cutoff / source / command` を別節として追記する。
+
+## LGFIN 再検証
+
+target の冒頭は **修正 / 決着（reopen 条件つき） / 未解決** の 3 区分となった。未解決には「実害があり、修復・検証が進行中。epic を close しても解決扱いにしない」と明記されている。
+
+`#181` は、旧 HEAD `ea72704a6f4736932ccde72d077aa7230cbe03dc` の 10-way packetと、live PR #201 HEAD `2d3bb346c11b2271d64315604a11998be977982c` の Stage1/Stage2 packetを別 source として記録する。後者は Stage1 10-way が 60/60 pass、Stage2 40-way が attempt 6 で `actual=39 / expected=40`、migration stderr 1件であり、`value / cutoff / source / command` が揃う。
+
+live GitHub 再取得では PR #201 の HEAD は `2d3bb346c11b2271d64315604a11998be977982c`、Issue #176 / #178 / #181 / #189 はすべて OPEN だった。target の #181 / #189 未解決表と、#189 の実装中表現は、open PR #202（registry-lock deadline の契約強化）とも矛盾しない。
+
+**判定: PASS。**
