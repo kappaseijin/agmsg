@@ -124,12 +124,26 @@ while true; do
       # served every team — that form skipped the whole subscription as soon as
       # any store was missing. Mirrors check-inbox.sh and watch.sh.
       storage_store_exists "$_team" || continue
-      u="$(storage_list_unread "$_team" "$_agent" 2>/dev/null || true)"
+      if u="$(storage_list_unread "$_team" "$_agent")"; then
+        :
+      else
+        query_rc=$?
+        printf 'watch-once: unread query failed team=%s agent=%s exit=%s\n' \
+          "$_team" "$_agent" "$query_rc" >&2
+        exit "$query_rc"
+      fi
       [ -n "$u" ] || continue
       uarr="[$(printf '%s' "$u" | paste -sd, -)]"
-      ids="$(agmsg_sqlite ':memory:' "
+      if ids="$(agmsg_sqlite ':memory:' "
         SELECT json_extract(value,'\$.id') FROM json_each('$(printf '%s' "$uarr" | sed "s/'/''/g")');
-      " 2>/dev/null || true)"
+      ")"; then
+        :
+      else
+        query_rc=$?
+        printf 'watch-once: unread id query failed team=%s agent=%s exit=%s\n' \
+          "$_team" "$_agent" "$query_rc" >&2
+        exit "$query_rc"
+      fi
       [ -n "$ids" ] || continue
       count=$(( count + $(printf '%s\n' "$ids" | grep -c .) ))
       all_ids="$all_ids$ids"$'\n'
