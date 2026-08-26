@@ -671,8 +671,16 @@ while true; do
       esac
       continue
     fi
-    READ_CURSOR="$(storage_read_cursor_get "$pair_team" "$pair_agent" 2>/dev/null || true)"
-    [ -n "$READ_CURSOR" ] || READ_CURSOR=0
+    READ_CURSOR="$(storage_read_cursor_get "$pair_team" "$pair_agent" 2>/dev/null)"
+    _cursor_status=$?
+    if [ "$_cursor_status" -ne 0 ]; then
+      watch_log "${pair_team}/${pair_agent}: storage_read_cursor_get failed (status $_cursor_status); skipping this poll."
+      continue
+    fi
+    if [ -z "$READ_CURSOR" ]; then
+      watch_log "${pair_team}/${pair_agent}: storage_read_cursor_get returned an empty cursor; skipping this poll."
+      continue
+    fi
     GATE_LOCK_PATH="$(actas_lock_path "$pair_team" "$pair_agent")"
     GATE_LABEL="${pair_team}/${pair_agent}"
     if ! actas_lock_gate_try_acquire "$GATE_LOCK_PATH"; then
@@ -760,7 +768,15 @@ while true; do
         continue
         ;;
     esac
-    OUT="$(storage_watch_after "$READ_CURSOR" "$pair_team:$pair_agent" 2>/dev/null || true)"
+    OUT="$(storage_watch_after "$READ_CURSOR" "$pair_team:$pair_agent" 2>/dev/null)"
+    _watch_after_status=$?
+    if [ "$_watch_after_status" -ne 0 ]; then
+      watch_log "$GATE_LABEL: storage_watch_after failed (status $_watch_after_status); skipping this poll."
+      if ! _watch_release_gate; then
+        exit 1
+      fi
+      continue
+    fi
     if [ -n "$OUT" ]; then
     # The quote is held in a variable, never written as \' in the pattern: bash 3.2
     # (macOS /bin/bash) keeps the backslash of a \' REPLACEMENT, so the inline form
