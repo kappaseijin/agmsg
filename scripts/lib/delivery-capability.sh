@@ -69,13 +69,19 @@ agmsg_delivery_capability_evidence() {
 }
 
 agmsg_delivery_capability_file_field() {
-  local file="$1" key="$2" line
-  [ -f "$file" ] || return 0
+  local file="$1" key="$2" line content
+  [ -f "$file" ] || return 2
+  # Keep a read error distinct from a readable file with a missing field.
+  # Using cat also gives tests a deterministic seam that does not depend on
+  # platform permission semantics.
+  if ! content="$(cat "$file" 2>/dev/null)"; then
+    return 1
+  fi
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       "$key"=*) printf '%s' "${line#"$key"=}"; return 0 ;;
     esac
-  done < "$file" 2>/dev/null
+  done <<< "$content"
   return 0
 }
 
@@ -92,42 +98,81 @@ agmsg_delivery_capability_same_project() {
 # rule-file and other types only promise that a project-local integration file
 # exists, because that is not a runtime liveness contract.
 agmsg_delivery_capability_config_mode() {
-  local type="$1" project="$2" hf has_ss=0 has_st=0 sql_hf
-  hf="$(resolve_hooks_file "$type" "$project" 2>/dev/null || true)"
-  [ -n "$hf" ] || { printf 'unknown'; return 0; }
+  local type="$1" project="$2" hf has_ss=0 has_st=0 sql_hf valid
+  AGMSG_CAP_CONFIG_MODE="unknown"
+  AGMSG_CAP_CONFIG_STATE="unknown"
+  AGMSG_CAP_CONFIG_REASON="hooks_path_unresolvable"
+
+  if ! hf="$(resolve_hooks_file "$type" "$project" 2>/dev/null)"; then
+    return 0
+  fi
+  [ -n "$hf" ] || return 0
 
   case "$type" in
     claude-code|codex)
-      if [ -f "$hf" ]; then
-        sql_hf="$(agmsg_sql_readfile_path "$hf")"
-        has_ss="$(agmsg_sqlite_mem "
-          SELECT EXISTS(
-            SELECT 1 FROM json_each(json_extract(readfile('$sql_hf'), '\$.hooks.SessionStart')) AS s,
-              json_each(json_extract(s.value, '\$.hooks')) AS h
-            WHERE instr(json_extract(h.value, '\$.command'), '$SKILL_NAME') > 0
-          );" 2>/dev/null || echo 0)"
-        has_st="$(agmsg_sqlite_mem "
-          SELECT EXISTS(
-            SELECT 1 FROM json_each(json_extract(readfile('$sql_hf'), '\$.hooks.Stop')) AS s,
-              json_each(json_extract(s.value, '\$.hooks')) AS h
-            WHERE instr(json_extract(h.value, '\$.command'), '$SKILL_NAME') > 0
-          );" 2>/dev/null || echo 0)"
+      if [ ! -f "$hf" ]; then
+        AGMSG_CAP_CONFIG_REASON="hooks_file_missing"
+        return 0
       fi
+      if ! cat "$hf" >/dev/null 2>/dev/null; then
+        AGMSG_CAP_CONFIG_REASON="hooks_file_unreadable"
+        return 0
+      fi
+      sql_hf="$(agmsg_sql_readfile_path "$hf")"
+      if ! valid="$(agmsg_sqlite_mem "SELECT json_valid(readfile('$sql_hf'));" 2>/dev/null)"; then
+        AGMSG_CAP_CONFIG_REASON="hooks_file_read_failed"
+        return 0
+      fi
+      if [ "$valid" != "1" ]; then
+        AGMSG_CAP_CONFIG_REASON="hooks_file_invalid_json"
+        return 0
+      fi
+      if ! has_ss="$(agmsg_sqlite_mem "
+        SELECT EXISTS(
+          SELECT 1 FROM json_each(json_extract(readfile('$sql_hf'), '\$.hooks.SessionStart')) AS s,
+            json_each(json_extract(s.value, '\$.hooks')) AS h
+          WHERE instr(json_extract(h.value, '\$.command'), '$SKILL_NAME') > 0
+        );" 2>/dev/null)"; then
+        AGMSG_CAP_CONFIG_REASON="hooks_query_failed"
+        return 0
+      fi
+      if ! has_st="$(agmsg_sqlite_mem "
+        SELECT EXISTS(
+          SELECT 1 FROM json_each(json_extract(readfile('$sql_hf'), '\$.hooks.Stop')) AS s,
+            json_each(json_extract(s.value, '\$.hooks')) AS h
+          WHERE instr(json_extract(h.value, '\$.command'), '$SKILL_NAME') > 0
+        );" 2>/dev/null)"; then
+        AGMSG_CAP_CONFIG_REASON="hooks_query_failed"
+        return 0
+      fi
+      case "$has_ss:$has_st" in
+        0:0|0:1|1:0|1:1) ;;
+        *)
+          AGMSG_CAP_CONFIG_REASON="hooks_query_failed"
+          return 0
+          ;;
+      esac
+      AGMSG_CAP_CONFIG_STATE="confirmed"
+      AGMSG_CAP_CONFIG_REASON=""
       if [ "$has_ss" = "1" ] && [ "$has_st" = "1" ]; then
-        printf 'both'
+        AGMSG_CAP_CONFIG_MODE="both"
       elif [ "$has_ss" = "1" ]; then
-        printf 'monitor'
+        AGMSG_CAP_CONFIG_MODE="monitor"
       elif [ "$has_st" = "1" ]; then
-        printf 'turn'
+        AGMSG_CAP_CONFIG_MODE="turn"
       else
-        printf 'off'
+        AGMSG_CAP_CONFIG_MODE="off"
       fi
       ;;
     hermes)
-      printf 'off'
+      AGMSG_CAP_CONFIG_STATE="confirmed"
+      AGMSG_CAP_CONFIG_REASON=""
+      AGMSG_CAP_CONFIG_MODE="off"
       ;;
     *)
-      if [ -f "$hf" ]; then printf 'configured'; else printf 'off'; fi
+      AGMSG_CAP_CONFIG_STATE="confirmed"
+      AGMSG_CAP_CONFIG_REASON=""
+      if [ -f "$hf" ]; then AGMSG_CAP_CONFIG_MODE="configured"; else AGMSG_CAP_CONFIG_MODE="off"; fi
       ;;
   esac
 }
@@ -321,10 +366,16 @@ agmsg_delivery_capability_codex_bridge() {
     return 0
   fi
 
-  meta_pid="$(agmsg_delivery_capability_file_field "$metafile" pid)"
-  meta_project="$(agmsg_delivery_capability_file_field "$metafile" project)"
-  meta_type="$(agmsg_delivery_capability_file_field "$metafile" type)"
-  meta_identities="$(agmsg_delivery_capability_file_field "$metafile" identities)"
+  if ! meta_pid="$(agmsg_delivery_capability_file_field "$metafile" pid)" \
+      || ! meta_project="$(agmsg_delivery_capability_file_field "$metafile" project)" \
+      || ! meta_type="$(agmsg_delivery_capability_file_field "$metafile" type)" \
+      || ! meta_identities="$(agmsg_delivery_capability_file_field "$metafile" identities)"; then
+    AGMSG_CAP_CODEX_RUNTIME="unknown"
+    AGMSG_CAP_CODEX_LIVENESS="unknown"
+    AGMSG_CAP_CODEX_DELIVERABLE="unknown"
+    AGMSG_CAP_CODEX_EVIDENCE="$(agmsg_delivery_capability_evidence bridge unknown bridge_metadata_unreadable)"
+    return 0
+  fi
   if [ "$meta_pid" != "$pid" ] \
       || ! agmsg_delivery_capability_same_project "$project" "$meta_project" \
       || [ "$meta_type" != "codex" ] \
@@ -413,7 +464,10 @@ agmsg_delivery_capability_seat() {
 
   case "$type" in
     claude-code)
-      if [ "$mode" != "monitor" ] && [ "$mode" != "both" ]; then
+      if [ "$AGMSG_CAP_CONFIG_STATE" = "unknown" ]; then
+        runtime="unknown"; liveness="unknown"; deliverable="unknown"; session=""
+        evidence="$(agmsg_delivery_capability_evidence configuration unknown "$AGMSG_CAP_CONFIG_REASON")"
+      elif [ "$mode" != "monitor" ] && [ "$mode" != "both" ]; then
         runtime="missing"; liveness="missing"; deliverable="false"; session=""
         evidence="$(agmsg_delivery_capability_evidence configuration "$mode" no_live_monitor_runtime)"
       else
@@ -426,7 +480,11 @@ agmsg_delivery_capability_seat() {
       fi
       ;;
     codex)
-      if [ "$mode" != "monitor" ]; then
+      if [ "$AGMSG_CAP_CONFIG_STATE" = "unknown" ]; then
+        runtime="unknown"; liveness="unknown"; deliverable="unknown"; session=""
+        pane_liveness="unknown"
+        evidence="$(agmsg_delivery_capability_evidence configuration unknown "$AGMSG_CAP_CONFIG_REASON")"
+      elif [ "$mode" != "monitor" ]; then
         runtime="missing"; liveness="missing"; deliverable="false"; session=""
         pane_liveness="unknown"
         evidence="$(agmsg_delivery_capability_evidence configuration "$mode" no_live_monitor_runtime)"
@@ -446,7 +504,10 @@ agmsg_delivery_capability_seat() {
       fi
       ;;
     *)
-      if [ "$mode" = "off" ]; then
+      if [ "$AGMSG_CAP_CONFIG_STATE" = "unknown" ]; then
+        runtime="unknown"; liveness="unknown"; deliverable="unknown"; session=""
+        evidence="$(agmsg_delivery_capability_evidence configuration unknown "$AGMSG_CAP_CONFIG_REASON")"
+      elif [ "$mode" = "off" ]; then
         runtime="missing"; liveness="missing"; deliverable="false"; session=""
         evidence="$(agmsg_delivery_capability_evidence configuration off runtime_disabled)"
       else
@@ -509,10 +570,15 @@ agmsg_delivery_capability_json() {
     return 2
   fi
 
-  mode="$(agmsg_delivery_capability_config_mode "$type" "$project")"
+  agmsg_delivery_capability_config_mode "$type" "$project"
+  mode="$AGMSG_CAP_CONFIG_MODE"
   # identities.sh orders within a team config, but the config-file enumeration
   # is not itself a public ordering contract. Stabilize the JSON seats here.
-  pairs="$("$SCRIPT_DIR/identities.sh" "$project" "$type" 2>/dev/null | LC_ALL=C sort -t $'\t' -k1,1 -k2,2 || true)"
+  local roster_query_failed=0
+  if ! pairs="$("$SCRIPT_DIR/identities.sh" "$project" "$type" 2>/dev/null | LC_ALL=C sort -t $'\t' -k1,1 -k2,2)"; then
+    pairs=""
+    roster_query_failed=1
+  fi
   if [ -n "$pairs" ]; then
     while IFS=$'\t' read -r team name _rest; do
       [ -n "$team" ] && [ -n "$name" ] || continue
@@ -533,7 +599,23 @@ agmsg_delivery_capability_json() {
   fi
   seats_json="${seats_json}]"
 
-  if [ "$seat_count" -eq 0 ]; then
+  if [ "$roster_query_failed" -eq 1 ]; then
+    runtime="unknown"
+    liveness="unknown"
+    deliverable="unknown"
+    session=""
+    evidence=""
+    if [ "$AGMSG_CAP_CONFIG_STATE" = "unknown" ]; then
+      evidence="$(agmsg_delivery_capability_evidence configuration unknown "$AGMSG_CAP_CONFIG_REASON"),"
+    fi
+    evidence="[$evidence$(agmsg_delivery_capability_evidence registration unknown roster_query_failed)]"
+  elif [ "$seat_count" -eq 0 ] && [ "$AGMSG_CAP_CONFIG_STATE" = "unknown" ]; then
+    runtime="unknown"
+    liveness="unknown"
+    deliverable="unknown"
+    session=""
+    evidence="[$(agmsg_delivery_capability_evidence configuration unknown "$AGMSG_CAP_CONFIG_REASON"),$(agmsg_delivery_capability_evidence registration missing no_registered_seat)]"
+  elif [ "$seat_count" -eq 0 ]; then
     runtime="missing"
     liveness="missing"
     deliverable="false"

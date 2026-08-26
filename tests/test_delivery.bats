@@ -369,6 +369,174 @@ eperm_pid() {
 
 # --- delivery capability JSON (#39) ---
 
+@test "delivery status JSON: missing hooks configuration is unknown for a registered seat" {
+  bash "$SCRIPTS/join.sh" team alice claude-code "$TEST_PROJECT" >/dev/null
+
+  run bash "$SCRIPTS/delivery.sh" status claude-code "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.deliverable')" = "unknown" ]
+  [ "$(json_value "$output" '$.runtime')" = "unknown" ]
+  [ "$(json_value "$output" '$.liveness')" = "unknown" ]
+  [ "$(json_value "$output" '$.seats[0].evidence[0].source')" = "configuration" ]
+  [ "$(json_value "$output" '$.seats[0].evidence[0].state')" = "unknown" ]
+  [ "$(json_value "$output" '$.seats[0].evidence[0].reason')" = "hooks_file_missing" ]
+}
+
+@test "delivery status JSON: invalid hooks configuration is unknown for a registered seat" {
+  bash "$SCRIPTS/join.sh" team alice claude-code "$TEST_PROJECT" >/dev/null
+  mkdir -p "$TEST_PROJECT/.claude"
+  printf '%s\n' '{not valid json' > "$TEST_PROJECT/.claude/settings.local.json"
+
+  run bash "$SCRIPTS/delivery.sh" status claude-code "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.deliverable')" = "unknown" ]
+  [ "$(json_value "$output" '$.seats[0].evidence[0].reason')" = "hooks_file_invalid_json" ]
+}
+
+@test "delivery status JSON: hooks path resolution failure is unknown" {
+  bash "$SCRIPTS/join.sh" team alice claude-code "$TEST_PROJECT" >/dev/null
+  local manifest="$TYPES/claude-code/type.conf"
+  local replacement="$TEST_PROJECT/type.conf"
+  awk '{ if ($0 ~ /^hooks_file=/) print "hooks_file=../outside"; else print }' \
+    "$manifest" > "$replacement"
+  mv "$replacement" "$manifest"
+
+  run bash "$SCRIPTS/delivery.sh" status claude-code "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.deliverable')" = "unknown" ]
+  [ "$(json_value "$output" '$.seats[0].evidence[0].reason')" = "hooks_path_unresolvable" ]
+}
+
+@test "delivery status JSON: roster query failure is unknown, not an empty roster" {
+  bash "$SCRIPTS/delivery.sh" set off claude-code "$TEST_PROJECT" >/dev/null
+  local identities="$SCRIPTS/identities.sh"
+  mv "$identities" "$identities.real"
+  cat > "$identities" <<'SH'
+#!/usr/bin/env bash
+exit 13
+SH
+  chmod +x "$identities"
+
+  run bash "$SCRIPTS/delivery.sh" status claude-code "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.deliverable')" = "unknown" ]
+  [ "$(json_value "$output" '$.runtime')" = "unknown" ]
+  [ "$(json_value "$output" '$.evidence[0].source')" = "registration" ]
+  [ "$(json_value "$output" '$.evidence[0].state')" = "unknown" ]
+  [ "$(json_value "$output" '$.evidence[0].reason')" = "roster_query_failed" ]
+}
+
+@test "delivery status JSON: Codex metadata read failure is unknown, not stale" {
+  setup_fake_codex_pane "$BATS_TEST_DIRNAME/fixtures/pane-liveness/queued-live-pane.txt"
+  local meta="$TEST_SKILL_DIR/run/codex-bridge.team.alice.meta"
+  local real_cat
+  real_cat="$(command -v cat)"
+  cat > "$TEST_PROJECT/fake-bin/cat" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = "$meta" ]; then
+  exit 13
+fi
+exec "$real_cat" "\$@"
+EOF
+  chmod +x "$TEST_PROJECT/fake-bin/cat"
+
+  run bash "$SCRIPTS/delivery.sh" status codex "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.seats[0].deliverable')" = "unknown" ]
+  [ "$(json_value "$output" '$.seats[0].runtime')" = "unknown" ]
+  [ "$(json_value "$output" '$.seats[0].evidence[1].source')" = "bridge" ]
+  [ "$(json_value "$output" '$.seats[0].evidence[1].state')" = "unknown" ]
+  [ "$(json_value "$output" '$.seats[0].evidence[1].reason')" = "bridge_metadata_unreadable" ]
+}
+
+@test "delivery status JSON: confirmed off remains false as a separate counter-control" {
+  bash "$SCRIPTS/join.sh" team alice claude-code "$TEST_PROJECT" >/dev/null
+  bash "$SCRIPTS/delivery.sh" set off claude-code "$TEST_PROJECT" >/dev/null
+
+  run bash "$SCRIPTS/delivery.sh" status claude-code "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.deliverable')" = "0" ]
+  [ "$(json_value "$output" '$.seats[0].deliverable')" = "0" ]
+  [ "$(json_value "$output" '$.seats[0].evidence[0].state')" = "off" ]
+}
+
+@test "delivery status JSON: confirmed empty roster remains false as a separate counter-control" {
+  bash "$SCRIPTS/delivery.sh" set off claude-code "$TEST_PROJECT" >/dev/null
+
+  run bash "$SCRIPTS/delivery.sh" status claude-code "$TEST_PROJECT" --format json
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.deliverable')" = "0" ]
+  [ "$(json_value "$output" '$.evidence[0].source')" = "registration" ]
+  [ "$(json_value "$output" '$.evidence[0].state')" = "missing" ]
+  [ "$(json_value "$output" '$.evidence[0].reason')" = "no_registered_seat" ]
+}
+
+@test "team-work consumer: empty capability seats remain unknown and do not dispatch" {
+  local pack="$TEST_PROJECT/pack.json"
+  local fake_delivery="$TEST_PROJECT/fake-delivery.sh"
+  local fake_gh_dir="$TEST_PROJECT/fake-gh-bin"
+  local fake_gh_log="$TEST_PROJECT/gh-requests.jsonl"
+  local gh_fixture="$BATS_TEST_DIRNAME/fixtures/team-work-audit/open.json"
+
+  bash "$SCRIPTS/join.sh" demo owner codex "$TEST_PROJECT" --role programmer --kind seat >/dev/null
+  bash "$SCRIPTS/join.sh" demo dispatch codex "$TEST_PROJECT" --role manager --kind seat >/dev/null
+  mkdir -p "$fake_gh_dir"
+  cp "$BATS_TEST_DIRNAME/fixtures/team-work-audit/gh" "$fake_gh_dir/gh"
+  chmod +x "$fake_gh_dir/gh"
+  : > "$fake_gh_log"
+  cat > "$fake_delivery" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"schemaVersion":1,"type":"codex","project":"/tmp/demo","runtime":"unknown","sessionId":null,"deliverable":"unknown","liveness":"unknown","receipt":{"state":"none","queued":0,"claimed":0,"handedOff":0,"unknown":0},"evidence":[],"seats":[]}'
+SH
+  chmod +x "$fake_delivery"
+  cat > "$pack" <<'JSON'
+{"schemaVersion":1,"team":"demo","workItems":[{"schemaVersion":1,"workItem":{"id":"issue:42","source":{"kind":"issue","repository":"kappaseijin/agmsg","number":42}},"ownerSeat":"owner","workKinds":["implementation"],"relations":[],"revision":1,"classificationBasis":{"contentDigest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","refs":[{"kind":"issue","repository":"kappaseijin/agmsg","number":42}]},"writebackRequired":false}]}
+JSON
+
+  run env PATH="$fake_gh_dir:$PATH" TEAM_WORK_GH_FIXTURE="$gh_fixture" \
+    TEAM_WORK_GH_LOG="$fake_gh_log" AGMSG_TEAM_WORK_DELIVERY_BIN="$fake_delivery" \
+    TEAM_WORK_DISPATCH_ALLOWLIST='["owner"]' TEAM_WORK_NOW=101 \
+    bash "$SCRIPTS/team-work.sh" dispatch demo "$pack" issue:42 dispatch
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.state')" = "not_dispatchable" ]
+  [ "$(json_value "$output" '$.delivery.status')" = "unknown" ]
+  [ "$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT count(*) FROM team_work_dispatch_current;")" = "0" ]
+}
+
+@test "team-work consumer: explicit unknown capability remains non-dispatchable" {
+  local pack="$TEST_PROJECT/pack.json"
+  local fake_delivery="$TEST_PROJECT/fake-delivery.sh"
+  local fake_gh_dir="$TEST_PROJECT/fake-gh-bin"
+  local fake_gh_log="$TEST_PROJECT/gh-requests.jsonl"
+  local gh_fixture="$BATS_TEST_DIRNAME/fixtures/team-work-audit/open.json"
+
+  bash "$SCRIPTS/join.sh" demo owner codex "$TEST_PROJECT" --role programmer --kind seat >/dev/null
+  bash "$SCRIPTS/join.sh" demo dispatch codex "$TEST_PROJECT" --role manager --kind seat >/dev/null
+  mkdir -p "$fake_gh_dir"
+  cp "$BATS_TEST_DIRNAME/fixtures/team-work-audit/gh" "$fake_gh_dir/gh"
+  chmod +x "$fake_gh_dir/gh"
+  : > "$fake_gh_log"
+  cat > "$fake_delivery" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"schemaVersion":1,"type":"codex","project":"/tmp/demo","runtime":"unknown","sessionId":null,"deliverable":"unknown","liveness":"unknown","receipt":{"state":"none","queued":0,"claimed":0,"handedOff":0,"unknown":0},"evidence":[],"seats":[{"team":"demo","name":"owner","runtime":"unknown","sessionId":null,"deliverable":"unknown","liveness":"unknown","evidence":[]}]}'
+SH
+  chmod +x "$fake_delivery"
+  cat > "$pack" <<'JSON'
+{"schemaVersion":1,"team":"demo","workItems":[{"schemaVersion":1,"workItem":{"id":"issue:42","source":{"kind":"issue","repository":"kappaseijin/agmsg","number":42}},"ownerSeat":"owner","workKinds":["implementation"],"relations":[],"revision":1,"classificationBasis":{"contentDigest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","refs":[{"kind":"issue","repository":"kappaseijin/agmsg","number":42}]},"writebackRequired":false}]}
+JSON
+
+  run env PATH="$fake_gh_dir:$PATH" TEAM_WORK_GH_FIXTURE="$gh_fixture" \
+    TEAM_WORK_GH_LOG="$fake_gh_log" AGMSG_TEAM_WORK_DELIVERY_BIN="$fake_delivery" \
+    TEAM_WORK_DISPATCH_ALLOWLIST='["owner"]' TEAM_WORK_NOW=101 \
+    bash "$SCRIPTS/team-work.sh" dispatch demo "$pack" issue:42 dispatch
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" '$.state')" = "not_dispatchable" ]
+  [ "$(json_value "$output" '$.delivery.status')" = "unknown" ]
+  [ "$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT count(*) FROM team_work_dispatch_current;")" = "0" ]
+}
+
 @test "delivery status JSON: only a live Claude role watcher is deliverable" {
   skip_on_windows "watcher liveness fixture uses POSIX background process semantics (#39)"
   bash "$SCRIPTS/join.sh" team alice claude-code "$TEST_PROJECT" >/dev/null
