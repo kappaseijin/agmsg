@@ -845,14 +845,23 @@ while true; do
       # case (and preserve exact delivered IDs when there are any).
       if [ "${#DELIVERED_IDS[@]}" -gt 0 ]; then
         storage_read_cursor_consume "$pair_team" "$pair_agent" "$FINAL_CURSOR" \
-          "${DELIVERED_IDS[@]}" >/dev/null 2>&1 || true
+          "${DELIVERED_IDS[@]}" >/dev/null 2>&1
+        _consume_status=$?
       else
         storage_read_cursor_consume "$pair_team" "$pair_agent" "$FINAL_CURSOR" \
-          >/dev/null 2>&1 || true
+          >/dev/null 2>&1
+        _consume_status=$?
+      fi
+      if [ "$_consume_status" -ne 0 ]; then
+        watch_log "$GATE_LABEL: storage_read_cursor_consume failed after stdout delivery (status $_consume_status); delivery/retry semantics unchanged."
       fi
       if [ "${#DELIVERED_IDS[@]}" -gt 0 ] && command -v storage_record_receipts >/dev/null 2>&1; then
         storage_record_receipts "$pair_team" "$pair_agent" watch_stdout \
-          "${DELIVERED_IDS[@]}" >/dev/null 2>&1 || true
+          "${DELIVERED_IDS[@]}" >/dev/null 2>&1
+        _receipt_status=$?
+        if [ "$_receipt_status" -ne 0 ]; then
+          watch_log "$GATE_LABEL: storage_record_receipts failed after stdout delivery (status $_receipt_status); delivery/retry semantics unchanged."
+        fi
       fi
     fi
     if [ -n "$DESPAWN_TARGET" ]; then
