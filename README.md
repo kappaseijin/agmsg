@@ -544,9 +544,18 @@ evidence, and one record per registered role in `seats`. A consumer may
 dispatch to a role only when its `deliverable` is the JSON boolean `true`.
 
 - `true` means agmsg observed a live, role-bound receiver.
-- `false` means delivery is off, missing, or stale with a concrete reason.
-- `"unknown"` means the runtime cannot prove a current receiver; treat it as
-  non-dispatchable until it becomes `true`.
+- `false` means delivery is confirmed off, missing, or stale with a concrete
+  reason. It is not a substitute for an observation failure.
+- `"unknown"` means the runtime cannot prove a current receiver, including
+  when configuration, roster, or Codex bridge metadata could not be read. The
+  corresponding `evidence` item includes the reason. Treat it as
+  non-dispatchable until it becomes `true`; do not reinterpret the JSON string
+  as a truthy boolean.
+
+When `deliverable` is `"unknown"`, inspect the `evidence` reason, repair or
+restore the named configuration, roster, or metadata source, and run the same
+status command again. Do not automatically assign work while the result is
+`unknown`.
 
 For Claude Code, `true` requires a live exclusive `watch.sh` watcher for that
 role, not merely a SessionStart hook. For Codex, it requires a live bridge with

@@ -121,6 +121,13 @@ function deliveryBin() {
   return path.join(process.env.AGMSG_TEAM_WORK_SCRIPT_DIR, "delivery.sh");
 }
 
+function isDispatchableDelivery(seat) {
+  // The machine ABI is deliberately strict: the JSON string "unknown" is
+  // evidence that delivery could not be confirmed, never a truthy permission
+  // to dispatch work.
+  return isObject(seat) && seat.deliverable === true && seat.liveness === "alive";
+}
+
 function deliveryStatus(team, member) {
   if (!member || member.kind !== "seat") {
     return {
@@ -177,7 +184,7 @@ function deliveryStatus(team, member) {
       deliverable: seat.deliverable,
     };
     evidence.push(record);
-    if (seat.deliverable === true && seat.liveness === "alive") {
+    if (isDispatchableDelivery(seat)) {
       live += 1;
     } else if (seat.deliverable === false) {
       unavailable += 1;
