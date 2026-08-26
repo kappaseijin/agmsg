@@ -167,6 +167,108 @@ _binding_field() {  # $1 = team, $2 = json path under remote_binding
   sqlite_mem "SELECT coalesce(json_extract(CAST(readfile('$escaped') AS TEXT), '\$.remote_binding.$2'), '');"
 }
 
+_authority_race_config_fixture() {
+  local target="$1" lstat_replacement="$2" open_replacement="$3" wrong_replacement="$4"
+  python3 - "$target" "$lstat_replacement" "$open_replacement" "$wrong_replacement" <<'PY'
+import json
+import os
+import sys
+
+target, lstat_replacement, open_replacement, wrong_replacement = sys.argv[1:]
+with open(target, encoding="utf-8") as handle:
+    document = json.load(handle)
+document["name"] = "testteam"
+document["remote_binding"] = {
+    "endpoint": "http://127.0.0.1:1",
+    "server_instance_id": "018f3f7e-0000-7000-8000-000000000010",
+    "remote_team_id": "018f3f7e-0000-7000-8000-000000000011",
+    "remote_team_name": "testteam",
+    "protocol_version": 1,
+    "capabilities": {"write_allowed_ciphers": ["none"]},
+    "connected_at": "2026-08-27T00:00:00Z",
+    "disconnected_at": None,
+}
+for path in (target, lstat_replacement, open_replacement):
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(document, handle)
+        handle.write("\n")
+    os.chmod(path, 0o644)
+
+wrong = dict(document)
+wrong["name"] = "otherteam"
+with open(wrong_replacement, "w", encoding="utf-8") as handle:
+    json.dump(wrong, handle)
+    handle.write("\n")
+os.chmod(wrong_replacement, 0o644)
+PY
+}
+
+_authority_race_hook() {
+  local hook="$1"
+  cat > "$hook" <<'NODE'
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+
+const target = process.env.AGMSG_TEST_AUTHORITY_TARGET;
+const mode = process.env.AGMSG_TEST_AUTHORITY_RACE_MODE;
+const marker = process.env.AGMSG_TEST_AUTHORITY_RACE_MARKER;
+const lstatReplacement = process.env.AGMSG_TEST_AUTHORITY_LSTAT_REPLACEMENT;
+const openReplacement = process.env.AGMSG_TEST_AUTHORITY_OPEN_REPLACEMENT;
+const wrongReplacement = process.env.AGMSG_TEST_AUTHORITY_WRONG_REPLACEMENT;
+const originalLstat = fs.promises.lstat;
+const originalOpen = fs.promises.open;
+let lstatSwapped = false;
+let openSwapped = false;
+
+fs.promises.lstat = async (...args) => {
+  const result = await originalLstat(...args);
+  if (mode === "positive" && args[0] === target && !lstatSwapped && !openSwapped) {
+    lstatSwapped = true;
+    await fs.promises.rename(lstatReplacement, target);
+    await fs.promises.writeFile(marker, "lstat-before-open\n");
+  }
+  return result;
+};
+
+fs.promises.open = async (...args) => {
+  if (mode === "negative" && args[0] === target && !openSwapped) {
+    openSwapped = true;
+    await fs.promises.rename(wrongReplacement, target);
+    await fs.promises.writeFile(marker, "wrong-before-open\n");
+  }
+  const handle = await originalOpen(...args);
+  if (mode === "positive" && args[0] === target && !lstatSwapped && !openSwapped) {
+    openSwapped = true;
+    await fs.promises.rename(openReplacement, target);
+    await fs.promises.writeFile(marker, "open-after\n");
+  }
+  return handle;
+};
+
+syncBuiltinESMExports();
+NODE
+}
+
+_run_authority_race_load() {
+  local hook="$1" mode="$2" target="$3" lstat_replacement="$4" \
+    open_replacement="$5" wrong_replacement="$6" marker="$7"
+  run env \
+    AGMSG_SYNC_CONNECTION_DIR="$TEST_SKILL_DIR" \
+    AGMSG_SYNC_STORAGE_DIR="$TEST_SKILL_DIR/db/remote-sync" \
+    AGMSG_TEST_REMOTE_SYNC_MODULE="file://$SCRIPTS/internal/remote-sync.mjs" \
+    AGMSG_TEST_AUTHORITY_TARGET="$target" \
+    AGMSG_TEST_AUTHORITY_RACE_MODE="$mode" \
+    AGMSG_TEST_AUTHORITY_RACE_MARKER="$marker" \
+    AGMSG_TEST_AUTHORITY_LSTAT_REPLACEMENT="$lstat_replacement" \
+    AGMSG_TEST_AUTHORITY_OPEN_REPLACEMENT="$open_replacement" \
+    AGMSG_TEST_AUTHORITY_WRONG_REPLACEMENT="$wrong_replacement" \
+    NODE_OPTIONS="--import=$hook" \
+    node --input-type=module -e '
+      const { loadConfig } = await import(process.env.AGMSG_TEST_REMOTE_SYNC_MODULE);
+      await loadConfig("testteam");
+    '
+}
+
 @test "connect: a POST that committed but lost its response recovers on retry (#143)" {
   # Arm the cut: the next /v1/connect registers the team and answers nothing.
   run curl -sS "$ENDPOINT/_test/drop-next-connect"
@@ -245,6 +347,42 @@ _binding_field() {  # $1 = team, $2 = json path under remote_binding
   run bash "$SCRIPTS/remote.sh" connect --endpoint "$ENDPOINT" --e2ee testteam
   [ "$status" -eq 0 ]
   [ "$(_binding_field testteam cipher_profile)" = "age-v1" ]
+}
+
+@test "remote authority read: an atomic replacement does not reject the opened file (#205)" {
+  local target="$TEST_SKILL_DIR/teams/testteam/config.json"
+  local lstat_replacement="$TEST_SKILL_DIR/authority-lstat.json"
+  local open_replacement="$TEST_SKILL_DIR/authority-open.json"
+  local wrong_replacement="$TEST_SKILL_DIR/authority-wrong.json"
+  local marker="$TEST_SKILL_DIR/authority-race.marker"
+  local hook="$TEST_SKILL_DIR/authority-race-hook.mjs"
+  _authority_race_config_fixture "$target" "$lstat_replacement" \
+    "$open_replacement" "$wrong_replacement"
+  _authority_race_hook "$hook"
+
+  _run_authority_race_load "$hook" positive "$target" "$lstat_replacement" \
+    "$open_replacement" "$wrong_replacement" "$marker"
+  [ "$status" -eq 0 ]
+  [ -f "$marker" ]
+  [ "$(cat "$marker")" = "open-after" ]
+}
+
+@test "remote authority read: a replacement with another binding is still refused (#205)" {
+  local target="$TEST_SKILL_DIR/teams/testteam/config.json"
+  local lstat_replacement="$TEST_SKILL_DIR/authority-lstat.json"
+  local open_replacement="$TEST_SKILL_DIR/authority-open.json"
+  local wrong_replacement="$TEST_SKILL_DIR/authority-wrong.json"
+  local marker="$TEST_SKILL_DIR/authority-negative.marker"
+  local hook="$TEST_SKILL_DIR/authority-negative-hook.mjs"
+  _authority_race_config_fixture "$target" "$lstat_replacement" \
+    "$open_replacement" "$wrong_replacement"
+  _authority_race_hook "$hook"
+
+  _run_authority_race_load "$hook" negative "$target" "$lstat_replacement" \
+    "$open_replacement" "$wrong_replacement" "$marker"
+  [ "$status" -ne 0 ]
+  [ "$(cat "$marker")" = "wrong-before-open" ]
+  printf '%s\n' "$output" | grep -Fq "connected team binding is invalid or disconnected"
 }
 
 # --- set-endpoint: move a live binding's address (#718) --------------------

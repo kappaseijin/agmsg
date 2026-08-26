@@ -680,22 +680,43 @@ export function authorityFileError(subject, path, stats, { maxBytes, privateFile
 
 
 async function readBoundedAuthorityFile(path, maxBytes, privateFile) {
-  const before = await lstat(path);
-  const fault = authorityFileFault(before, { maxBytes, privateFile });
-  if (fault) {
-    // The path too: the previous message named a property without naming what
-    // had it, on a machine that may hold several.
-    throw authorityFileError(
-      privateFile ? "remote credential" : "connected team binding",
-      path, before, { maxBytes, privateFile });
+  // Open first and inspect the descriptor. A path lstat followed by open has a
+  // window in which a normal atomic replacement is reported as an authority
+  // change even though the descriptor we are about to read is self-consistent.
+  // O_NOFOLLOW closes the symlink path on platforms that provide it; the
+  // ELOOP diagnostic below keeps the operator-facing reason stable.
+  const subject = privateFile ? "remote credential" : "connected team binding";
+  let handle;
+  try {
+    handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  } catch (error) {
+    if (error?.code !== "ELOOP") throw error;
+    let pathMetadata;
+    try {
+      pathMetadata = await lstat(path);
+    } catch {
+      throw error;
+    }
+    const authorityError = authorityFileError(
+      subject, path, pathMetadata, { maxBytes, privateFile });
+    throw authorityError ?? error;
   }
-  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const metadata = await handle.stat();
-    const changed = !metadata.isFile() || metadata.dev !== before.dev || metadata.ino !== before.ino ||
-      metadata.size > maxBytes || (process.platform !== "win32" &&
-      (metadata.mode & (privateFile ? 0o077 : 0o022)) !== 0);
-    if (changed) throw new Error("connection authority changed while it was being opened");
+    // Windows has no O_NOFOLLOW equivalent in this call. Keep the symlink
+    // rejection there as a path check, but use the opened descriptor for every
+    // other authority property so a replacement cannot change what is read.
+    if (process.platform === "win32") {
+      const pathMetadata = await lstat(path);
+      if (pathMetadata.isSymbolicLink()) {
+        throw authorityFileError(
+          subject, path, pathMetadata, { maxBytes, privateFile });
+      }
+    }
+    const fault = authorityFileFault(metadata, { maxBytes, privateFile });
+    if (fault) {
+      throw authorityFileError(subject, path, metadata, { maxBytes, privateFile });
+    }
     const chunks = [];
     let total = 0;
     for (;;) {
