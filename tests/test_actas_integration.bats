@@ -11,13 +11,113 @@
 load test_helper
 
 setup() {
+  local force_abort="${AGMSG_TEST_ACTAS_FORCE_ABORT:-}"
+  local child_report="${AGMSG_TEST_ACTAS_CHILD_REPORT:-}"
+  local child_report_root="${AGMSG_TEST_ACTAS_CHILD_REPORT_ROOT:-}"
+  local wait_timeout="${AGMSG_TEST_WAIT_TIMEOUT_S:-}"
+
   setup_test_env
+  # setup_test_env deliberately clears inherited AGMSG_* configuration. Keep
+  # only the test-local seams used by the nested #199 regression child.
+  [ -n "$force_abort" ] && export AGMSG_TEST_ACTAS_FORCE_ABORT="$force_abort"
+  [ -n "$child_report" ] && export AGMSG_TEST_ACTAS_CHILD_REPORT="$child_report"
+  [ -n "$child_report_root" ] && export AGMSG_TEST_ACTAS_CHILD_REPORT_ROOT="$child_report_root"
+  [ -n "$wait_timeout" ] && export AGMSG_TEST_WAIT_TIMEOUT_S="$wait_timeout"
+
   # Source the lib so we can call its functions directly from the test body.
   # shellcheck disable=SC1090
   source "$SKILL_DIR/scripts/lib/actas-lock.sh"
 }
 
-teardown() { teardown_test_env; }
+_ACTAS_TEST_CHILD_PIDS=()
+
+_actas_test_child_report_path() {
+  local report="${AGMSG_TEST_ACTAS_CHILD_REPORT:-}"
+  local root="${AGMSG_TEST_ACTAS_CHILD_REPORT_ROOT:-}"
+
+  [ -n "$report" ] || return 1
+  [ -n "$root" ] || return 1
+  [ "$report" != "$root" ] || return 1
+  case "$report" in
+    "$root"/*) printf '%s\n' "$report" ;;
+    *) return 1 ;;
+  esac
+}
+
+_actas_test_track_child() {
+  local pid="$1" report
+  case "$pid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+
+  _ACTAS_TEST_CHILD_PIDS+=("$pid")
+  if report="$(_actas_test_child_report_path 2>/dev/null)"; then
+    printf '%s\n' "$pid" >> "$report" || return 1
+  fi
+}
+
+_actas_test_untrack_child() {
+  local pid="$1" child
+  local -a remaining=()
+  for child in "${_ACTAS_TEST_CHILD_PIDS[@]}"; do
+    [ "$child" = "$pid" ] || remaining+=("$child")
+  done
+  _ACTAS_TEST_CHILD_PIDS=("${remaining[@]}")
+}
+
+_actas_test_reap_children() {
+  local pid
+  local -a snapshot=("${_ACTAS_TEST_CHILD_PIDS[@]}")
+  _ACTAS_TEST_CHILD_PIDS=()
+
+  # Signal the complete snapshot before waiting, so one child cannot keep
+  # another child alive while the registry is being drained.
+  for pid in "${snapshot[@]}"; do
+    kill "$pid" 2>/dev/null || true
+  done
+  for pid in "${snapshot[@]}"; do
+    wait "$pid" 2>/dev/null || true
+  done
+}
+
+_actas_test_run_abort_child() {
+  local report="$1" output_file="$2" timeout_marker="$3"
+  local child watchdog child_status
+
+  env \
+    AGMSG_TEST_ACTAS_FORCE_ABORT=1 \
+    AGMSG_TEST_ACTAS_CHILD_REPORT="$report" \
+    AGMSG_TEST_ACTAS_CHILD_REPORT_ROOT="$BATS_TEST_TMPDIR" \
+    AGMSG_TEST_WAIT_TIMEOUT_S=10 \
+    bats --filter 'watch: writer handover waits for the delivery gate \(#683\)' \
+      "$BATS_TEST_DIRNAME/test_actas_integration.bats" >"$output_file" 2>&1 &
+  child=$!
+
+  (
+    sleep 30
+    if kill -0 "$child" 2>/dev/null; then
+      : > "$timeout_marker"
+      kill -TERM "$child" 2>/dev/null || true
+      sleep 1
+      kill -KILL "$child" 2>/dev/null || true
+    fi
+  ) &
+  watchdog=$!
+
+  if wait "$child"; then
+    child_status=0
+  else
+    child_status=$?
+  fi
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+  return "$child_status"
+}
+
+teardown() {
+  _actas_test_reap_children
+  teardown_test_env
+}
 
 # Helper: register a (team, agent) pair for the test project under claude-code.
 fake_register() {
@@ -299,11 +399,13 @@ fake_session() {
     bash "$SKILL_DIR/scripts/watch.sh" "sid-old" /tmp/p1 claude-code alice \
     > "$BATS_TEST_TMPDIR/old.out" 2> "$BATS_TEST_TMPDIR/old.err" 3>&- &
   local old=$!
+  _actas_test_track_child "$old"
   wait_for_file "$barrier.reached"
   [ "$(actas_lock_owner T alice)" = "sid-old" ]
 
   sleep 60 &
   local newpid=$!
+  _actas_test_track_child "$newpid"
   echo "sid-new" > "$RUN_DIR/cc-instance.$newpid"
 
   # A real writer process must not complete release/claim while the watcher
@@ -323,6 +425,7 @@ fake_session() {
     : > "$writer_done"
   ) >"$writer_out" 2>"$writer_err" &
   local writer=$!
+  _actas_test_track_child "$writer"
   wait_for_file "$writer_started"
 
   # Observe non-completion while the barrier is held, using a bounded poll
@@ -335,7 +438,13 @@ fake_session() {
   refute test -e "$writer_returned"
   [ "$(actas_lock_owner T alice)" = "sid-old" ]
 
-  : > "$barrier.release"
+  if [ -z "${AGMSG_TEST_ACTAS_FORCE_ABORT:-}" ]; then
+    : > "$barrier.release"
+  else
+    # Keep startup tolerant of a loaded runner, but make the forced failure
+    # itself short once all three children have been registered.
+    AGMSG_TEST_WAIT_TIMEOUT_S=1
+  fi
   wait_for_file "$writer_done" || {
     cat "$writer_out" "$writer_err" >&2
     printf 'gate-owner=%s lock-owner=%s\n' \
@@ -345,6 +454,7 @@ fake_session() {
     false
   }
   wait "$writer"
+  _actas_test_untrack_child "$writer"
   [ "$(actas_lock_owner T alice)" = "sid-new" ]
 
   # The old watcher must leave before the post-handover message is sent.
@@ -355,6 +465,7 @@ fake_session() {
   }
   kill "$newpid" 2>/dev/null || true
   wait "$newpid" 2>/dev/null || true
+  _actas_test_untrack_child "$newpid"
   bash "$SKILL_DIR/scripts/send.sh" T bob alice "after the handover" >/dev/null
 
   # It must not have taken a message addressed to a role it no longer owns.
@@ -384,6 +495,55 @@ fake_session() {
 
   kill "$old" 2>/dev/null || true
   wait "$old" 2>/dev/null || true
+  _actas_test_untrack_child "$old"
+}
+
+@test "watch: assertion abort reaps its children (#199)" {
+  skip_on_windows "actas watcher process mgmt under Git Bash (#182)"
+
+  local report="$BATS_TEST_TMPDIR/actas-child-pids"
+  local child_output="$BATS_TEST_TMPDIR/actas-child.out"
+  local timeout_marker="$BATS_TEST_TMPDIR/actas-child.timeout"
+  local child_status=0 cleanup_status=0 report_status=0 pid_count=0 pid
+  local seen_pids=''
+  : > "$report"
+
+  _actas_test_run_abort_child "$report" "$child_output" "$timeout_marker" || child_status=$?
+  [ -s "$report" ] || report_status=1
+
+  if [ "$report_status" -eq 0 ]; then
+    while IFS= read -r pid; do
+      case "$pid" in
+        ''|*[!0-9]*) cleanup_status=1; continue ;;
+      esac
+      case " $seen_pids " in
+        *" $pid "*) cleanup_status=1 ;;
+        *) seen_pids="$seen_pids $pid" ;;
+      esac
+      pid_count=$((pid_count + 1))
+      if ! AGMSG_TEST_WAIT_TIMEOUT_S=2 wait_for_pid_exit "$pid"; then
+        cleanup_status=1
+      fi
+    done < "$report"
+  fi
+
+  # Leave no child behind even when the mutation under test makes the
+  # assertion above fail; the mutation is an observation, not a leak.
+  if [ -r "$report" ]; then
+    while IFS= read -r pid; do
+      case "$pid" in
+        ''|*[!0-9]*) continue ;;
+      esac
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    done < "$report"
+  fi
+
+  [ "$child_status" -ne 0 ]
+  [ ! -e "$timeout_marker" ]
+  [ "$report_status" -eq 0 ]
+  [ "$pid_count" -eq 3 ]
+  [ "$cleanup_status" -eq 0 ]
 }
 
 # The other half, and the one that decides whether this fix is safe: a watcher
