@@ -424,7 +424,9 @@ EOF
   grep -Fq 'wait_exit=73' "$packet_stderr"
   grep -Fq 'synthetic P8 child failure index=2' "$packet_stderr"
   grep -Fq 'event_row=' "$packet_stderr"
-  ! grep -Fq 'job 1' "$packet_stderr"
+  if grep -Fq 'job 1' "$packet_stderr"; then
+    false
+  fi
   local i
   for i in $(seq 1 "$fanout_count"); do
     [ -f "$BATS_TEST_TMPDIR/p8-fanout/child-$i.status" ]
