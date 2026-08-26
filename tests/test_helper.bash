@@ -89,6 +89,154 @@ setup_test_env() {
   bash "$SCRIPTS/internal/init-db.sh"
 }
 
+snapshot_test_env_is_msys() {
+  local platform="${MSYSTEM:-}"
+  if [ -z "$platform" ]; then
+    platform="$(uname -s 2>/dev/null || printf '%s' unknown)"
+  fi
+  case "$platform" in
+    MINGW*|MSYS*|CYGWIN*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+snapshot_test_env_winpid() {
+  awk '
+    BEGIN { winpid_column = 0 }
+    {
+      if (winpid_column == 0) {
+        for (i = 1; i <= NF; i++) {
+          header = toupper($i)
+          gsub(/[^A-Z0-9]/, "", header)
+          if (header == "WINPID") {
+            winpid_column = i
+            break
+          }
+        }
+        next
+      }
+      if ($winpid_column ~ /^[0-9]+$/) {
+        print $winpid_column
+        exit
+      }
+    }
+  '
+}
+
+snapshot_test_env_msys_pid() {
+  local msys_pid="$1" ps_record ps_rc proc_record proc_rc
+  local winpid tasklist_record tasklist_rc
+
+  printf '    msys_pid=%s\n' "$msys_pid"
+  if ps_record="$(ps -l -p "$msys_pid" 2>&1)"; then
+    ps_rc=0
+  else
+    ps_rc="$?"
+  fi
+  if [ "$ps_rc" -eq 0 ]; then
+    printf '    ps record for msys_pid=%s:\n%s\n' "$msys_pid" "$ps_record"
+  else
+    printf '    snapshot marker: ps lookup failed for msys_pid=%s (rc=%s): %s\n' \
+      "$msys_pid" "$ps_rc" "$ps_record"
+  fi
+
+  if [ -r "/proc/$msys_pid/cmdline" ]; then
+    if proc_record="$(tr '\0' ' ' <"/proc/$msys_pid/cmdline" 2>&1)"; then
+      proc_rc=0
+    else
+      proc_rc="$?"
+    fi
+    if [ "$proc_rc" -eq 0 ]; then
+      printf '    /proc/%s/cmdline: %s\n' "$msys_pid" "$proc_record"
+    else
+      printf '    snapshot marker: /proc/%s/cmdline unavailable (rc=%s): %s\n' \
+        "$msys_pid" "$proc_rc" "$proc_record"
+    fi
+  else
+    printf '    snapshot marker: /proc/%s/cmdline unavailable\n' "$msys_pid"
+  fi
+
+  if [ "$ps_rc" -eq 0 ]; then
+    winpid="$(printf '%s\n' "$ps_record" | snapshot_test_env_winpid)"
+  else
+    winpid=''
+  fi
+  if [ -z "$winpid" ]; then
+    printf '    snapshot marker: WINPID unavailable for msys_pid=%s; tasklist not queried\n' \
+      "$msys_pid"
+    return 0
+  fi
+  printf '    winpid=%s\n' "$winpid"
+  if ! command -v tasklist >/dev/null 2>&1; then
+    printf '    snapshot marker: tasklist unavailable for winpid=%s\n' "$winpid"
+    return 0
+  fi
+  if tasklist_record="$(MSYS_NO_PATHCONV=1 tasklist /FI "PID eq $winpid" 2>&1)"; then
+    tasklist_rc=0
+  else
+    tasklist_rc="$?"
+  fi
+  if [ "$tasklist_rc" -eq 0 ]; then
+    printf '    tasklist record for winpid=%s:\n%s\n' "$winpid" "$tasklist_record"
+  else
+    printf '    snapshot marker: tasklist lookup failed for winpid=%s (rc=%s): %s\n' \
+      "$winpid" "$tasklist_rc" "$tasklist_record"
+  fi
+}
+
+snapshot_test_env_native_processes() {
+  local skill_dir="$1" native_root='' process_record process_rc path_rc
+
+  printf '  native process candidates containing %s:\n' "$skill_dir"
+  if ! command -v powershell.exe >/dev/null 2>&1; then
+    printf '%s\n' '    snapshot marker: powershell.exe unavailable'
+    return 0
+  fi
+
+  if command -v cygpath >/dev/null 2>&1; then
+    if native_root="$(MSYS_NO_PATHCONV=1 cygpath -m "$skill_dir" 2>&1)"; then
+      path_rc=0
+    else
+      path_rc="$?"
+    fi
+    if [ "$path_rc" -ne 0 ]; then
+      printf '    snapshot marker: cygpath failed (rc=%s): %s\n' \
+        "$path_rc" "$native_root"
+      native_root=''
+    fi
+  else
+    printf '%s\n' '    snapshot marker: cygpath unavailable'
+  fi
+
+  if process_record="$(
+    AGMSG_SNAPSHOT_TEST_ROOT="$skill_dir" \
+    AGMSG_SNAPSHOT_TEST_ROOT_NATIVE="$native_root" \
+    MSYS_NO_PATHCONV=1 powershell.exe -NoProfile -NonInteractive -Command '
+      $needles = @($env:AGMSG_SNAPSHOT_TEST_ROOT, $env:AGMSG_SNAPSHOT_TEST_ROOT_NATIVE) |
+        Where-Object { $_ }
+      Get-CimInstance Win32_Process |
+        Where-Object {
+          $line = $_.CommandLine
+          $line -and (($needles | Where-Object { $line.Contains($_) }).Count -gt 0)
+        } |
+        Select-Object ProcessId, ParentProcessId, Name, CommandLine |
+        Format-List
+    ' 2>&1
+  )"; then
+    process_rc=0
+  else
+    process_rc="$?"
+  fi
+  if [ "$process_rc" -ne 0 ]; then
+    printf '    snapshot marker: Win32_Process query failed (rc=%s): %s\n' \
+      "$process_rc" "$process_record"
+  elif [ -n "$process_record" ]; then
+    printf '%s\n' "$process_record"
+  else
+    printf '%s\n' '    <none>'
+  fi
+}
+
 snapshot_test_env_runtime() {
   local skill_dir="${1:-}" run_dir artifact artifact_name artifact_content artifact_rc
   local artifact_pid ps_record ps_rc tasklist_record tasklist_rc
@@ -165,88 +313,130 @@ snapshot_test_env_runtime() {
         printf '    snapshot marker: invalid PID value: %s\n' "$artifact_pid"
         ;;
       *)
-        if ps_record="$(ps -p "$artifact_pid" -o pid=,ppid=,stat=,args= 2>&1)"; then
-          ps_rc=0
+        if snapshot_test_env_is_msys; then
+          snapshot_test_env_msys_pid "$artifact_pid"
         else
-          ps_rc="$?"
-        fi
-        if [ "$ps_rc" -eq 0 ]; then
-          printf '    ps record for pid=%s:\n%s\n' "$artifact_pid" "$ps_record"
-        else
-          printf '    snapshot marker: ps lookup failed for pid=%s (rc=%s): %s\n' \
-            "$artifact_pid" "$ps_rc" "$ps_record"
-        fi
-        if command -v tasklist >/dev/null 2>&1; then
-          if tasklist_record="$(MSYS_NO_PATHCONV=1 tasklist /FI "PID eq $artifact_pid" 2>&1)"; then
-            tasklist_rc=0
+          if ps_record="$(ps -p "$artifact_pid" -o pid=,ppid=,stat=,args= 2>&1)"; then
+            ps_rc=0
           else
-            tasklist_rc="$?"
+            ps_rc="$?"
           fi
-          if [ "$tasklist_rc" -eq 0 ]; then
-            printf '    tasklist record for pid=%s:\n%s\n' \
-              "$artifact_pid" "$tasklist_record"
+          if [ "$ps_rc" -eq 0 ]; then
+            printf '    ps record for pid=%s:\n%s\n' "$artifact_pid" "$ps_record"
           else
-            printf '    snapshot marker: tasklist lookup failed for pid=%s (rc=%s): %s\n' \
-              "$artifact_pid" "$tasklist_rc" "$tasklist_record"
+            printf '    snapshot marker: ps lookup failed for pid=%s (rc=%s): %s\n' \
+              "$artifact_pid" "$ps_rc" "$ps_record"
+          fi
+          if command -v tasklist >/dev/null 2>&1; then
+            if tasklist_record="$(MSYS_NO_PATHCONV=1 tasklist /FI "PID eq $artifact_pid" 2>&1)"; then
+              tasklist_rc=0
+            else
+              tasklist_rc="$?"
+            fi
+            if [ "$tasklist_rc" -eq 0 ]; then
+              printf '    tasklist record for pid=%s:\n%s\n' \
+                "$artifact_pid" "$tasklist_record"
+            else
+              printf '    snapshot marker: tasklist lookup failed for pid=%s (rc=%s): %s\n' \
+                "$artifact_pid" "$tasklist_rc" "$tasklist_record"
+            fi
           fi
         fi
         ;;
     esac
   done
 
-  printf '  process command lines containing %s:\n' "$skill_dir"
-  if process_table="$(ps -Ao pid=,ppid=,stat=,args= 2>&1)"; then
-    process_rc=0
+  if snapshot_test_env_is_msys; then
+    snapshot_test_env_native_processes "$skill_dir"
   else
-    process_rc="$?"
-  fi
-  if [ "$process_rc" -ne 0 ]; then
-    printf '    snapshot marker: process table unavailable (rc=%s): %s\n' \
-      "$process_rc" "$process_table"
-  else
-    if matching_processes="$(printf '%s\n' "$process_table" \
-      | grep -F -- "$skill_dir")"; then
-      matching_rc=0
+    printf '  process command lines containing %s:\n' "$skill_dir"
+    if process_table="$(ps -Ao pid=,ppid=,stat=,args= 2>&1)"; then
+      process_rc=0
     else
-      matching_rc="$?"
+      process_rc="$?"
     fi
-    case "$matching_rc" in
-      0)
-        printf '%s\n' "$matching_processes"
-        ;;
-      1)
-        printf '%s\n' '    <none>'
-        ;;
-      *)
-        printf '    snapshot marker: process filter failed (rc=%s): %s\n' \
-          "$matching_rc" "$matching_processes"
-        ;;
-    esac
+    if [ "$process_rc" -ne 0 ]; then
+      printf '    snapshot marker: process table unavailable (rc=%s): %s\n' \
+        "$process_rc" "$process_table"
+    else
+      if matching_processes="$(printf '%s\n' "$process_table" \
+        | grep -F -- "$skill_dir")"; then
+        matching_rc=0
+      else
+        matching_rc="$?"
+      fi
+      case "$matching_rc" in
+        0)
+          printf '%s\n' "$matching_processes"
+          ;;
+        1)
+          printf '%s\n' '    <none>'
+          ;;
+        *)
+          printf '    snapshot marker: process filter failed (rc=%s): %s\n' \
+            "$matching_rc" "$matching_processes"
+          ;;
+      esac
+    fi
   fi
   return 0
 }
 
 teardown_test_env() {
   local snapshot rm_stdout rm_stderr rm_rc residual_tree residual_rc
-  local stdout_file="$TEST_SKILL_DIR/.teardown.stdout.$$"
-  local stderr_file="$TEST_SKILL_DIR/.teardown.stderr.$$"
+  local capture_root capture_dir stdout_file stderr_file capture_error capture_rc
+
+  capture_root="${BATS_TEST_TMPDIR:-}"
+  if [ -z "$capture_root" ]; then
+    capture_root="$(dirname "$TEST_SKILL_DIR")"
+  fi
+  capture_dir=''
+  capture_error=''
+  if capture_dir="$(mktemp -d "$capture_root/.agmsg-teardown.XXXXXX" 2>&1)"; then
+    stdout_file="$capture_dir/stdout"
+    stderr_file="$capture_dir/stderr"
+    if : >"$stdout_file" 2>/dev/null && : >"$stderr_file" 2>/dev/null; then
+      :
+    else
+      capture_rc="$?"
+      capture_error="snapshot marker: cannot create teardown capture files (rc=$capture_rc)"
+      capture_dir=''
+    fi
+  else
+    capture_rc="$?"
+    capture_error="snapshot marker: cannot create teardown capture directory (rc=$capture_rc): $capture_dir"
+    capture_dir=''
+  fi
 
   snapshot="$(snapshot_test_env_runtime "$TEST_SKILL_DIR")"
-  if rm -rf "$TEST_SKILL_DIR" >"$stdout_file" 2>"$stderr_file"; then
-    return 0
+  if [ -n "$capture_dir" ]; then
+    if rm -rf "$TEST_SKILL_DIR" >"$stdout_file" 2>"$stderr_file"; then
+      return 0
+    else
+      rm_rc="$?"
+    fi
   else
-    rm_rc="$?"
+    if rm -rf "$TEST_SKILL_DIR"; then
+      return 0
+    else
+      rm_rc="$?"
+    fi
   fi
 
-  if rm_stdout="$(cat "$stdout_file" 2>&1)"; then
-    :
+  if [ -n "$capture_dir" ]; then
+    if rm_stdout="$(cat "$stdout_file" 2>&1)"; then
+      :
+    else
+      rm_stdout="snapshot marker: cannot read captured rm stdout (rc=$?)"
+    fi
+    if rm_stderr="$(cat "$stderr_file" 2>&1)"; then
+      :
+    else
+      rm_stderr="snapshot marker: cannot read captured rm stderr (rc=$?)"
+    fi
   else
-    rm_stdout="snapshot marker: cannot read captured rm stdout (rc=$?)"
-  fi
-  if rm_stderr="$(cat "$stderr_file" 2>&1)"; then
-    :
-  else
-    rm_stderr="snapshot marker: cannot read captured rm stderr (rc=$?)"
+    rm_stdout="$capture_error"
+    rm_stderr="$capture_error"
   fi
   printf '%s\n' 'teardown_test_env: rm -rf failed' >&2
   printf 'rm exit status: %s\n' "$rm_rc" >&2

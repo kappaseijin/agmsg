@@ -612,7 +612,7 @@ jobs:
           # separate failure points and each has its own test.
           - leg: windows runtime (#567)
             filter: "windows-native"
-            target: tests/test_codex_monitor.bats tests/test_codex_bridge_launcher.bats
+            target: tests/test_codex_monitor.bats tests/test_codex_bridge_launcher.bats tests/test_fixture_helpers.bats
             sqlite: true
           # The roster driver's staged input (#817). Same reasoning as the leg
           # above, one layer down: the fix is for Windows, and two of the things

@@ -192,6 +192,171 @@ EOF
   grep -Fq "$fixture" <<<"$output"
 }
 
+@test "windows-native fixture helper: capture survives deletion of the target (#169B)" {
+  local helper_dir fixture
+  helper_dir="$BATS_TEST_DIRNAME"
+  fixture="$BATS_TEST_TMPDIR/partial-teardown-fixture"
+  mkdir -p "$fixture/run/nested"
+  printf 'runtime residue\n' > "$fixture/run/nested/residue.txt"
+
+  run bash -c '
+    source "$1/test_helper.bash"
+    export TEST_SKILL_DIR="$2"
+    rm() {
+      target="$2"
+      find "$target" -depth -type f -delete
+      find "$target" -depth -type d -empty -delete
+      printf "sentinel rm stdout\n"
+      printf "sentinel rm failure\n" >&2
+      return 23
+    }
+    export -f rm
+    set +e
+    teardown_test_env
+    rc="$?"
+    set -e
+    printf "child_rm_rc=%s\n" "$rc"
+    exit "$rc"
+  ' bash "$helper_dir" "$fixture"
+  [ "$status" -eq 23 ]
+  grep -Fq 'teardown_test_env: rm -rf failed' <<<"$output"
+  grep -Fq 'rm exit status: 23' <<<"$output"
+  grep -Fq 'sentinel rm stdout' <<<"$output"
+  grep -Fq 'sentinel rm failure' <<<"$output"
+  refute grep -Fq 'cannot read captured rm stdout' <<<"$output"
+  refute grep -Fq 'cannot read captured rm stderr' <<<"$output"
+}
+
+@test "windows-native fixture helper: separates MSYS and native PID evidence (#169B)" {
+  local helper_dir fixture stub log powershell_log
+  helper_dir="$BATS_TEST_DIRNAME"
+  fixture="$BATS_TEST_TMPDIR/msys-pid-fixture"
+  stub="$BATS_TEST_TMPDIR/msys-pid-stub-bin"
+  log="$BATS_TEST_TMPDIR/tasklist-args"
+  powershell_log="$BATS_TEST_TMPDIR/powershell-args"
+  mkdir -p "$fixture/run" "$stub"
+  printf '4242\n' > "$fixture/run/codex-bridge.team.alice.pid"
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'case " $* " in' \
+    '  *" -l -p 4242 "*)' \
+    '    if [ "$AGMSG_PS_WITHOUT_WINPID" = 1 ]; then' \
+    '      printf "UID PID PPID TTY STIME COMMAND\n"' \
+    '      printf "u 4242 1 ? now /usr/bin/bash\n"' \
+    '    else' \
+    '      printf "UID PID PPID WINPID TTY STIME COMMAND\n"' \
+    '      printf "u 4242 1 84242 ? now /usr/bin/bash\n"' \
+    '    fi' \
+    '    ;;' \
+    '  *" -A "*)' \
+    '    printf " 4242 1 S %s\n" "$AGMSG_SNAPSHOT_ROOT/run/codex-bridge.team.alice.pid"' \
+    '    ;;' \
+    '  *)' \
+    '    printf "unexpected ps args: %s\n" "$*" >&2' \
+    '    exit 1' \
+    '    ;;' \
+    'esac' > "$stub/ps"
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'printf "%s\n" "$*" > "$AGMSG_TEST_TASKLIST_LOG"' \
+    'printf "Image Name                     PID Session Name        Session#    Mem Usage\n"' \
+    'printf "bash.exe                    84242 Console                    1      1,000 K\n"' \
+    > "$stub/tasklist"
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'if [ "$1" = -m ]; then' \
+    '  printf "C:/tmp/agmsg-msys-pid-fixture\n"' \
+    'else' \
+    '  exit 1' \
+    'fi' > "$stub/cygpath"
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'printf "%s\n" "$*" > "$AGMSG_TEST_POWERSHELL_LOG"' \
+    'printf "ProcessId ParentProcessId Name CommandLine\n"' \
+    'printf "84242 1 bash %s %s\n" "$AGMSG_SNAPSHOT_ROOT" "$AGMSG_SNAPSHOT_TEST_ROOT_NATIVE"' \
+    > "$stub/powershell.exe"
+  chmod +x "$stub"/*
+
+  run env \
+    MSYSTEM=MINGW64 \
+    AGMSG_PS_WITHOUT_WINPID=0 \
+    AGMSG_SNAPSHOT_ROOT="$fixture" \
+    AGMSG_TEST_TASKLIST_LOG="$log" \
+    AGMSG_TEST_POWERSHELL_LOG="$powershell_log" \
+    PATH="$stub:$PATH" \
+    bash -c '
+      source "$1/test_helper.bash"
+      snapshot_test_env_runtime "$2"
+    ' bash "$helper_dir" "$fixture"
+  [ "$status" -eq 0 ]
+  grep -Fq 'msys_pid=4242' <<<"$output"
+  grep -Fq 'winpid=84242' <<<"$output"
+  grep -Fq 'tasklist record for winpid=84242' <<<"$output"
+  grep -Fq 'native process candidates containing' <<<"$output"
+  grep -Fq '84242' <<<"$output"
+  grep -Fq 'C:/tmp/agmsg-msys-pid-fixture' <<<"$output"
+  refute grep -Fq 'process table unavailable' <<<"$output"
+  refute grep -Fq 'unexpected ps args' <<<"$output"
+  grep -Fq 'Get-CimInstance Win32_Process' "$powershell_log"
+  [ "$(cat "$log")" = '/FI PID eq 84242' ]
+  refute grep -Fq 'PID eq 4242' "$log"
+
+  : > "$log"
+  run env \
+    MSYSTEM=MINGW64 \
+    AGMSG_PS_WITHOUT_WINPID=1 \
+    AGMSG_SNAPSHOT_ROOT="$fixture" \
+    AGMSG_TEST_TASKLIST_LOG="$log" \
+    AGMSG_TEST_POWERSHELL_LOG="$powershell_log" \
+    PATH="$stub:$PATH" \
+    bash -c '
+      source "$1/test_helper.bash"
+      snapshot_test_env_runtime "$2"
+    ' bash "$helper_dir" "$fixture"
+  [ "$status" -eq 0 ]
+  grep -Fq 'WINPID unavailable for msys_pid=4242; tasklist not queried' <<<"$output"
+  [ ! -s "$log" ]
+  refute grep -Fq 'tasklist record for winpid=' <<<"$output"
+}
+
+@test "windows-native fixture helper: runs rm when capture creation fails (#169B)" {
+  local helper_dir fixture count_file
+  helper_dir="$BATS_TEST_DIRNAME"
+  fixture="$BATS_TEST_TMPDIR/capture-unavailable-fixture"
+  count_file="$BATS_TEST_TMPDIR/rm-call-count"
+  mkdir -p "$fixture/run"
+
+  run env \
+    AGMSG_RM_CALL_COUNT="$count_file" \
+    bash -c '
+      source "$1/test_helper.bash"
+      export TEST_SKILL_DIR="$2"
+      mktemp() {
+        printf "capture setup unavailable\n" >&2
+        return 66
+      }
+      rm() {
+        printf "fallback rm stdout\n"
+        printf "fallback rm stderr\n" >&2
+        printf "called\n" > "$AGMSG_RM_CALL_COUNT"
+        return 17
+      }
+      export -f mktemp rm
+      set +e
+      teardown_test_env
+      rc="$?"
+      set -e
+      printf "child_rm_rc=%s\n" "$rc"
+      exit "$rc"
+    ' bash "$helper_dir" "$fixture"
+  [ "$status" -eq 17 ]
+  [ "$(cat "$count_file")" = called ]
+  grep -Fq 'fallback rm stdout' <<<"$output"
+  grep -Fq 'fallback rm stderr' <<<"$output"
+  grep -Fq 'rm exit status: 17' <<<"$output"
+  grep -Fq 'cannot create teardown capture directory (rc=66)' <<<"$output"
+}
+
 @test "fixture helper: successful teardown stays quiet (#169)" {
   local helper_dir fixture
   helper_dir="$BATS_TEST_DIRNAME"
