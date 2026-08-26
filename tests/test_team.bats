@@ -312,7 +312,10 @@ EOF
     > "$unrelated_dir/.config.lock.holder"
   unrelated_before="$(cat "$unrelated_dir/.config.lock.holder")"
 
-  run --separate-stderr env AGMSG_LOCK_SECONDS=1 AGMSG_LOCK_TRIES=50 \
+  # Print from the child that executes join.sh; checking only this test shell
+  # would not prove that the production path received the unset variable.
+  run --separate-stderr env -u AGMSG_LOCK_TRIES AGMSG_LOCK_SECONDS=1 \
+    bash -c 'printf "AGMSG_LOCK_TRIES=%s\\n" "${AGMSG_LOCK_TRIES-unset}" >&2; exec bash "$@"' \
     bash "$SCRIPTS/join.sh" wedged blocked claude-code /tmp/blocked
   blocked_status="$status"
   blocked_stderr="$stderr"
@@ -329,6 +332,10 @@ EOF
   [ "$holder_rc" -eq 0 ]
   [ "$blocked_status" -ne 0 ]
   case "$blocked_stderr" in
+    *"AGMSG_LOCK_TRIES=unset"*) ;;
+    *) false ;;
+  esac
+  case "$blocked_stderr" in
     *"timed out acquiring registry lock"*) ;;
     *) false ;;
   esac
@@ -339,6 +346,71 @@ EOF
   [ "$target_lock_present" -eq 1 ]
   [ "$unrelated_after" = "$unrelated_before" ]
   [ -d "$unrelated_dir/.config.lock" ]
+}
+
+@test "join: explicit attempt control reports the attempt bound" {
+  local team_dir="$TEST_SKILL_DIR/teams/attempt-bound"
+  local holder_script="$TEST_SKILL_DIR/attempt-lock-holder.sh"
+  local ready="$TEST_SKILL_DIR/attempt-lock-holder.ready" release="$TEST_SKILL_DIR/attempt-lock-holder.release"
+  local holder_pid blocked_status blocked_stderr holder_rc
+  bash "$SCRIPTS/join.sh" attempt-bound seed claude-code /tmp/seed >/dev/null
+  cat > "$holder_script" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+team_dir="$1"
+ready="$2"
+release="$3"
+library="$4"
+source "$library"
+agmsg_lock_acquire "$team_dir"
+: > "$ready"
+while [ ! -f "$release" ]; do
+  sleep 0.01
+done
+agmsg_lock_release
+EOF
+  chmod +x "$holder_script"
+  bash "$holder_script" "$team_dir" "$ready" "$release" \
+    "$SCRIPTS/lib/registry-lock.sh" >"$TEST_SKILL_DIR/attempt-lock-holder.stdout" \
+    2>"$TEST_SKILL_DIR/attempt-lock-holder.stderr" &
+  holder_pid="$!"
+  wait_for_file "$ready"
+  kill -0 "$holder_pid"
+
+  # Keep the time bound above the bounded attempt loop so this control can only
+  # exercise the explicit AGMSG_LOCK_TRIES setting.
+  run --separate-stderr env AGMSG_LOCK_SECONDS=60 AGMSG_LOCK_TRIES=50 \
+    bash -c 'printf "AGMSG_LOCK_TRIES=%s\\n" "${AGMSG_LOCK_TRIES-unset}" >&2; exec bash "$@"' \
+    bash "$SCRIPTS/join.sh" attempt-bound blocked claude-code /tmp/blocked
+  blocked_status="$status"
+  blocked_stderr="$stderr"
+  [ -d "$team_dir/.config.lock" ]
+
+  : > "$release"
+  if wait "$holder_pid"; then
+    holder_rc=0
+  else
+    holder_rc="$?"
+  fi
+
+  [ "$holder_rc" -eq 0 ]
+  [ "$blocked_status" -ne 0 ]
+  case "$blocked_stderr" in
+    *"AGMSG_LOCK_TRIES=50"*) ;;
+    *) false ;;
+  esac
+  case "$blocked_stderr" in
+    *"after 50 attempts"*) ;;
+    *) false ;;
+  esac
+  case "$blocked_stderr" in
+    *"explicit attempt control"*) ;;
+    *) false ;;
+  esac
+  case "$blocked_stderr" in
+    *"no holder generation progress"*) false ;;
+    *) ;;
+  esac
 }
 
 @test "join: production-default no-progress deadline cannot hang" {
