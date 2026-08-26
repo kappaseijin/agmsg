@@ -305,7 +305,7 @@ eperm_pid() {
   [[ "$output" != *"unrecognized"* ]]
 }
 
-@test "delivery status: an unrecognized project is distinguishable from a deliberately off one (#687)" {
+@test "delivery status: an unrecognized project is distinguishable from a confirmed off one (#175)" {
   # No `set` call at all: $TEST_PROJECT is a bare mktemp -d, so no settings
   # file exists at the resolved path -- the actual #684 failure mode, where
   # a settings file could not be found (most often because the caller's
@@ -315,10 +315,13 @@ eperm_pid() {
   # just a later one, because a reader (or actas) that only looks at the
   # first line must still be able to tell.
   run bash "$SCRIPTS/delivery.sh" status claude-code "$TEST_PROJECT"
-  [[ "$output" == "mode: off ("*")"$'\n'* || "$output" == "mode: off ("*")" ]] \
-    || { echo "expected the first line to read 'mode: off (...)', got: $output" >&2; return 1; }
-  [[ "$output" == *"unrecognized"* ]] &&
-    [[ "$output" == *"$TEST_PROJECT"* ]]
+  first_line="${output%%$'\n'*}"
+  case "$first_line" in
+    "mode: unknown (unrecognized: "*")") ;;
+    *) echo "expected the first line to read 'mode: unknown (...)', got: $first_line" >&2; return 1 ;;
+  esac
+  printf '%s\n' "$output" | grep -q -F -- "unrecognized"
+  printf '%s\n' "$output" | grep -q -F -- "$TEST_PROJECT"
 }
 
 @test "delivery status: a settings file that exists but is not valid JSON is also unrecognized, not deliberate off (review)" {
@@ -332,10 +335,33 @@ eperm_pid() {
   mkdir -p "$TEST_PROJECT/.claude"
   printf '{not valid json' > "$TEST_PROJECT/.claude/settings.local.json"
   run bash "$SCRIPTS/delivery.sh" status claude-code "$TEST_PROJECT"
-  [[ "$output" == "mode: off ("*")"$'\n'* || "$output" == "mode: off ("*")" ]] \
-    || { echo "expected the first line to read 'mode: off (...)', got: $output" >&2; return 1; }
-  [[ "$output" == *"unrecognized"* ]] &&
-    [[ "$output" == *"could not be read as valid JSON"* ]]
+  first_line="${output%%$'\n'*}"
+  case "$first_line" in
+    "mode: unknown (unrecognized: "*")") ;;
+    *) echo "expected the first line to read 'mode: unknown (...)', got: $first_line" >&2; return 1 ;;
+  esac
+  printf '%s\n' "$output" | grep -q -F -- "unrecognized"
+  printf '%s\n' "$output" | grep -q -F -- "could not be read as valid JSON"
+}
+
+@test "delivery status (codex): an unregistered project starts unknown (#175)" {
+  run bash "$SCRIPTS/delivery.sh" status codex "$TEST_PROJECT"
+  [ "$status" -eq 0 ]
+  first_line="${output%%$'\n'*}"
+  case "$first_line" in
+    "mode: unknown (unrecognized: "*")") ;;
+    *) echo "expected the first line to read 'mode: unknown (...)', got: $first_line" >&2; return 1 ;;
+  esac
+  printf '%s\n' "$output" | grep -q -F -- "$TEST_PROJECT"
+}
+
+@test "delivery status (codex): set off remains confirmed off with readable hooks" {
+  bash "$SCRIPTS/delivery.sh" set off codex "$TEST_PROJECT" >/dev/null
+  [ -f "$TEST_PROJECT/.codex/hooks.json" ]
+  run bash "$SCRIPTS/delivery.sh" status codex "$TEST_PROJECT"
+  [ "$status" -eq 0 ]
+  first_line="${output%%$'\n'*}"
+  [ "$first_line" = "mode: off (no agmsg delivery hooks installed for this project)" ]
 }
 
 # --- delivery capability JSON (#39) ---
