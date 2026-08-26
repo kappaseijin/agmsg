@@ -108,46 +108,255 @@ _launcher_child_pids() {
     | awk '{print $1}'
 }
 
-# PIDs of bridge processes this test's launchers started. The bridge itself
-# runs as "bash codex-bridge.js ..." -- its argv never contains LAUNCHER, so
-# _launcher_child_pids cannot see it, and a child launcher's EXIT trap only
-# releases its runtime lock; it does not kill a bridge it already nohup'd. Read
-# from pidfiles instead, which live under this test's own $RUN_DIR ($TEST_
-# SKILL_DIR is unique per test), so this cannot reach another test's process.
-_launcher_bridge_pids() {
-  local f
-  for f in "$RUN_DIR"/codex-bridge.*.pid; do
-    [ -f "$f" ] || continue
-    cat "$f" 2>/dev/null
-  done
-  ps -Ao pid=,args= 2>/dev/null \
-    | grep -F "$PROJ" \
-    | grep -F 'codex-bridge.js' \
-    | awk '{print $1}'
+# Return success only for the POSIX process namespace where this suite's argv
+# and pidfile ownership checks are valid. Git Bash's MSYS/MINGW PID mapping is
+# a separate diagnostic boundary (#169B), so an unset or unknown mapping is
+# never turned into a kill target here.
+_launcher_posix_processes() {
+  case "${MSYSTEM:-}" in
+    '') return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Take one coherent process-table snapshot and add only this test's bridge
+# pidfiles. The argv predicates require this test's isolated project path as
+# well as the process identity, so a foreign listener in the same project and
+# a launcher for another project cannot enter the set.
+_launcher_snapshot_owned_pids() {
+  _launcher_posix_processes || return 0
+  [ -n "${RUN_DIR:-}" ] || return 0
+  [ -n "${PROJ:-}" ] || return 0
+
+  local table pidfile pid launcher="${CHILD_LAUNCHER_PATTERN:-$LAUNCHER}"
+  if ! table="$(ps -Ao pid=,args= 2>/dev/null)"; then
+    printf '%s\n' 'launcher test reaper: process snapshot unavailable' >&2
+    return 1
+  fi
+
+  {
+    printf '%s\n' "$table" \
+      | awk -v launcher="$launcher" -v project="$PROJ" \
+        'index($0, launcher) && index($0, project) && $1 ~ /^[1-9][0-9]*$/ { print $1 }'
+
+    for pidfile in "$RUN_DIR"/codex-bridge.*.pid; do
+      [ -f "$pidfile" ] || continue
+      pid=''
+      IFS= read -r pid < "$pidfile" 2>/dev/null || true
+      case "$pid" in
+        ''|*[!0-9]*|0) ;;
+        *) printf '%s\n' "$pid" ;;
+      esac
+    done
+
+    printf '%s\n' "$table" \
+      | awk -v project="$PROJ" \
+        'index($0, project) && index($0, "codex-bridge.js") && $1 ~ /^[1-9][0-9]*$/ { print $1 }'
+  } | awk '!seen[$1]++ { print $1 }'
 }
 
 # A test's own kill/wait sequence reaches the dispatcher and the short-lived
 # parent it was handed, but a per-role child (nohup'd, independent of both) and
 # the bridge process it launched are not direct children of anything a test
-# holds a pid for, so they are not swept by "kill $dispatcher; kill $parent"
-# alone -- the child only self-exits once it next notices its parent is gone,
-# and never kills its own bridge except when it does so as part of noticing
-# deregistration. Snapshot the pid set once, signal all of it, then wait for
-# all of it, rather than interleaving kill/wait per pid against a ps/pidfile
-# view that can keep changing underneath. Reaping here, and WAITING for the
-# reap rather than just signaling and moving on, is what keeps
-# teardown_test_env's rm -rf from racing a process still touching this test's
-# $TEST_SKILL_DIR (#595/#615).
-teardown() {
-  local pid pids
-  pids="$(_launcher_child_pids; _launcher_bridge_pids)"
-  for pid in $pids; do
+# holds a pid for. Snapshot the pid set once, signal all of it, then wait for
+# all of it, rather than interleaving kill/wait against a changing process
+# table or pidfile view. Waiting for the reap keeps teardown_test_env's rm -rf
+# from racing a process still touching this test's $TEST_SKILL_DIR (#595/#615).
+_reap_test_owned_codex_processes() {
+  _launcher_posix_processes || return 0
+
+  local snapshot pid reap_status=0
+  if ! snapshot="$(_launcher_snapshot_owned_pids)"; then
+    return 1
+  fi
+
+  for pid in $snapshot; do
     kill "$pid" 2>/dev/null || true
   done
-  for pid in $pids; do
-    wait_for_pid_exit "$pid" || true
+  for pid in $snapshot; do
+    if ! wait_for_pid_exit "$pid"; then
+      printf 'launcher test reaper: pid %s did not exit\n' "$pid" >&2
+      reap_status=1
+    fi
   done
-  teardown_test_env
+  return "$reap_status"
+}
+
+teardown() {
+  local cleanup_rc=0 pid
+  if ! _reap_test_owned_codex_processes; then
+    cleanup_rc=1
+  fi
+
+  # These are test-only controls that deliberately exercise the MSYS no-op
+  # path or do not carry an owned launcher/bridge identity.
+  for pid in ${TEST_LAUNCHER_EXTRA_PIDS:-}; do
+    case "$pid" in
+      ''|*[!0-9]*|0) ;;
+      *) kill "$pid" 2>/dev/null || true ;;
+    esac
+  done
+  for pid in ${TEST_LAUNCHER_EXTRA_PIDS:-}; do
+    case "$pid" in
+      ''|*[!0-9]*|0) ;;
+      *)
+        if ! wait_for_pid_exit "$pid"; then
+          cleanup_rc=1
+        fi
+        ;;
+    esac
+  done
+
+  if ! teardown_test_env; then
+    cleanup_rc=1
+  fi
+  return "$cleanup_rc"
+}
+
+@test "launcher: test-owned reaper is a no-op in MSYS pid space" {
+  skip_on_windows "models the unverified Git Bash namespace from POSIX"
+
+  local owned_script="$TEST_SKILL_DIR/owned-launcher"
+  cat > "$owned_script" <<'EOF'
+#!/usr/bin/env bash
+while :; do sleep 0.1; done
+EOF
+  chmod +x "$owned_script"
+  bash "$owned_script" "$LAUNCHER" "$PROJ" 3>&- & local owned_pid=$!
+  printf '%s\n' "$owned_pid" > "$RUN_DIR/codex-bridge.synthetic.pid"
+  TEST_LAUNCHER_EXTRA_PIDS="$owned_pid"
+
+  export MSYSTEM=MINGW64
+  run _reap_test_owned_codex_processes
+  [ "$status" -eq 0 ]
+  kill -0 "$owned_pid"
+
+  kill "$owned_pid" 2>/dev/null || true
+  wait "$owned_pid" 2>/dev/null || true
+  TEST_LAUNCHER_EXTRA_PIDS=''
+}
+
+@test "launcher: reaps owned launcher and bridge but leaves foreign controls" {
+  skip_on_windows "requires POSIX process argv and kill semantics"
+
+  (
+    set -e
+    parent=''; dispatcher=''; foreign=''; foreign_launcher=''
+    cleanup() {
+      local pid
+      for pid in "$dispatcher" "$parent" "$foreign" "$foreign_launcher"; do
+        case "$pid" in
+          ''|*[!0-9]*|0) ;;
+          *) kill "$pid" 2>/dev/null || true ;;
+        esac
+      done
+      for pid in "$dispatcher" "$parent" "$foreign" "$foreign_launcher"; do
+        case "$pid" in
+          ''|*[!0-9]*|0) ;;
+          *) wait "$pid" 2>/dev/null || true ;;
+        esac
+      done
+    }
+    trap cleanup EXIT
+
+    export MOCK_BRIDGE_SLEEP=25
+    put_record team alice test-thread "$PROJ" codex
+    sleep 30 3>&- & parent=$!
+    bash "$LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$parent" \
+      >/dev/null 2>&1 3>&- & dispatcher=$!
+
+    foreign_ready="$TEST_SKILL_DIR/foreign.ready"
+    python3 -c '
+import socket, sys
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", 0)); s.listen(8)
+open(sys.argv[1], "w").write(str(s.getsockname()[1]))
+sys.stdout.flush()
+while True:
+    c, _ = s.accept(); c.close()
+' "$foreign_ready" "$PROJ" 3>&- & foreign=$!
+    wait_for_file "$foreign_ready"
+    kill -0 "$foreign"
+
+    other_project="$TEST_SKILL_DIR/other-project"
+    foreign_launcher_script="$TEST_SKILL_DIR/foreign-launcher"
+    mkdir -p "$other_project"
+    cat > "$foreign_launcher_script" <<'EOF'
+#!/usr/bin/env bash
+while :; do sleep 0.1; done
+EOF
+    chmod +x "$foreign_launcher_script"
+    bash "$foreign_launcher_script" "$LAUNCHER" "$other_project" 3>&- &
+    foreign_launcher=$!
+
+    snapshot=''; bridge_pid=''; i=0
+    for i in {1..100}; do
+      snapshot="$(_launcher_snapshot_owned_pids)"
+      if [ -n "$snapshot" ] \
+        && [ -s "$RUN_DIR/codex-bridge.team.alice.pid" ] \
+        && kill -0 "$foreign" 2>/dev/null \
+        && kill -0 "$foreign_launcher" 2>/dev/null; then
+        break
+      fi
+      sleep 0.1
+    done
+    [ -n "$snapshot" ]
+    bridge_pid="$(cat "$RUN_DIR/codex-bridge.team.alice.pid")"
+    [ -n "$bridge_pid" ]
+    kill -0 "$dispatcher"
+    kill -0 "$bridge_pid"
+    printf '%s\n' "$snapshot" | grep -Fxq "$dispatcher"
+    printf '%s\n' "$snapshot" | grep -Fxq "$bridge_pid"
+    ! printf '%s\n' "$snapshot" | grep -Fxq "$foreign"
+    ! printf '%s\n' "$snapshot" | grep -Fxq "$foreign_launcher"
+
+    _reap_test_owned_codex_processes
+    for i in $snapshot; do
+      wait_for_pid_exit "$i"
+    done
+    kill -0 "$foreign"
+    kill -0 "$foreign_launcher"
+  )
+}
+
+@test "launcher: test-owned reaper waits for every signaled pid before returning" {
+  skip_on_windows "requires POSIX process and signal semantics"
+
+  (
+    set -e
+    release="$TEST_SKILL_DIR/reaper.release"
+    term_marker="$TEST_SKILL_DIR/reaper.term"
+    holder="$TEST_SKILL_DIR/reaper-holder"
+    owned_pid=''; reaper_pid=''
+    cleanup() {
+      local pid
+      for pid in "$reaper_pid" "$owned_pid"; do
+        case "$pid" in
+          ''|*[!0-9]*|0) ;;
+          *) kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true ;;
+        esac
+      done
+    }
+    trap cleanup EXIT
+
+    cat > "$holder" <<'EOF'
+#!/usr/bin/env bash
+trap ': > "$TERM_MARKER"; while [ ! -e "$RELEASE_MARKER" ]; do sleep 0.1; done; exit 0' TERM INT
+while :; do sleep 0.1; done
+EOF
+    chmod +x "$holder"
+    TERM_MARKER="$term_marker" RELEASE_MARKER="$release" \
+      bash "$holder" 3>&- & owned_pid=$!
+    printf '%s\n' "$owned_pid" > "$RUN_DIR/codex-bridge.wait.pid"
+
+    _reap_test_owned_codex_processes & reaper_pid=$!
+    wait_for_file "$term_marker"
+    kill -0 "$reaper_pid"
+
+    : > "$release"
+    wait "$reaper_pid"
+    wait_for_pid_exit "$owned_pid"
+  )
 }
 
 # Write a role-session record (team, agent) -> thread for a project.
