@@ -492,7 +492,12 @@ watch_check_existing_db() {
 # have their own contracts and must remain visible to their callers.
 watch_check_existing_db "$RUNTIME_DB" || exit $?
 
-PAIRS="$(agmsg_subscription_pairs "$PROJECT_PATH" "$AGENT_TYPE" "$SESSION_ID" "$ACTIVE_NAME" claim)" || exit 1
+PAIRS="$(agmsg_subscription_pairs "$PROJECT_PATH" "$AGENT_TYPE" "$SESSION_ID" "$ACTIVE_NAME" claim)"
+_subscription_status=$?
+if [ "$_subscription_status" -ne 0 ]; then
+  watch_log "ERROR: agmsg_subscription_pairs failed for project '$PROJECT_PATH' and agent type '$AGENT_TYPE' (status $_subscription_status)"
+  exit "$_subscription_status"
+fi
 
 # The shared helper above applies the actas lock policy: a broad watcher skips
 # pairs held elsewhere, while an active-name watcher claims every matching
@@ -525,7 +530,12 @@ while IFS=$'\t' read -r _health_team _health_agent; do
   done <<< "$HEALTH_TEAMS"
   [ "$_health_seen" -eq 0 ] || continue
   HEALTH_TEAMS="$(printf '%s\n%s' "$HEALTH_TEAMS" "$_health_team")"
-  DB="$(agmsg_db_path "$_health_team")" || exit 1
+  DB="$(agmsg_db_path "$_health_team")"
+  _db_path_status=$?
+  if [ "$_db_path_status" -ne 0 ]; then
+    watch_log "ERROR: agmsg_db_path failed for team '$_health_team' (status $_db_path_status)"
+    exit "$_db_path_status"
+  fi
   watch_check_existing_db "$DB" || exit $?
 done <<< "$PAIRS"
 
