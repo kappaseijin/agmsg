@@ -1270,6 +1270,33 @@ _diagnose_485_failure() {
   [ -f "$final_assert" ]
 }
 
+@test "launcher: native reaper aggregates taskkill failure after all attempts" {
+  local attempted="$TEST_SKILL_DIR/native-reap-taskkill-attempted"
+  local final_assert="$TEST_SKILL_DIR/native-reap-taskkill-final-assert"
+
+  _windows_native_bridge_pids() {
+    printf '%s\n' 101 202
+  }
+  taskkill() {
+    printf '%s\n' "$2" >> "$attempted"
+    [ "$2" -ne 101 ]
+  }
+  _windows_native_wait_tasklist_gone() {
+    return 0
+  }
+  _windows_native_assert_no_bridge_processes() {
+    : > "$final_assert"
+  }
+
+  run _windows_native_reap_bridge_root "$TEST_SKILL_DIR"
+  [ "$status" -ne 0 ]
+  [ "$(wc -l < "$attempted" | tr -d ' ')" -eq 2 ]
+  grep -Fqx 101 "$attempted"
+  grep -Fqx 202 "$attempted"
+  [ -f "$final_assert" ]
+  printf '%s\n' "$output" | grep -Fq 'taskkill PID=101 rc=1'
+}
+
 @test "launcher: windows-native starts the bridge (#567)" {
   skip_unless_windows "the point is the real tasklist and the real MSYS pid space"
   # The counterpart to codex-monitor's windows-native test, and the half #582
