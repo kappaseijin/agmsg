@@ -195,7 +195,7 @@ teardown() {
 # A project whose settings file is READABLE and installs no agmsg hooks. That is
 # a genuine `off`: the configuration was consulted and says delivery is not set
 # up. Without this, a bare mktemp project has no settings file at all, and
-# `delivery.sh` reports `off (unrecognized: no settings file found …)` -- which
+# `delivery.sh` reports `unknown (unrecognized: no settings file found …)` -- which
 # is a statement about what this check could not determine, not about the
 # configuration, and is deliberately NOT collapsed.
 configured_off() {
@@ -226,7 +226,7 @@ configured_off() {
 #     BLOCKING exit-code fix below stopped some of them being warnings. ------
 
 @test "doctor: a project it could not read is not called 'nothing to report'" {
-  # `off` and `off (unrecognized: …)` are different claims. The first is about
+  # `off` and `unknown (unrecognized: …)` are different claims. The first is about
   # the configuration; the second is about this check, which could not find the
   # settings file. Collapsing the second tells the operator delivery is off when
   # what happened is that we could not tell -- and hides the one line that
@@ -235,6 +235,7 @@ configured_off() {
   # $PROJ deliberately has NO settings file here.
   run bash "$SCRIPTS/doctor.sh" --project "$PROJ" --type claude-code
   [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q -F -- "mode: unknown (unrecognized:"
   printf '%s\n' "$output" | grep -q -F -- "unrecognized"
   printf '%s\n' "$output" | grep -q -F -- "may not be registered"
   refute grep -qF -- "nothing to report" <<<"$output"

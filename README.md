@@ -366,6 +366,14 @@ How incoming messages reach your agent. Pick one at first join via the prompt, o
 
 Settings are per-project. Each `<project>/.claude/settings.local.json` gets exactly the hooks the chosen mode needs — repeated `set` calls are idempotent.
 
+`delivery.sh status` reports `mode: unknown (unrecognized: ...)` when the
+settings file cannot be resolved, is missing, or is not valid JSON. `unknown`
+is not the same as `off`: it means the configuration was not observable, so
+automatic delivery is not started. Check the reported project path and either
+restore the settings file or explicitly configure a mode with `/agmsg mode
+<monitor|turn|both|off>`. A readable settings file with no agmsg hooks reports
+`mode: off (no agmsg delivery hooks installed for this project)`.
+
 **Monitor priming**: in `monitor` mode, the receiving agent doesn't react to its first inbound message until it has taken at least one turn this session. If you've just started a fresh session and a teammate has already sent something, nudge the agent with any short message ("hi") to prime it — subsequent messages stream in real time.
 
 ### Migrating from legacy `hook on/off`

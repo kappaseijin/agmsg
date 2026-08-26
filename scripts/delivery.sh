@@ -229,14 +229,9 @@ agmsg_delivery_status_default() {
         );" 2>/dev/null || echo 0)
     fi
   fi
-  # "off" never claims deliberateness (review, 3rd round): apply_default's
-  # off path only strips agmsg's own hook entries -- it writes no marker
-  # recording that `set off` ran. So a settings file with zero agmsg entries
-  # is byte-for-byte identical whether someone ran `set off` or the project
-  # simply never had agmsg configured. The CLI cannot tell those apart, so
-  # the wording says only what it can observe: hooks are absent, not that
-  # absence was chosen. Same reasoning is why `actas`/`drop` must not treat
-  # this as safe-to-stay-silent either -- see template.md.
+  # `off` is reserved for the observable state in which a readable settings
+  # file contains no agmsg hooks. A missing, unresolvable, or invalid file is
+  # not enough evidence to call delivery off; that state is `unknown` below.
   local mode="off (no agmsg delivery hooks installed for this project)"
   if [ "$has_ss" = "1" ] && [ "$has_st" = "1" ]; then mode="both"
   elif [ "$has_ss" = "1" ]; then mode="monitor"
@@ -244,30 +239,18 @@ agmsg_delivery_status_default() {
   elif [ ! -f "$hf" ] || [ "$hf_readable" != "1" ]; then
     # A settings file that does not exist and one that could not be read or
     # parsed as JSON both fall through to here with has_ss=has_st=0, but
-    # neither means delivery.sh actually confirmed this project's state:
-    # missing, most often because the caller passed the wrong path; or
-    # unreadable/malformed, a corrupt or hand-edited settings file (#687
-    # review round 1). These used to print the bare word "off" -- same as a
-    # genuinely no-hooks-installed project -- so a reader (or `actas`,
-    # whose own rule is "off means don't start delivery") could not tell
-    # "I don't know" from "there's nothing to start". This is what deceived
-    # a seat during #684 recovery: `mode: off` and `mode: monitor` were both
-    # true, for the same project, because one reader's path resolved and the
-    # other's did not. Distinguishing here, in the FIRST line rather than a
-    # secondary one, is what #687 asks for -- a reader (or a caller only
-    # capturing the first line) sees the difference without reading further.
-    # No consumer matches "mode: off" exactly (re-checked for this string,
-    # review round 3): the only exact-match consumers key on
-    # "monitor"/"both"/"turn", so this string never being exactly "off" is
-    # safe.
+    # neither means delivery.sh confirmed that delivery is off. The first
+    # line must preserve this observation as `unknown`, because consumers may
+    # inspect only that line and must not confuse an unregistered or broken
+    # project with a confirmed no-hooks configuration.
     if [ ! -f "$hf" ]; then
       if [ -n "$hf" ]; then
-        mode="off (unrecognized: no settings file found at $hf -- this project may not be registered)"
+        mode="unknown (unrecognized: no settings file found at $hf -- this project may not be registered)"
       else
-        mode="off (unrecognized: could not resolve a settings file for this project/type)"
+        mode="unknown (unrecognized: could not resolve a settings file for this project/type)"
       fi
     else
-      mode="off (unrecognized: settings file at $hf could not be read as valid JSON)"
+      mode="unknown (unrecognized: settings file at $hf could not be read as valid JSON)"
     fi
   fi
   echo "mode: $mode"
