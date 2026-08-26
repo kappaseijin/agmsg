@@ -4,7 +4,7 @@ title: R-series ledger and closure の事実検証
 status: changes_requested
 target: "/Users/kappa/Dropbox/data/dev/agmsg/docs/decisions/2026-08-26T225926_r-series-ledger-and-closure.md"
 timestamp: "2026-08-26T22:56:04+09:00"
-updated: "2026-08-26T23:04:41+09:00"
+updated: "2026-08-26T23:05:19+09:00"
 ---
 
 # R-series ledger and closure の事実検証
@@ -64,3 +64,9 @@ breakerはpacketとsourceを照合し、#181を別Issueにせず、同じIssue�
 ## 判定保留の最終1点
 
 targetは未解決表を追加した一方、冒頭で「実際には2種類」とし、分類表も修正・決着の2行だけである。未解決は第3区分なので、冒頭を3種類へ改め、`未解決（実害あり、修復または検証中、epic closeで解決扱いにしない）` の表行を追加するまでPASSにしない。
+
+## PR #201 現HEADの独立再測定
+
+verifierはlive HEAD `2d3bb346c11b2271d64315604a11998be977982c` を、旧HEAD `ea72704a6f4736932ccde72d077aa7230cbe03dc` と分けて再測定した。10-wayは60/60成功、40-wayはattempt 6で `expected=40` / `actual=39`、child 1件のmigration stderrを得た。これは現HEADの独立証跡であり、旧HEAD packetを新HEAD根拠に変換したものではない。
+
+targetがpacketを載せるなら、旧HEAD節を上書きせず、この現HEADの `value / cutoff / source / command` を別節として追記する。
