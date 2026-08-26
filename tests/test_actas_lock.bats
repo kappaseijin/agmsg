@@ -22,6 +22,39 @@ fake_cc_instance() {
 # inside command substitution.
 live_pid() { echo "$$"; }
 
+# Hold a delivery gate with a live process, then release its row after a
+# bounded delay. The caller records setup status and must clean up before
+# asserting, so a failed assertion cannot leave the fixture behind.
+start_live_holder_release() {
+  local lock_path="$1" release_after_s="$2" resource
+  resource="$(actas_lock_gate_resource "$lock_path")"
+  _ACTAS_TEST_HOLDER_SETUP_STATUS=0
+  sleep "$release_after_s" &
+  _ACTAS_TEST_HOLDER_PID=$!
+  if agmsg_runtime_lock_acquire "$resource" "$_ACTAS_TEST_HOLDER_PID" >/dev/null; then
+    :
+  else
+    _ACTAS_TEST_HOLDER_SETUP_STATUS=$?
+  fi
+  (
+    sleep "$release_after_s"
+    agmsg_runtime_lock_release "$resource" "$_ACTAS_TEST_HOLDER_PID" >/dev/null 2>&1 || :
+  ) &
+  _ACTAS_TEST_RELEASER_PID=$!
+}
+
+cleanup_live_holder_release() {
+  local lock_path="$1" resource
+  resource="$(actas_lock_gate_resource "$lock_path")"
+  agmsg_runtime_lock_release "$resource" "${_ACTAS_TEST_HOLDER_PID:-}" >/dev/null 2>&1 || :
+  agmsg_runtime_lock_release "$resource" "$$" >/dev/null 2>&1 || :
+  kill "${_ACTAS_TEST_RELEASER_PID:-}" 2>/dev/null || :
+  wait "${_ACTAS_TEST_RELEASER_PID:-}" 2>/dev/null || :
+  kill "${_ACTAS_TEST_HOLDER_PID:-}" 2>/dev/null || :
+  wait "${_ACTAS_TEST_HOLDER_PID:-}" 2>/dev/null || :
+  unset _ACTAS_TEST_HOLDER_PID _ACTAS_TEST_RELEASER_PID
+}
+
 # Install a local SQLite seam for gate error classification tests. The seam is
 # installed from inside one test, so it cannot affect the other tests in this
 # file. Successful acquire calls return this shell's PID; release calls return
@@ -226,6 +259,43 @@ assert_output_contains() {
 @test "delivery gate: default writer deadline is thirty seconds" {
   unset AGMSG_TEST_ACTAS_GATE_DEADLINE_S
   [ "$(_actas_lock_gate_deadline_s)" -eq 30 ]
+}
+
+@test "delivery gate: default deadline recovers a holder released after six seconds" {
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+  local gate_status setup_status
+  start_live_holder_release "$lock_path" 6
+  setup_status="$_ACTAS_TEST_HOLDER_SETUP_STATUS"
+
+  if actas_lock_gate_acquire "$lock_path" >"$BATS_TEST_TMPDIR/six-second-default-gate-output" 2>&1; then
+    gate_status=0
+  else
+    gate_status=$?
+  fi
+  cleanup_live_holder_release "$lock_path"
+
+  [ "$setup_status" -eq 0 ]
+  [ "$gate_status" -eq 0 ]
+}
+
+@test "delivery gate: five-second deadline rejects a holder released after six seconds" {
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+  local gate_status setup_status output
+  start_live_holder_release "$lock_path" 6
+  setup_status="$_ACTAS_TEST_HOLDER_SETUP_STATUS"
+
+  if AGMSG_TEST_ACTAS_GATE_DEADLINE_S=5 \
+    actas_lock_gate_acquire "$lock_path" >"$BATS_TEST_TMPDIR/six-second-five-second-gate-output" 2>&1; then
+    gate_status=0
+  else
+    gate_status=$?
+  fi
+  output="$(cat "$BATS_TEST_TMPDIR/six-second-five-second-gate-output")"
+  cleanup_live_holder_release "$lock_path"
+
+  [ "$setup_status" -eq 0 ]
+  [ "$gate_status" -ne 0 ]
+  assert_output_contains "$output" "deadline_s=5"
 }
 
 @test "delivery gate: watcher retries SQLITE_BUSY within its short budget" {
