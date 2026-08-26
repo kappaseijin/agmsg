@@ -457,6 +457,249 @@ cleanup_windows_native_processes() {
   wait "$parent_pid" 2>/dev/null || true
 }
 
+# Win32_Process is the only process table here that exposes the command line
+# together with the native PID. tasklist is then the liveness authority for
+# that native PID; never pass an MSYS PID to taskkill (#169).
+_windows_native_require_bridge_tools() {
+  local tool
+  for tool in powershell.exe cygpath tasklist taskkill; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      printf 'windows-native bridge cleanup failure: command unavailable: %s\n' \
+        "$tool" >&2
+      return 1
+    fi
+  done
+}
+
+_windows_native_query_bridge_pids() {
+  local root="$1" native_root='' process_record process_rc path_rc pid valid_pids=''
+
+  if native_root="$(MSYS_NO_PATHCONV=1 cygpath -m "$root" 2>&1)"; then
+    path_rc=0
+  else
+    path_rc="$?"
+  fi
+  native_root="$(printf '%s\n' "$native_root" | tr -d '\r')"
+  if [ "$path_rc" -ne 0 ] || [ -z "$native_root" ]; then
+    printf 'windows-native bridge cleanup failure: cygpath root=%s rc=%s output=%s\n' \
+      "$root" "$path_rc" "$native_root" >&2
+    return 1
+  fi
+
+  if process_record="$(
+    AGMSG_WINDOWS_ROOT_POSIX="$root" \
+    AGMSG_WINDOWS_ROOT_NATIVE="$native_root" \
+    MSYS_NO_PATHCONV=1 powershell.exe -NoProfile -NonInteractive -Command '
+      $ErrorActionPreference = "Stop"
+      try {
+        $needles = @($env:AGMSG_WINDOWS_ROOT_POSIX, $env:AGMSG_WINDOWS_ROOT_NATIVE) |
+          Where-Object { $_ } |
+          ForEach-Object { $_.Replace("\", "/").ToLowerInvariant() }
+        Get-CimInstance Win32_Process |
+          Where-Object {
+            $line = $_.CommandLine
+            if (-not $line) { return $false }
+            $normalized = $line.Replace("\", "/").ToLowerInvariant()
+            $normalized.Contains("codex-bridge.js") -and
+              (($needles | Where-Object { $normalized.Contains($_) }).Count -gt 0)
+          } |
+          ForEach-Object { $_.ProcessId }
+      } catch {
+        Write-Error $_
+        exit 1
+      }
+    ' 2>&1
+  )"; then
+    process_rc=0
+  else
+    process_rc="$?"
+  fi
+  process_record="$(printf '%s\n' "$process_record" | tr -d '\r')"
+  if [ "$process_rc" -ne 0 ]; then
+    printf 'windows-native bridge cleanup failure: Win32_Process query root=%s rc=%s output=%s\n' \
+      "$root" "$process_rc" "$process_record" >&2
+    return 1
+  fi
+
+  for pid in $process_record; do
+    case "$pid" in
+      ''|*[!0-9]*|0)
+        printf 'windows-native bridge cleanup failure: invalid native PID root=%s value=%s\n' \
+          "$root" "$pid" >&2
+        return 1
+        ;;
+    esac
+    valid_pids="${valid_pids}${valid_pids:+$'\n'}$pid"
+  done
+  printf '%s\n' "$valid_pids" | awk 'NF && !seen[$1]++ { print $1 }'
+}
+
+# Return 0 when tasklist has the native PID, 1 when it is definitely gone,
+# and 2 when the state cannot be classified. Unknown is a test failure, not a
+# reason to continue toward rm.
+_windows_native_tasklist_has_pid() {
+  local pid="$1" tasklist_record
+  case "$pid" in
+    ''|*[!0-9]*|0)
+      printf 'windows-native bridge cleanup failure: invalid tasklist PID=%s\n' "$pid" >&2
+      return 2
+      ;;
+  esac
+
+  if tasklist_record="$(MSYS_NO_PATHCONV=1 tasklist /FI "PID eq $pid" /FO CSV /NH 2>&1)"; then
+    :
+  else
+    printf 'windows-native bridge cleanup failure: tasklist PID=%s output=%s\n' \
+      "$pid" "$tasklist_record" >&2
+    return 2
+  fi
+  tasklist_record="$(printf '%s\n' "$tasklist_record" | tr -d '\r')"
+
+  if printf '%s\n' "$tasklist_record" | awk -F',' -v pid="$pid" \
+    '$2 == "\"" pid "\"" { found=1 } END { exit !found }'; then
+    return 0
+  fi
+  case "$tasklist_record" in
+    ''|INFO:*|*No\ tasks*|*no\ tasks*) return 1 ;;
+  esac
+  printf 'windows-native bridge cleanup failure: tasklist PID=%s unclassified output=%s\n' \
+    "$pid" "$tasklist_record" >&2
+  return 2
+}
+
+_windows_native_bridge_pids() {
+  local root="$1" queried_pids live_pids='' pid tasklist_rc
+  _windows_native_require_bridge_tools || return 1
+  if ! queried_pids="$(_windows_native_query_bridge_pids "$root")"; then
+    return 1
+  fi
+
+  for pid in $queried_pids; do
+    if _windows_native_tasklist_has_pid "$pid"; then
+      live_pids="${live_pids}${live_pids:+$'\n'}$pid"
+    else
+      tasklist_rc="$?"
+      case "$tasklist_rc" in
+        1) ;; # The Win32 query raced a naturally exiting process.
+        *) return 1 ;;
+      esac
+    fi
+  done
+  printf '%s\n' "$live_pids" | awk 'NF && !seen[$1]++ { print $1 }'
+}
+
+_windows_native_assert_no_bridge_processes() {
+  local root="$1" pids
+  if ! pids="$(_windows_native_bridge_pids "$root")"; then
+    return 1
+  fi
+  if [ -n "$pids" ]; then
+    printf 'windows-native bridge cleanup failure: live codex-bridge.js root=%s native_pids=%s\n' \
+      "$root" "$(printf '%s' "$pids" | tr '\n' ',')" >&2
+    return 1
+  fi
+}
+
+_windows_native_assert_bridge_alive() {
+  local root="$1" pids
+  if ! pids="$(_windows_native_bridge_pids "$root")"; then
+    return 1
+  fi
+  if [ -z "$pids" ]; then
+    printf 'windows-native bridge negative control failure: foreign root is not alive: %s\n' \
+      "$root" >&2
+    return 1
+  fi
+}
+
+_windows_native_wait_tasklist_gone() {
+  local pid="$1" timeout_s poll_s start deadline attempts=0 tasklist_rc state=present
+  timeout_s="$(_agmsg_test_wait_timeout_s)" || return 1
+  poll_s="$(_agmsg_test_wait_poll_s)" || return 1
+  start=$SECONDS
+  deadline=$((start + timeout_s))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    attempts=$((attempts + 1))
+    if _windows_native_tasklist_has_pid "$pid"; then
+      state=present
+      sleep "$poll_s"
+      continue
+    else
+      tasklist_rc="$?"
+    fi
+    case "$tasklist_rc" in
+      1) return 0 ;;
+      *)
+        printf 'windows-native bridge cleanup failure: tasklist state unknown pid=%s\n' \
+          "$pid" >&2
+        return 1
+        ;;
+    esac
+  done
+  _agmsg_test_wait_timeout_diag \
+    _windows_native_wait_tasklist_gone tasklist-pid-gone "$pid" \
+    "$timeout_s" "$start" "$poll_s" "$attempts" "$state"
+  printf 'windows-native bridge cleanup failure: native PID remained after taskkill pid=%s\n' \
+    "$pid" >&2
+  return 1
+}
+
+_windows_native_reap_bridge_root() {
+  local root="$1" pids pid taskkill_output taskkill_rc wait_rc reap_status=0
+  if ! pids="$(_windows_native_bridge_pids "$root")"; then
+    return 1
+  fi
+  # A failed wait must not prevent later candidates from receiving taskkill.
+  # Aggregate failures and make the final residual check after every attempt.
+  for pid in $pids; do
+    if taskkill_output="$(MSYS_NO_PATHCONV=1 taskkill /PID "$pid" /T /F 2>&1)"; then
+      taskkill_rc=0
+    else
+      taskkill_rc="$?"
+      reap_status=1
+      printf 'windows-native bridge cleanup failure: taskkill PID=%s rc=%s output=%s\n' \
+        "$pid" "$taskkill_rc" "$taskkill_output" >&2
+    fi
+    if _windows_native_wait_tasklist_gone "$pid"; then
+      wait_rc=0
+    else
+      wait_rc="$?"
+      reap_status=1
+      printf 'windows-native bridge cleanup failure: wait tasklist gone PID=%s rc=%s taskkill_rc=%s output=%s\n' \
+        "$pid" "$wait_rc" "$taskkill_rc" "$taskkill_output" >&2
+    fi
+  done
+  if ! _windows_native_assert_no_bridge_processes "$root"; then
+    reap_status=1
+  fi
+  return "$reap_status"
+}
+
+_windows_native_wait_bridge_pid() {
+  local root="$1" timeout_s poll_s start deadline attempts=0 pids
+  timeout_s="$(_agmsg_test_wait_timeout_s)" || return 1
+  poll_s="$(_agmsg_test_wait_poll_s)" || return 1
+  start=$SECONDS
+  deadline=$((start + timeout_s))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    attempts=$((attempts + 1))
+    if ! pids="$(_windows_native_bridge_pids "$root")"; then
+      return 1
+    fi
+    if [ -n "$pids" ]; then
+      printf '%s\n' "$pids"
+      return 0
+    fi
+    sleep "$poll_s"
+  done
+  _agmsg_test_wait_timeout_diag \
+    _windows_native_wait_bridge_pid command-line-pid-visible "$root" \
+    "$timeout_s" "$start" "$poll_s" "$attempts" absent
+  printf 'windows-native bridge setup failure: no live codex-bridge.js for root=%s\n' \
+    "$root" >&2
+  return 1
+}
+
 @test "launcher: binds the recorded thread when the record's project matches (#350)" {
   put_record team alice rec-thread-1 "$PROJ" codex
   run_launcher
@@ -990,10 +1233,68 @@ _diagnose_485_failure() {
   if [ ! -f "$CAPTURE" ]; then
     windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
     cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_reap_bridge_root "$TEST_SKILL_DIR" || true
     false
   fi
   cleanup_windows_native_processes "$dispatcher" "$p"
   grep -q -- '--thread thread-msys' "$CAPTURE"
+}
+
+@test "launcher: native reaper attempts every PID after a wait failure" {
+  local attempted="$TEST_SKILL_DIR/native-reap-attempted"
+  local waited="$TEST_SKILL_DIR/native-reap-waited"
+  local final_assert="$TEST_SKILL_DIR/native-reap-final-assert"
+
+  _windows_native_bridge_pids() {
+    printf '%s\n' 101 202
+  }
+  taskkill() {
+    printf '%s\n' "$2" >> "$attempted"
+  }
+  _windows_native_wait_tasklist_gone() {
+    printf '%s\n' "$1" >> "$waited"
+    [ "$1" -ne 101 ]
+  }
+  _windows_native_assert_no_bridge_processes() {
+    : > "$final_assert"
+  }
+
+  run _windows_native_reap_bridge_root "$TEST_SKILL_DIR"
+  [ "$status" -ne 0 ]
+  [ "$(wc -l < "$attempted" | tr -d ' ')" -eq 2 ]
+  grep -Fqx 101 "$attempted"
+  grep -Fqx 202 "$attempted"
+  [ "$(wc -l < "$waited" | tr -d ' ')" -eq 2 ]
+  grep -Fqx 101 "$waited"
+  grep -Fqx 202 "$waited"
+  [ -f "$final_assert" ]
+}
+
+@test "launcher: native reaper aggregates taskkill failure after all attempts" {
+  local attempted="$TEST_SKILL_DIR/native-reap-taskkill-attempted"
+  local final_assert="$TEST_SKILL_DIR/native-reap-taskkill-final-assert"
+
+  _windows_native_bridge_pids() {
+    printf '%s\n' 101 202
+  }
+  taskkill() {
+    printf '%s\n' "$2" >> "$attempted"
+    [ "$2" -ne 101 ]
+  }
+  _windows_native_wait_tasklist_gone() {
+    return 0
+  }
+  _windows_native_assert_no_bridge_processes() {
+    : > "$final_assert"
+  }
+
+  run _windows_native_reap_bridge_root "$TEST_SKILL_DIR"
+  [ "$status" -ne 0 ]
+  [ "$(wc -l < "$attempted" | tr -d ' ')" -eq 2 ]
+  grep -Fqx 101 "$attempted"
+  grep -Fqx 202 "$attempted"
+  [ -f "$final_assert" ]
+  printf '%s\n' "$output" | grep -Fq 'taskkill PID=101 rc=1'
 }
 
 @test "launcher: windows-native starts the bridge (#567)" {
@@ -1013,6 +1314,10 @@ _diagnose_485_failure() {
   # waited for a six-second parent before looking at capture for three seconds,
   # so a slow bridge could be killed before the assertion ever observed it.
   sleep 30 3>&- & local p=$!
+  # Keep the bridge alive after it has published the capture. This makes the
+  # native descendant cleanup an observable invariant rather than a race with
+  # the mock's natural exit.
+  export MOCK_BRIDGE_SLEEP=30
   bash "$LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$p" >/dev/null 2>&1 3>&- &
   local dispatcher=$!
   record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
@@ -1027,9 +1332,51 @@ _diagnose_485_failure() {
   if [ ! -f "$CAPTURE" ]; then
     windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
     cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_reap_bridge_root "$TEST_SKILL_DIR" || true
     false
   fi
+
+  # A bridge under a different root is the negative control: target-root
+  # cleanup must not become a global "kill every codex-bridge.js" sweep.
+  local foreign_root="$BATS_TEST_TMPDIR/foreign-bridge-root"
+  local foreign_bridge="$foreign_root/codex-bridge.js"
+  mkdir -p "$foreign_root"
+  cat > "$foreign_bridge" <<'EOF'
+#!/usr/bin/env bash
+while :; do sleep 1; done
+EOF
+  chmod +x "$foreign_bridge"
+  bash "$foreign_bridge" >/dev/null 2>&1 3>&- & local foreign_pid=$!
+  TEST_LAUNCHER_EXTRA_PIDS="$foreign_pid"
+  if ! _windows_native_wait_bridge_pid "$foreign_root" >/dev/null; then
+    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_reap_bridge_root "$TEST_SKILL_DIR" || true
+    _windows_native_reap_bridge_root "$foreign_root" || true
+    TEST_LAUNCHER_EXTRA_PIDS=''
+    false
+  fi
+
   cleanup_windows_native_processes "$dispatcher" "$p"
+  local target_cleanup_rc=0 foreign_control_rc=0 foreign_cleanup_rc=0
+  if ! _windows_native_reap_bridge_root "$TEST_SKILL_DIR"; then
+    target_cleanup_rc=1
+  fi
+  # Assert the invariant immediately before the rest of the test teardown.
+  if ! _windows_native_assert_no_bridge_processes "$TEST_SKILL_DIR"; then
+    target_cleanup_rc=1
+  fi
+  if ! _windows_native_assert_bridge_alive "$foreign_root"; then
+    foreign_control_rc=1
+  fi
+  if ! _windows_native_reap_bridge_root "$foreign_root"; then
+    foreign_cleanup_rc=1
+  fi
+  TEST_LAUNCHER_EXTRA_PIDS=''
+  if [ "$target_cleanup_rc" -ne 0 ] || [ "$foreign_control_rc" -ne 0 ] || \
+    [ "$foreign_cleanup_rc" -ne 0 ]; then
+    false
+  fi
   grep -q -- '--thread thread-win' "$CAPTURE"
 }
 
