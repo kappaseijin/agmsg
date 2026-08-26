@@ -1,21 +1,23 @@
 ---
 type: Plan
 title: "Issue #198: writer gate の実時間 deadline を既存 handover budget と両立させる"
-status: evidence-needed
+status: decided
 issue: "https://github.com/kappaseijin/agmsg/pull/198"
 root_cause: R5
 root_issue: "https://github.com/kappaseijin/agmsg/issues/178"
 base_commit: "d80cd0bb11921a5bf20d3cba3c5feef5dca55efb"
 observed_head: "0a36fe24000cbe9f268805c87e8c8b2f77a59019"
-timestamp: "2026-08-26T20:12:17+09:00"
+timestamp: "2026-08-26T20:16:52+09:00"
 ---
 
 # Issue #198: writer gate の実時間 deadline を既存 handover budget と両立させる
 
 ## 結論
 
-PR #198 の writer gate deadline は、現時点で **10秒へ固定してはならない**。
-10秒は unbounded だった base の #683 が単発で約9.96秒を要したことから得た候補であって、中央値・最速・上限・遅い runner に対する余裕のいずれも示していない。
+PR #198 の writer gate deadline は **固定30秒**にする。
+R5 の受入れ主張は「writer が回数ではなく実時間で必ず非zeroへ収束する」であり、deadline の性能最適値を求めることではない。
+base の #683 が単発で約9.96秒を要した観測に対し、30秒は約3.01倍（`30 / 9.96`）の明示した safety factor を持つ。
+この1標本を中央値・上限と主張しないが、finite deadline のために measurement-only PR を増やすよりも、観測値を越える十分大きい固定上限を置くほうが課題の境界に合う。
 SQLite `busy_timeout` は現 HEAD のまま **固定上限100ms**、effective timeout は `min(100ms, remaining deadline)` とする。
 deadline 比率、remaining deadline 全量、progress reset、owner-read poll の新設は引き続き採らない。
 
@@ -23,16 +25,16 @@ deadline 比率、remaining deadline 全量、progress reset、owner-read poll �
 したがって最短でも約4.9秒、SQL / process startup / scheduler の時間を含めると5秒を超えて待てた。
 新実装は5秒の実時間 deadline で必ず止まるため、既存 #683 handover が macOS CI で必要としていた待機 budget を切り詰めた。
 
-従って #198 は数値を実装・review に進めず HOLD とする。
-先に base 相当の正常 handover の実時間分布を同一 macOS runner class で回収し、hard deadline をその packet から改めて選ぶ。
-unbounded retry への復帰は候補にしない。
+30秒は無制限 retry へ戻す値ではない。
+既存の `despawn` graceful wait の既定値も30秒であり、同じ「相手 process の協調終了を待つ」クラスの bounded wait として整合する。
+writer gate は30秒に達したら、live holder / SQLite transient を成功へ丸めず `retry-deadline-exhausted` で fail-closed に終える。
 
 ```mermaid
 flowchart TD
-    A[writer gate starts: deadline=T, measurement pending] --> B[atomic acquire; busy timeout <=100ms]
+    A[writer gate starts: deadline=30s] --> B[atomic acquire; busy timeout <=100ms]
     B -->|caller owns gate| S[success]
     B -->|live holder| C[sleep 100ms]
-    C -->|before T| B
+    C -->|before 30s| B
     B -->|dead holder| D[expected-owner CAS]
     D --> B
     B -->|busy or locked| C
@@ -52,15 +54,17 @@ reason=retry-deadline-exhausted deadline_s=5 elapsed_s=5 attempts=12
 `sqlite_error=<not-invoked>` により、SQLite busy timeout が5秒を使い切ったという説明は採らない。
 現 HEAD の `_actas_lock_gate_busy_timeout_ms` も、remaining seconds が2以上なら100、最後の1秒なら0を返す。busy slice は旧実装と同じ100msである。
 
-base `d80cd0b` の同一 macOS shard は #683 test を約9.96秒で pass した。これは **1回だけの positive observation** である。
+base `d80cd0b` の同一 macOS shard は #683 test を約9.96秒で pass した。これは **1回だけの positive observation** であり、中央値・最速・上限ではない。
 PR HEAD の同 shard は同 test を約17.43秒後に fail し、その内訳には `writer.done` の10秒 wait と inner gate の5秒 deadline failure がある。
 この比較は、5秒 deadline が existing handover acceptance に足りないことを示す。
-一方で、9.96秒から「10秒で十分」とは導けない。
-attempts=12 の原因を SQL transaction、process startup、scheduler のいずれかへ断定するにも、timeout の分散を導くにも測定が足りないため、今回は数値・構造変更の根拠にしない。
+9.96秒から「10秒で十分」とは導けないため10秒案は採らない。
+一方、R5 は tail latency の最小化ではなく有限性を受け入れる課題である。
+30秒は観測成功値を3倍以上上回り、それでも既存の回数 retry が持たなかった wall-clock upper bound を与える。
+attempts=12 の原因を SQL transaction、process startup、scheduler のいずれかへ断定しない。これは30秒の選択根拠ではない。
 
 | 項目 | 決定 | 根拠 |
 | --- | --- | --- |
-| outer deadline | **未決定（10秒は候補）** | base macOS の約9.96秒は単発であり、hard cutoff の余裕を示さない |
+| outer deadline | fixed 30 seconds | 9.96秒単発の約3.01倍で、R5 に必要な有限性を満たす。deadline の最適化は今回の主張でない |
 | SQLite busy timeout | fixed cap 100ms | current source と reviewer measurement で確認済み。long SQLite blockは今回の証拠にない |
 | poll interval | 100msのまま | deadlineと独立の短い観測頻度を維持する |
 | retry count | diagnostic only | success / timeout の判定に戻さない |
@@ -68,7 +72,7 @@ attempts=12 の原因を SQL transaction、process startup、scheduler のいず
 
 ## 実装契約
 
-1. **数値を実装しない。** `_ACTAS_LOCK_GATE_DEFAULT_DEADLINE_S` の値は追加測定を通すまで据え置く。10秒を default、production environment override、または acceptance criterion として導入しない。
+1. `_ACTAS_LOCK_GATE_DEFAULT_DEADLINE_S` を `30` にする。`AGMSG_TEST_ACTAS_GATE_DEADLINE_S` は test-only override のままとし、production environment override は追加しない。
 2. `_ACTAS_LOCK_GATE_BUSY_SLICE_MS=100` と `_actas_lock_gate_busy_timeout_ms()` の `min(100ms, remaining deadline)` は、採用する hard deadline の値と独立して保つ。remaining deadline をそのまま busy timeout にしない。
 3. acquire / release の successful predicate、live/dead holder の CAS、unknown / permanent error の fail-closed、deadline failure diagnostic を変えない。
 4. deadline failure は引き続き `retry-deadline-exhausted deadline_s=<n> elapsed_s=<actual> attempts=<n>` とし、attempts は observability のみである。
@@ -79,29 +83,27 @@ attempts=12 の原因を SQL transaction、process startup、scheduler のいず
 `attempts >= N` を CI 共通の pass/fail 条件にはしない。
 その値は SQLite process startup、runner load、scheduler に依存し、今回疑う「busy timeout が長すぎる」失敗を再現できない。
 
-### 数値を決める前の measurement gate
+### 固定30秒の受入れ
 
-数値を決める根拠は、同じ macOS runner class 上の #683 の **成功した実時間標本**だけとする。
-各標本は `value / cutoff / source / command` を残し、source は base 相当の旧 handover semantics でなければならない。
-最低5回の独立 job から全値・min/max・timeout/runner image・commit SHA を保存する。
-1回の最速値、平均だけ、Linux の局所測定、`attempts`、failure run の wall time は cutoff 根拠にしない。
+30秒は「正常 handover の処理時間を30秒まで許容する」性能主張ではなく、無期限化を防ぐ outer deadline である。
+従って measurement-only PR は不要とする。
+通常の fixed-HEAD CI は、30秒 writer gate と独立した10秒の #683 test wait の双方で #683 が成功することを確認するが、そこから runner latency の分布・30秒の最適性を主張しない。
 
-GitHub Actions の現行 `tests.yml` は `push` と `pull_request` だけで `workflow_dispatch` を持たない。
-さらに `gh-write-owner-guard` は成功済み base job `98130020486` の `gh run rerun` を拒否した。
-よってこの履歴 job を追加標本として再実行することはできない。
-追加標本が必要なら、base 相当 code を保った **measurement-only の別 Issue / 別 PR** を作り、その exact macOS #683 job を複数回測る。
-その PR は deadline policy を変更せず、計測 artifact と test start/end evidence だけを追加し、測定完了後に閉じる。
-
-| gate | expected | fail-closed result |
+| control | expected | 防ぐ失敗 |
 | --- | --- | --- |
-| sample provenance | 5以上の成功 macOS #683 values が同一 source family・runner class・command を持つ | sample が不足、別 source、または runner/provenance不明なら数値を決めない |
-| cutoff choice | 採用する固定 deadline は全成功値より十分な明示 margin を持ち、margin と最大値を artifact に記録する | 9.96秒単発や平均だけで数値を選ばない |
-| busy slice seam | recorded `AGMSG_BUSY_TIMEOUT` の全値が `<=100` | remaining deadline を long busy timeout として再導入しない |
-| live holder then release | 採用した deadline より前に holder を解放すると caller が取得する | 5秒deadline のように release opportunity を捨てる値は RED |
-| live holder remains live | deadlineでnonzero、holder/CAS state不変 | deadline延長をownerの上書きへ変える fail-open は RED |
+| default deadline | normal writer acquire/release diagnostics が `deadline_s=30` を持つ | 5秒のまま残る・production override の混入 |
+| busy slice seam | recorded `AGMSG_BUSY_TIMEOUT` の全値が `<=100` | remaining deadline を long busy timeout として再導入する回帰 |
+| live holder then release | real runtime lock holderを6秒保持して解放する | caller が30秒 deadline内に取得し、5秒cutoffで失われた release opportunity を回復する |
+| live holder remains live | 30秒deadlineでnonzero、holder/CAS state不変 | deadline延長をownerの上書きへ変える fail-open |
+| KILLED | default deadlineを一時的に5へ戻す | 6秒hold→release control が RED になる |
 
-measurement packet と deadline value が確定した後にだけ、`tests/test_actas_lock.bats` の gate-level fixture と default-deadline assertion を追加する。
-その実装 PR は `bash -n scripts/lib/actas-lock.sh`、`bats tests/test_actas_lock.bats`、`bats -f 'writer handover waits for the delivery gate' tests/test_actas_integration.bats`、fixed HEAD の macOS shard / full job、CI、Claude formal reviewer の一括 review を再取得する。
+第3 control は `tests/test_actas_lock.bats` に置く新しい gate-level fixture とする。
+holder を6秒で解放し、30秒 deadline では caller が取得、KILLED の5秒では取得不能にする。
+既存 #683 handover test の `wait_for_file "$writer_done"` は shared test helper の独立した10秒 contract であり、今回30秒へ拡張しない。
+30秒 writer deadline でもこの10秒 wait が実 CI で切れるなら、それは #198 の finite-gate claim を無効化する根拠ではなく、#197/R5-T1の test wait contract の別 Issue として扱う。
+
+実装後は `bash -n scripts/lib/actas-lock.sh`、`bats tests/test_actas_lock.bats`、`bats -f 'writer handover waits for the delivery gate' tests/test_actas_integration.bats` を実行する。
+fixed HEAD で macOS shard の #683 と full job が終了すること、CI、Claude formal reviewer の一括 review を再取得する。
 
 ## test 379 の cleanup は別 Issue / 別 PR
 
@@ -117,7 +119,7 @@ test 379 は `wait_for_file "$writer_done" || { ...; false; }` の assertion fai
 
 ## PR 境界
 
-measurement gate 完了後の PR #198 の次 HEAD は、**「writer gate の既存 handover budgetを無制限retryに戻さず、測定 packet で選んだ固定 real-time deadlineとして明示する」**だけを変更する。
+PR #198 の次 HEAD は、**「writer gate の既存 handover budgetを無制限retryに戻さず、30秒の fixed real-time deadlineとして明示する」**だけを変更する。
 
 - producer: `agmsg_programmer_codex`
 - formal reviewer: `agmsg_reviewer_claude`
@@ -128,6 +130,5 @@ README、storage schema、watcherのruntime behavior、owner-read polling、rele
 
 ## 現在の HOLD
 
-PR #198 は #199 の merge だけでなく、上記 measurement-only packet が揃うまで implementation、formal review、merge を始めない。
-この HOLD は「10秒では足りない」と断定するものではない。
-単発の9.96秒を上限・中央値と誤読して hard deadline を決めない fail-closed 判断である。
+PR #198 は #199 の merge、#199 merge commit への rebase、fixed-HEAD CI、Claude formal review が完了するまで HOLD とする。
+measurement-only PR はこの順序条件ではない。
