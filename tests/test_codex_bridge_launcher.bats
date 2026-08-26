@@ -645,23 +645,34 @@ _windows_native_wait_tasklist_gone() {
 }
 
 _windows_native_reap_bridge_root() {
-  local root="$1" pids pid taskkill_output taskkill_rc
+  local root="$1" pids pid taskkill_output taskkill_rc wait_rc reap_status=0
   if ! pids="$(_windows_native_bridge_pids "$root")"; then
     return 1
   fi
+  # A failed wait must not prevent later candidates from receiving taskkill.
+  # Aggregate failures and make the final residual check after every attempt.
   for pid in $pids; do
     if taskkill_output="$(MSYS_NO_PATHCONV=1 taskkill /PID "$pid" /T /F 2>&1)"; then
       taskkill_rc=0
     else
       taskkill_rc="$?"
-    fi
-    if ! _windows_native_wait_tasklist_gone "$pid"; then
+      reap_status=1
       printf 'windows-native bridge cleanup failure: taskkill PID=%s rc=%s output=%s\n' \
         "$pid" "$taskkill_rc" "$taskkill_output" >&2
-      return 1
+    fi
+    if _windows_native_wait_tasklist_gone "$pid"; then
+      wait_rc=0
+    else
+      wait_rc="$?"
+      reap_status=1
+      printf 'windows-native bridge cleanup failure: wait tasklist gone PID=%s rc=%s taskkill_rc=%s output=%s\n' \
+        "$pid" "$wait_rc" "$taskkill_rc" "$taskkill_output" >&2
     fi
   done
-  _windows_native_assert_no_bridge_processes "$root"
+  if ! _windows_native_assert_no_bridge_processes "$root"; then
+    reap_status=1
+  fi
+  return "$reap_status"
 }
 
 _windows_native_wait_bridge_pid() {
