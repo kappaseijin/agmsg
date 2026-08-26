@@ -204,3 +204,72 @@ teardown() {
   run grep -F "agmsg_db_path failed" "$log"
   [ "$status" -ne 0 ]
 }
+
+@test "watch: cursor read failure is logged and does not become cursor zero" {
+  local out="$BATS_TEST_TMPDIR/watch-cursor-failure.out"
+  local log="$RUN_DIR/watch.sid-cursor-failure.log"
+  local watcher
+
+  # Seed an unread message before installing the isolated driver seam. The
+  # seam makes the real cursor read fail with the driver's fixed non-zero code.
+  bash "$SCRIPTS/send.sh" team alice carol cursor-failure-marker >/dev/null
+  export AGMSG_STORAGE_DRIVER=sqlite
+  printf '%s\n' '' 'storage_read_cursor_get() {' '  return 13' '}' \
+    >> "$SCRIPTS/drivers/storage/sqlite.sh"
+
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" sid-cursor-failure "$PROJ" claude-code \
+    >"$out" 2>/dev/null 3>&- 4>&- &
+  watcher=$!
+  if ! wait_for_file_contains "$log" "storage_read_cursor_get failed"; then
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+    cat "$out" "$log" >&2 2>/dev/null || true
+    false
+  fi
+  kill "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+
+  # fd 2 was /dev/null. The failure is durable, and the unread marker was not
+  # delivered through a fabricated cursor 0 scan.
+  run grep -F "storage_read_cursor_get failed" "$log"
+  [ "$status" -eq 0 ]
+  run grep -F "skipping this poll" "$log"
+  [ "$status" -eq 0 ]
+  run grep -F "cursor-failure-marker" "$out"
+  [ "$status" -ne 0 ]
+}
+
+@test "watch: storage scan failure is logged and does not become no unread" {
+  local out="$BATS_TEST_TMPDIR/watch-scan-failure.out"
+  local log="$RUN_DIR/watch.sid-scan-failure.log"
+  local watcher
+
+  # Seed an unread message, then make only the real storage scan return the
+  # driver's fixed non-zero failure. A hidden failure would look like an empty
+  # OUT value and silently skip the unread message without a durable reason.
+  bash "$SCRIPTS/send.sh" team alice carol scan-failure-marker >/dev/null
+  export AGMSG_STORAGE_DRIVER=sqlite
+  printf '%s\n' '' 'storage_watch_after() {' '  return 13' '}' \
+    >> "$SCRIPTS/drivers/storage/sqlite.sh"
+
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" sid-scan-failure "$PROJ" claude-code \
+    >"$out" 2>/dev/null 3>&- 4>&- &
+  watcher=$!
+  if ! wait_for_file_contains "$log" "storage_watch_after failed"; then
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+    cat "$out" "$log" >&2 2>/dev/null || true
+    false
+  fi
+  kill "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+
+  # The poll is skipped with an explicit durable reason; an empty result must
+  # not be mistaken for a successful no-unread scan.
+  run grep -F "storage_watch_after failed" "$log"
+  [ "$status" -eq 0 ]
+  run grep -F "skipping this poll" "$log"
+  [ "$status" -eq 0 ]
+  run grep -F "scan-failure-marker" "$out"
+  [ "$status" -ne 0 ]
+}
