@@ -346,37 +346,38 @@ snapshot_test_env_runtime() {
     esac
   done
 
-  printf '  process command lines containing %s:\n' "$skill_dir"
-  if process_table="$(ps -Ao pid=,ppid=,stat=,args= 2>&1)"; then
-    process_rc=0
-  else
-    process_rc="$?"
-  fi
-  if [ "$process_rc" -ne 0 ]; then
-    printf '    snapshot marker: process table unavailable (rc=%s): %s\n' \
-      "$process_rc" "$process_table"
-  else
-    if matching_processes="$(printf '%s\n' "$process_table" \
-      | grep -F -- "$skill_dir")"; then
-      matching_rc=0
-    else
-      matching_rc="$?"
-    fi
-    case "$matching_rc" in
-      0)
-        printf '%s\n' "$matching_processes"
-        ;;
-      1)
-        printf '%s\n' '    <none>'
-        ;;
-      *)
-        printf '    snapshot marker: process filter failed (rc=%s): %s\n' \
-          "$matching_rc" "$matching_processes"
-        ;;
-    esac
-  fi
   if snapshot_test_env_is_msys; then
     snapshot_test_env_native_processes "$skill_dir"
+  else
+    printf '  process command lines containing %s:\n' "$skill_dir"
+    if process_table="$(ps -Ao pid=,ppid=,stat=,args= 2>&1)"; then
+      process_rc=0
+    else
+      process_rc="$?"
+    fi
+    if [ "$process_rc" -ne 0 ]; then
+      printf '    snapshot marker: process table unavailable (rc=%s): %s\n' \
+        "$process_rc" "$process_table"
+    else
+      if matching_processes="$(printf '%s\n' "$process_table" \
+        | grep -F -- "$skill_dir")"; then
+        matching_rc=0
+      else
+        matching_rc="$?"
+      fi
+      case "$matching_rc" in
+        0)
+          printf '%s\n' "$matching_processes"
+          ;;
+        1)
+          printf '%s\n' '    <none>'
+          ;;
+        *)
+          printf '    snapshot marker: process filter failed (rc=%s): %s\n' \
+            "$matching_rc" "$matching_processes"
+          ;;
+      esac
+    fi
   fi
   return 0
 }

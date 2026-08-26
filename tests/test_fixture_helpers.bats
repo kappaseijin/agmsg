@@ -295,6 +295,8 @@ EOF
   grep -Fq 'native process candidates containing' <<<"$output"
   grep -Fq '84242' <<<"$output"
   grep -Fq 'C:/tmp/agmsg-msys-pid-fixture' <<<"$output"
+  refute grep -Fq 'process table unavailable' <<<"$output"
+  refute grep -Fq 'unexpected ps args' <<<"$output"
   grep -Fq 'Get-CimInstance Win32_Process' "$powershell_log"
   [ "$(cat "$log")" = '/FI PID eq 84242' ]
   refute grep -Fq 'PID eq 4242' "$log"
