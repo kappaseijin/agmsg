@@ -624,8 +624,9 @@ _windows_native_wait_tasklist_gone() {
       state=present
       sleep "$poll_s"
       continue
+    else
+      tasklist_rc="$?"
     fi
-    tasklist_rc="$?"
     case "$tasklist_rc" in
       1) return 0 ;;
       *)
