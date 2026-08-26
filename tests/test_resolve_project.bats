@@ -13,9 +13,6 @@ load test_helper
 
 setup() {
   setup_test_env
-  export SKILL_DIR="$TEST_SKILL_DIR"
-  export RUN_DIR="$SKILL_DIR/run"
-  mkdir -p "$RUN_DIR"
 
   # A real project tree so dirname-based ancestor walking operates on real
   # paths: ROOT/sub/deep.

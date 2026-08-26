@@ -207,7 +207,6 @@ teardown() {
 seed_resumable() {
   local team="$1" agent="$2" uuid="$3" proj="$4" want_transcript="${5:-1}"
   local norm munged
-  export SKILL_DIR="$TEST_SKILL_DIR"   # both libs below require it at source time
   # shellcheck disable=SC1090
   source "$SCRIPTS/lib/resolve-project.sh"
   norm="$(cd "$proj" && pwd)"
@@ -279,7 +278,6 @@ seed_resumable() {
 @test "spawn: codex resumes via the 'resume' subcommand right after the cli (#339)" {
   bash "$SCRIPTS/join.sh" cxteam existing codex "$PROJ"
   # Record a codex role->session and a matching rollout (codex's transcript).
-  export SKILL_DIR="$TEST_SKILL_DIR"
   # shellcheck disable=SC1090
   source "$SCRIPTS/lib/role-session.sh"
   agmsg_role_session_record cxteam bob "cx-uuid-1" "$PROJ" codex
@@ -298,7 +296,6 @@ seed_resumable() {
 
 @test "spawn: codex boots fresh when no rollout backs the record (#339)" {
   bash "$SCRIPTS/join.sh" cxteam existing codex "$PROJ"
-  export SKILL_DIR="$TEST_SKILL_DIR"
   # shellcheck disable=SC1090
   source "$SCRIPTS/lib/role-session.sh"
   agmsg_role_session_record cxteam bob "cx-uuid-gone" "$PROJ" codex   # record, no rollout

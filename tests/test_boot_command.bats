@@ -9,7 +9,6 @@ load test_helper
 
 setup() {
   setup_test_env
-  export SKILL_DIR="$TEST_SKILL_DIR"
   # shellcheck disable=SC1090
   source "$SKILL_DIR/scripts/lib/type-registry.sh"
   # shellcheck disable=SC1090

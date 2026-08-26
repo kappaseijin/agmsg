@@ -13,7 +13,6 @@ load test_helper
 
 setup() {
   setup_test_env
-  export SKILL_DIR="$TEST_SKILL_DIR"
 }
 teardown() { teardown_test_env; }
 

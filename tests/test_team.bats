@@ -782,7 +782,7 @@ config_sha256() {
 
 @test "rename-team: atomically migrates cursor and sync sidecars" {
   bash "$SCRIPTS/join.sh" oldteam alice claude-code /tmp/proj-a
-  export SKILL_DIR="$TEST_SKILL_DIR" AGMSG_STORAGE_DRIVER=sqlite
+  export AGMSG_STORAGE_DRIVER=sqlite
   source "$SCRIPTS/lib/storage.sh"
   agmsg_storage_load
   storage_init oldteam >/dev/null
@@ -812,7 +812,7 @@ config_sha256() {
 }
 
 @test "rename-team: JSONL keeps the cursor with the renamed event stream" {
-  export SKILL_DIR="$TEST_SKILL_DIR" AGMSG_STORAGE_DRIVER=jsonl
+  export AGMSG_STORAGE_DRIVER=jsonl
   bash "$SCRIPTS/join.sh" oldteam alice claude-code /tmp/proj-a
   source "$SCRIPTS/lib/storage.sh"
   agmsg_storage_load
@@ -884,7 +884,7 @@ config_sha256() {
 
 @test "rename: atomically migrates cursor and remote member association" {
   bash "$SCRIPTS/join.sh" myteam claude claude-code /tmp/proj-a
-  export SKILL_DIR="$TEST_SKILL_DIR" AGMSG_STORAGE_DRIVER=sqlite
+  export AGMSG_STORAGE_DRIVER=sqlite
   source "$SCRIPTS/lib/storage.sh"
   agmsg_storage_load
   storage_init myteam >/dev/null
@@ -907,7 +907,7 @@ config_sha256() {
 }
 
 @test "rename: JSONL keeps exact reads and cursor with the new agent name" {
-  export SKILL_DIR="$TEST_SKILL_DIR" AGMSG_STORAGE_DRIVER=jsonl
+  export AGMSG_STORAGE_DRIVER=jsonl
   bash "$SCRIPTS/join.sh" myteam claude claude-code /tmp/proj-a
   source "$SCRIPTS/lib/storage.sh"
   agmsg_storage_load
@@ -1071,7 +1071,6 @@ EOF
   # predicate would wrongly rewrite. The seed goes into team t's own store —
   # the pre-split shared file is no longer what rename.sh reads.
   bash "$SCRIPTS/join.sh" t alice claude-code /tmp/proj
-  export SKILL_DIR="$TEST_SKILL_DIR"
   source "$SCRIPTS/lib/storage.sh"
   agmsg_storage_load
   storage_init t >/dev/null

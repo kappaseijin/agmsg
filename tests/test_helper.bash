@@ -26,41 +26,67 @@ agmsg_test_real_git() {
 }
 
 setup_test_env() {
-  export TEST_SKILL_DIR="$(mktemp -d)"
-  mkdir -p "$TEST_SKILL_DIR"/{scripts,db,teams}
+  export LC_ALL=C
+  export LANG=C
+
+  local agmsg_env manifest detect detect_var
+  local -a detect_vars=()
+  export TEST_SKILL_DIR="$(mktemp -d "$BATS_TEST_TMPDIR/agmsg-fixture.XXXXXX")"
+  mkdir -p "$TEST_SKILL_DIR"/{home,tmp,run,db,teams,scripts}
+
+  export HOME="$TEST_SKILL_DIR/home"
+  export TMPDIR="$TEST_SKILL_DIR/tmp"
+  unset CODEX_HOME
+  export SKILL_DIR="$TEST_SKILL_DIR"
+  export RUN_DIR="$TEST_SKILL_DIR/run"
+  export SCRIPTS="$TEST_SKILL_DIR/scripts"
+  export TYPES="$TEST_SKILL_DIR/scripts/drivers/types"
+  export DBPATH="$TEST_SKILL_DIR/db/messages.db"
+
+  # Do not let a parent agmsg configuration select a different store, driver,
+  # plugin, or process identity. Keep only the fixture defaults below.
+  while IFS= read -r agmsg_env; do
+    [ -n "$agmsg_env" ] && unset "$agmsg_env"
+  done < <(env | sed -n 's/^\(AGMSG_[A-Za-z0-9_]*\)=.*/\1/p')
   export AGMSG_STORAGE_PATH="$TEST_SKILL_DIR/db"
+  export AGMSG_STORAGE_DRIVER=sqlite
+  export AGMSG_AGENT_PID=''
+
+  # A fixture must not inherit a real pane, workspace, or tmux server.
+  while IFS= read -r agmsg_env; do
+    [ -n "$agmsg_env" ] && unset "$agmsg_env"
+  done < <(env | sed -n \
+    -e 's/^\(HERDR_[A-Za-z0-9_]*\)=.*/\1/p' \
+    -e 's/^\(TMUX_[A-Za-z0-9_]*\)=.*/\1/p' \
+    -e 's/^\(TMUX\)=.*/\1/p')
 
   # Copy all scripts to isolated skill dir. Recursive so nested helper dirs
   # (scripts/lib/) come along without enumerating files.
-  cp -R "$BATS_TEST_DIRNAME"/../scripts/. "$TEST_SKILL_DIR/scripts/"
-  chmod +x "$TEST_SKILL_DIR/scripts/"*.sh
-  chmod +x "$TEST_SKILL_DIR/scripts/"*.js 2>/dev/null || true
+  cp -R "$BATS_TEST_DIRNAME"/../scripts/. "$SCRIPTS/"
+  chmod +x "$SCRIPTS/"*.sh
+  chmod +x "$SCRIPTS/"*.js 2>/dev/null || true
 
   # Agent-type manifests + per-type runtimes now live under scripts/drivers/types/
   # (the type registry reads <skill-root>/scripts/drivers/types/<name>/type.conf),
   # so the recursive scripts/ copy above already brings them along — no separate
   # copy is needed. Just ensure codex's folded runtime scripts stay executable.
-  chmod +x "$TEST_SKILL_DIR/scripts/drivers/types/codex/"*.sh 2>/dev/null || true
+  chmod +x "$TYPES/codex/"*.sh 2>/dev/null || true
 
-  # Initialize DB
-  bash "$TEST_SKILL_DIR/scripts/internal/init-db.sh"
-  # Shared-partition compatibility assertions use the same concrete path as
-  # the default storage driver. Team-specific tests resolve their own path
-  # through agmsg_db_path instead of assuming this file.
-  export DBPATH="$TEST_SKILL_DIR/db/messages.db"
+  # The manifests are data, not shell. Read each copied detect= value so a new
+  # agent type cannot reintroduce host-runtime auto-detection by omission here.
+  while IFS= read -r manifest; do
+    detect="$(sed -n 's/^[[:space:]]*detect[[:space:]]*=[[:space:]]*//p' \
+      "$manifest" | head -1)"
+    [ -n "$detect" ] || continue
+    read -ra detect_vars <<<"$detect"
+    for detect_var in "${detect_vars[@]}"; do
+      [ "$detect_var" = explicit ] && continue
+      unset "$detect_var"
+    done
+  done < <(find "$TYPES" -type f -name type.conf -print)
 
-  # Convenience vars
-  export SCRIPTS="$TEST_SKILL_DIR/scripts"
-  export TYPES="$TEST_SKILL_DIR/scripts/drivers/types"
-
-  # Sandbox HOME so NO test can touch the developer's real home. Several paths
-  # write under $HOME — e.g. codex-shim-install.sh creates $HOME/.agents/bin/codex
-  # and install.sh's configure_codex_sandbox edits $HOME/.codex/config.toml — and
-  # a leaked write would clobber the real install / shim (and dangle once this
-  # temp dir is torn down). bats runs each test in its own subshell, so the
-  # export is scoped to the test and needs no restore. See #41.
-  export HOME="$TEST_SKILL_DIR/home"
-  mkdir -p "$HOME"
+  # Initialize DB only after every fixture boundary is fixed.
+  bash "$SCRIPTS/internal/init-db.sh"
 }
 
 snapshot_test_env_runtime() {

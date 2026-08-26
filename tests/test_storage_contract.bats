@@ -9,7 +9,6 @@ load test_helper
 
 setup() {
   setup_test_env
-  export SKILL_DIR="$TEST_SKILL_DIR"
   # shellcheck disable=SC1091
   source "$SCRIPTS/lib/storage.sh"
   agmsg_storage_load
