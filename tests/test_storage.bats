@@ -3,7 +3,16 @@
 load test_helper
 
 setup() {
+  local requested_fanout="${AGMSG_TEST_P8_FANOUT_CHILDREN:-10}"
   setup_test_env
+  case "$requested_fanout" in
+    10|40) export AGMSG_TEST_P8_FANOUT_CHILDREN="$requested_fanout" ;;
+    *)
+      printf 'test setup failure: AGMSG_TEST_P8_FANOUT_CHILDREN must be 10 or 40 (got %s)\n' \
+        "$requested_fanout" >&2
+      return 2
+      ;;
+  esac
 }
 
 teardown() {
@@ -251,13 +260,40 @@ storage_query() {
   return "$rc"
 }
 
+p8_test_send_child() {
+  local storage_dir="$1" index="$2" failure_index="${3:-}"
+  if [ -n "$failure_index" ] && [ "$index" = "$failure_index" ]; then
+    printf 'synthetic P8 child failure index=%s\n' "$index" >&2
+    return 73
+  fi
+  AGMSG_STORAGE_PATH="$storage_dir" \
+    bash "$SCRIPTS/send.sh" team leader "tgt$index" "job $index" --force
+}
+
+p8_run_child() {
+  local status_file="$1" storage_dir="$2" index="$3" failure_index="${4:-}"
+  local child_status
+  if p8_test_send_child "$storage_dir" "$index" "$failure_index"; then
+    child_status=0
+  else
+    child_status=$?
+  fi
+  if ! printf '%s\n' "$child_status" > "$status_file"; then
+    printf 'P8 child status artifact unavailable: %s\n' "$status_file" >&2
+    return 74
+  fi
+  return "$child_status"
+}
+
 run_storage_fanout_with_packet() {
-  local storage_dir="$1" count="$2" failure_index="${3:-}"
+  local storage_dir="$1" failure_index="${2:-}"
+  local count="${AGMSG_TEST_P8_FANOUT_CHILDREN:-10}"
   local artifact_dir="$BATS_TEST_TMPDIR/p8-fanout"
   local db="$storage_dir/messages.db"
-  local i rc any_failure=0 actual_count event_rows schema_exists db_exists
+  local i rc child_status any_failure=0 actual_count event_rows schema_exists db_exists
   local resource_stderr="$artifact_dir/resource-query.stderr"
   local -a pids=() stdout_files=() stderr_files=() status_files=()
+  local -a wait_exits=() child_statuses=()
 
   mkdir -p "$artifact_dir"
   : > "$resource_stderr"
@@ -265,17 +301,8 @@ run_storage_fanout_with_packet() {
     stdout_files[$i]="$artifact_dir/child-$i.stdout"
     stderr_files[$i]="$artifact_dir/child-$i.stderr"
     status_files[$i]="$artifact_dir/child-$i.status"
-    if [ -n "$failure_index" ] && [ "$i" = "$failure_index" ]; then
-      (
-        AGMSG_STORAGE_PATH="$storage_dir" \
-          bash "$SCRIPTS/send.sh" team leader "tgt$i" --force
-      ) >"${stdout_files[$i]}" 2>"${stderr_files[$i]}" 3>&- &
-    else
-      (
-        AGMSG_STORAGE_PATH="$storage_dir" \
-          bash "$SCRIPTS/send.sh" team leader "tgt$i" "job $i" --force
-      ) >"${stdout_files[$i]}" 2>"${stderr_files[$i]}" 3>&- &
-    fi
+    ( p8_run_child "${status_files[$i]}" "$storage_dir" "$i" "$failure_index" ) \
+      >"${stdout_files[$i]}" 2>"${stderr_files[$i]}" 3>&- &
     pids[$i]=$!
   done
 
@@ -288,7 +315,16 @@ run_storage_fanout_with_packet() {
       rc=$?
       any_failure=1
     fi
-    printf '%s\n' "$rc" > "${status_files[$i]}"
+    wait_exits[$i]="$rc"
+    if child_status="$(cat "${status_files[$i]}" 2>/dev/null)"; then
+      child_statuses[$i]="$child_status"
+    else
+      child_statuses[$i]=unavailable
+      any_failure=1
+    fi
+    if [ "${child_statuses[$i]}" != "$rc" ]; then
+      any_failure=1
+    fi
   done
 
   if [ -f "$db" ]; then
@@ -349,8 +385,8 @@ EOF
   fi
 
   for i in $(seq 1 "$count"); do
-    rc="$(cat "${status_files[$i]}")"
-    printf 'child[%s]: pid=%s wait_exit=%s\n' "$i" "${pids[$i]}" "$rc" >&2
+    printf 'child[%s]: pid=%s wait_exit=%s child_status=%s\n' \
+      "$i" "${pids[$i]}" "${wait_exits[$i]}" "${child_statuses[$i]}" >&2
     printf '%s\n' '  stdout:' >&2
     if [ -s "${stdout_files[$i]}" ]; then
       sed 's/^/    /' "${stdout_files[$i]}" >&2
@@ -370,9 +406,9 @@ EOF
 @test "send: fan-out failure reports child and resource state without stdout" {
   local packet_stdout="$BATS_TEST_TMPDIR/fanout.stdout"
   local packet_stderr="$BATS_TEST_TMPDIR/fanout.stderr"
-  local fanout_status
+  local fanout_status fanout_count="${AGMSG_TEST_P8_FANOUT_CHILDREN:-10}"
 
-  if run_storage_fanout_with_packet "$TEST_SKILL_DIR/db" 2 2 \
+  if run_storage_fanout_with_packet "$TEST_SKILL_DIR/db" 2 \
     >"$packet_stdout" 2>"$packet_stderr"; then
     fanout_status=0
   else
@@ -381,22 +417,32 @@ EOF
   [ "$fanout_status" -ne 0 ]
   [ ! -s "$packet_stdout" ]
   grep -Fq 'p8-failure-packet' "$packet_stderr"
-  grep -Fq 'expected_event_count=2' "$packet_stderr"
+  grep -Fq "expected_event_count=$fanout_count" "$packet_stderr"
   grep -Eq 'actual_event_count=[0-9]+' "$packet_stderr"
   grep -Fq 'resource db_exists=1 events_table=1' "$packet_stderr"
   grep -Fq 'child[2]: pid=' "$packet_stderr"
-  grep -Fq 'wait_exit=2' "$packet_stderr"
+  grep -Fq 'wait_exit=73' "$packet_stderr"
+  grep -Fq 'synthetic P8 child failure index=2' "$packet_stderr"
   grep -Fq 'event_row=' "$packet_stderr"
-  grep -Fq 'expected 4 positional arguments' "$packet_stderr"
   ! grep -Fq 'job 1' "$packet_stderr"
+  local i
+  for i in $(seq 1 "$fanout_count"); do
+    [ -f "$BATS_TEST_TMPDIR/p8-fanout/child-$i.status" ]
+  done
 }
 
 @test "send: concurrent fan-out to N recipients all land (no SQLITE_BUSY)" {
-  # Without a busy_timeout, concurrent writers fail with SQLITE_BUSY(5). The
-  # helper keeps that fan-out quiet on success and emits a packet on failure.
-  run run_storage_fanout_with_packet "$TEST_SKILL_DIR/db" 10
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
+  # Without a busy_timeout, concurrent writers fail with SQLITE_BUSY(5) and the
+  # sends silently drop. With the wrapper they wait and all land. See #114.
+  local x
+  for x in 1 2 3 4 5 6 7 8 9 10; do
+    ( bash "$SCRIPTS/send.sh" team leader "tgt$x" "job $x" --force >/dev/null 2>&1 ) 3>&- &
+  done
+  wait
+  local n
+  n=$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" \
+    "SELECT COUNT(*) FROM events WHERE type='message_sent' AND from_agent='leader';")
+  [ "$n" -eq 10 ]
 }
 
 @test "send: concurrent fan-out to a FRESH (uninitialized) store all lands" {
@@ -404,7 +450,7 @@ EOF
   # doesn't exist yet. The diagnostic helper retains the original 10/10
   # acceptance predicate while preserving every child result on failure.
   export AGMSG_STORAGE_PATH="$BATS_TEST_TMPDIR/freshstore"
-  run run_storage_fanout_with_packet "$AGMSG_STORAGE_PATH" 10
+  run run_storage_fanout_with_packet "$AGMSG_STORAGE_PATH"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
