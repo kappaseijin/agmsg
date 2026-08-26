@@ -1240,6 +1240,36 @@ _diagnose_485_failure() {
   grep -q -- '--thread thread-msys' "$CAPTURE"
 }
 
+@test "launcher: native reaper attempts every PID after a wait failure" {
+  local attempted="$TEST_SKILL_DIR/native-reap-attempted"
+  local waited="$TEST_SKILL_DIR/native-reap-waited"
+  local final_assert="$TEST_SKILL_DIR/native-reap-final-assert"
+
+  _windows_native_bridge_pids() {
+    printf '%s\n' 101 202
+  }
+  taskkill() {
+    printf '%s\n' "$2" >> "$attempted"
+  }
+  _windows_native_wait_tasklist_gone() {
+    printf '%s\n' "$1" >> "$waited"
+    [ "$1" -ne 101 ]
+  }
+  _windows_native_assert_no_bridge_processes() {
+    : > "$final_assert"
+  }
+
+  run _windows_native_reap_bridge_root "$TEST_SKILL_DIR"
+  [ "$status" -ne 0 ]
+  [ "$(wc -l < "$attempted" | tr -d ' ')" -eq 2 ]
+  grep -Fqx 101 "$attempted"
+  grep -Fqx 202 "$attempted"
+  [ "$(wc -l < "$waited" | tr -d ' ')" -eq 2 ]
+  grep -Fqx 101 "$waited"
+  grep -Fqx 202 "$waited"
+  [ -f "$final_assert" ]
+}
+
 @test "launcher: windows-native starts the bridge (#567)" {
   skip_unless_windows "the point is the real tasklist and the real MSYS pid space"
   # The counterpart to codex-monitor's windows-native test, and the half #582
