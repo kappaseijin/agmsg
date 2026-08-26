@@ -176,12 +176,16 @@ Do NOT manually edit config files. Always use join.sh. If the name was recently 
 # member's watcher drops its own role (releasing the actas lock + registration)
 # and closes its own tmux pane, ending the agent. Blocks until the lock releases
 # (--timeout, default 30s) then prints `status=ok`; on timeout prints
-# status=timeout and exits 3 (retry with --force). Only an exclusive watcher
-# dedicated to <name> acts on it — the despawning session is never torn down.
+# status=timeout and exits 3 (retry with --force). If lock state cannot be
+# confirmed, prints status=unavailable operation=lock-state and exits non-zero
+# without claiming success or deleting the placement record. Only an exclusive
+# watcher dedicated to <name> acts on it — the despawning session is never torn down.
 # --force: skip the message and tear the member down from the placement recorded
 # at spawn time (kill its tmux pane/window, drop its registration) — for a dead
-# watcher or a codex member (no Monitor). A hand-started member with no placement
-# record can't be --forced.
+# watcher or a codex member (no Monitor). It prints status=forced only when
+# reset and lock release succeed; otherwise it prints status=partial with the
+# failed operation, exits non-zero, and keeps the placement record for retry. A
+# hand-started member with no placement record can't be --forced.
 #   --force              tear down from the recorded placement, no message
 #   --timeout N          seconds to wait for graceful teardown (default 30)
 ~/.agents/skills/agmsg/scripts/despawn.sh <team> <from> <name> [--force] [--timeout N]

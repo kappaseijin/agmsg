@@ -248,3 +248,60 @@ STUB
   # herdr was called with "pane close wC:p99" (prefix stripped).
   grep -q "pane close wC:p99" "$HERDR_CALL_LOG"
 }
+
+@test "despawn: unknown lock state is unavailable without cleanup" {
+  bash "$SCRIPTS/join.sh" team alice claude-code "$PROJ" >/dev/null
+  printf '%s\t%s\t%s\n' '%99' "$PROJ" claude-code > "$RUN/spawn.team__alice"
+  printf '%s\n' '' 'actas_lock_state() {' '  return 13' '}' \
+    >> "$SCRIPTS/lib/actas-lock.sh"
+
+  run bash "$SCRIPTS/despawn.sh" team leader alice
+  [ "$status" -ne 0 ]
+  case "$output" in
+    *"status=unavailable"*"operation=lock-state"*) ;;
+    *) false ;;
+  esac
+
+  # An unavailable state is not permission to send control, kill a placement,
+  # reset registration, release a lock, or delete the retry record.
+  [ -f "$RUN/spawn.team__alice" ]
+  run bash "$SCRIPTS/identities.sh" "$PROJ" claude-code
+  case "$output" in *alice*) ;; *) false ;; esac
+  if _control_row_exists_for_alice; then
+    false
+  fi
+}
+
+@test "despawn --force: reset failure is partial and keeps placement record" {
+  bash "$SCRIPTS/join.sh" team alice claude-code "$PROJ" >/dev/null
+  printf '%s\t%s\t%s\n' '%99' "$PROJ" claude-code > "$RUN/spawn.team__alice"
+  printf '%s\n' 'somesid' > "$RUN/actas.team__alice.session"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 17' > "$SCRIPTS/reset.sh"
+  chmod +x "$SCRIPTS/reset.sh"
+
+  run bash "$SCRIPTS/despawn.sh" team leader alice --force
+  [ "$status" -ne 0 ]
+  case "$output" in
+    *"status=partial"*"operation=registration-reset"*) ;;
+    *) false ;;
+  esac
+  [ -f "$RUN/spawn.team__alice" ]
+  run bash "$SCRIPTS/identities.sh" "$PROJ" claude-code
+  case "$output" in *alice*) ;; *) false ;; esac
+}
+
+@test "despawn --force: lock release failure is partial and keeps placement record" {
+  bash "$SCRIPTS/join.sh" team alice claude-code "$PROJ" >/dev/null
+  printf '%s\t%s\t%s\n' '%99' "$PROJ" claude-code > "$RUN/spawn.team__alice"
+  printf '%s\n' 'somesid' > "$RUN/actas.team__alice.session"
+  printf '%s\n' '' 'actas_lock_release() {' '  return 19' '}' \
+    >> "$SCRIPTS/lib/actas-lock.sh"
+
+  run bash "$SCRIPTS/despawn.sh" team leader alice --force
+  [ "$status" -ne 0 ]
+  case "$output" in
+    *"status=partial"*"operation=lock-release"*) ;;
+    *) false ;
+  esac
+  [ -f "$RUN/spawn.team__alice" ]
+}

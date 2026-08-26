@@ -15,11 +15,13 @@ set -euo pipefail
 # lock) and closes its own tmux pane — ending its CLI. We block until the lock
 # is released, up to --timeout (default 30s); on timeout the member didn't
 # respond (dead watcher, or a codex member with no Monitor) — re-run with
-# --force.
+# --force. If lock state cannot be confirmed, report status=unavailable and
+# leave cleanup and the placement record untouched.
 #
 # --force: skip the message and tear the member down from here using the
 # placement recorded at spawn time — kill its tmux pane/window and drop its
-# registration. For when the member's watcher can't respond.
+# registration. If reset or lock release fails, report status=partial and
+# retain the placement record so a later --force can retry.
 #
 # See #109. Graceful teardown's full pane-close is tmux-only (the member needs a
 # tmux pane to close); an OS-terminal member drops its role but its window must
@@ -72,23 +74,59 @@ kill_recorded_placement() {
   printf '%s\t%s\t%s' "$id" "$_proj" "$_type"   # echo back for the caller
 }
 
+status_unavailable() {
+  echo "status=unavailable operation=lock-state name=$NAME team=$TEAM"
+  exit 1
+}
+
+status_partial() {
+  echo "status=partial operation=$1 name=$NAME team=$TEAM"
+  exit 1
+}
+
 if [ "$FORCE" = "1" ]; then
   [ -f "$SPAWN_REC" ] || die "no placement record for '$TEAM/$NAME' — nothing to force (was it launched via 'spawn'? graceful despawn does not need this)"
   IFS=$'\t' read -r _id _proj _type < "$SPAWN_REC"
   kill_recorded_placement >/dev/null
   # Drop the member's registration, and release its (now-stale) lock.
+  reset_status=0
   if [ -n "${_proj:-}" ] && [ -n "${_type:-}" ]; then
-    "$SCRIPT_DIR/reset.sh" "$_proj" "$_type" "$NAME" >/dev/null 2>&1 || true
+    if "$SCRIPT_DIR/reset.sh" "$_proj" "$_type" "$NAME" >/dev/null 2>&1; then
+      :
+    else
+      reset_status=$?
+    fi
   fi
-  owner="$(actas_lock_owner "$TEAM" "$NAME")"
-  [ -n "$owner" ] && actas_lock_release "$TEAM" "$NAME" "$owner" 2>/dev/null || true
+  release_status=0
+  if owner="$(actas_lock_owner "$TEAM" "$NAME" 2>/dev/null)"; then
+    if [ -n "$owner" ]; then
+      if actas_lock_release "$TEAM" "$NAME" "$owner" 2>/dev/null; then
+        :
+      else
+        release_status=$?
+      fi
+    fi
+  else
+    release_status=$?
+  fi
+  if [ "$reset_status" -ne 0 ]; then
+    [ "$release_status" -eq 0 ] || echo "despawn: lock release also failed (status $release_status)" >&2
+    status_partial registration-reset
+  fi
+  if [ "$release_status" -ne 0 ]; then
+    status_partial lock-release
+  fi
   rm -f "$SPAWN_REC" 2>/dev/null || true
   echo "status=forced name=$NAME team=$TEAM"
   exit 0
 fi
 
 # --- Graceful ---
-state="$(actas_lock_state "$TEAM" "$NAME" "" 2>/dev/null || echo free)"
+if state="$(actas_lock_state "$TEAM" "$NAME" "" 2>/dev/null)"; then
+  :
+else
+  status_unavailable
+fi
 case "$state" in
   free)
     # No live lock to wait on -- but that alone does not mean nothing needs
@@ -116,8 +154,16 @@ esac
 
 waited=0
 while true; do
-  state="$(actas_lock_state "$TEAM" "$NAME" "" 2>/dev/null || echo free)"
-  [ "$state" = "free" ] && break
+  if state="$(actas_lock_state "$TEAM" "$NAME" "" 2>/dev/null)"; then
+    :
+  else
+    status_unavailable
+  fi
+  case "$state" in
+    free) break ;;
+    mine|other:*) ;;
+    *) status_unavailable ;;
+  esac
   if [ "$waited" -ge "$TIMEOUT" ]; then
     echo "status=timeout name=$NAME team=$TEAM after=${TIMEOUT}s"
     echo "despawn: '$NAME' did not tear down within ${TIMEOUT}s — its watcher may be dead. Retry with --force." >&2
