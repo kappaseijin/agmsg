@@ -3,7 +3,16 @@
 load test_helper
 
 setup() {
+  local requested_fanout="${AGMSG_TEST_P8_FANOUT_CHILDREN:-10}"
   setup_test_env
+  case "$requested_fanout" in
+    10|40) export AGMSG_TEST_P8_FANOUT_CHILDREN="$requested_fanout" ;;
+    *)
+      printf 'test setup failure: AGMSG_TEST_P8_FANOUT_CHILDREN must be 10 or 40 (got %s)\n' \
+        "$requested_fanout" >&2
+      return 2
+      ;;
+  esac
 }
 
 teardown() {
@@ -204,6 +213,226 @@ SH
   [ "$(agmsg_sqlite "$(agmsg_db_path team)" "SELECT COUNT(*) FROM events WHERE type='message_sent' AND body = 'after lock init';")" = 1 ]
 }
 
+@test "storage_send: suppresses probe stderr but exposes final retry stderr" {
+  source "$SCRIPTS/lib/storage.sh"
+  agmsg_storage_load
+  local calls_file="$BATS_TEST_TMPDIR/storage-send-calls"
+  local stdout_file="$BATS_TEST_TMPDIR/storage-send.stdout"
+  local stderr_file="$BATS_TEST_TMPDIR/storage-send.stderr"
+  : > "$calls_file"
+
+  # Keep the production retry path real while making both SQLite outcomes
+  # deterministic. The first failure is the probe that must stay quiet; the
+  # second is the final retry whose raw stderr is the diagnostic under test.
+  storage_init() { return 0; }
+  agmsg_sqlite() {
+    local calls=0
+    [ ! -s "$calls_file" ] || calls="$(cat "$calls_file")"
+    calls=$((calls + 1))
+    printf '%s\n' "$calls" > "$calls_file"
+    if [ "$calls" -eq 1 ]; then
+      printf '%s\n' 'synthetic first probe failure' >&2
+    else
+      printf '%s\n' 'synthetic final retry failure' >&2
+    fi
+    return 1
+  }
+
+  local send_status
+  if storage_send team alice bob "diagnostic body" >"$stdout_file" 2>"$stderr_file"; then
+    send_status=0
+  else
+    send_status=$?
+  fi
+  [ "$send_status" -ne 0 ]
+  [ "$(cat "$stderr_file")" = "synthetic final retry failure" ]
+  ! grep -Fq 'synthetic first probe failure' "$stderr_file"
+}
+
+storage_query() {
+  local db="$1" sql="$2" result rc
+  if result="$(sqlite3 "$db" "$sql")"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  printf '%s' "$result" | LC_ALL=C tr -d '\r'
+  return "$rc"
+}
+
+p8_test_send_child() {
+  local storage_dir="$1" index="$2" failure_index="${3:-}"
+  if [ -n "$failure_index" ] && [ "$index" = "$failure_index" ]; then
+    printf 'synthetic P8 child failure index=%s\n' "$index" >&2
+    return 73
+  fi
+  AGMSG_STORAGE_PATH="$storage_dir" \
+    bash "$SCRIPTS/send.sh" team leader "tgt$index" "job $index" --force
+}
+
+p8_run_child() {
+  local status_file="$1" storage_dir="$2" index="$3" failure_index="${4:-}"
+  local child_status
+  if p8_test_send_child "$storage_dir" "$index" "$failure_index"; then
+    child_status=0
+  else
+    child_status=$?
+  fi
+  if ! printf '%s\n' "$child_status" > "$status_file"; then
+    printf 'P8 child status artifact unavailable: %s\n' "$status_file" >&2
+    return 74
+  fi
+  return "$child_status"
+}
+
+run_storage_fanout_with_packet() {
+  local storage_dir="$1" failure_index="${2:-}"
+  local count="${AGMSG_TEST_P8_FANOUT_CHILDREN:-10}"
+  local artifact_dir="$BATS_TEST_TMPDIR/p8-fanout"
+  local db="$storage_dir/messages.db"
+  local i rc child_status any_failure=0 actual_count event_rows schema_exists db_exists
+  local resource_stderr="$artifact_dir/resource-query.stderr"
+  local -a pids=() stdout_files=() stderr_files=() status_files=()
+  local -a wait_exits=() child_statuses=()
+
+  mkdir -p "$artifact_dir"
+  : > "$resource_stderr"
+  for i in $(seq 1 "$count"); do
+    stdout_files[$i]="$artifact_dir/child-$i.stdout"
+    stderr_files[$i]="$artifact_dir/child-$i.stderr"
+    status_files[$i]="$artifact_dir/child-$i.status"
+    ( p8_run_child "${status_files[$i]}" "$storage_dir" "$i" "$failure_index" ) \
+      >"${stdout_files[$i]}" 2>"${stderr_files[$i]}" 3>&- &
+    pids[$i]=$!
+  done
+
+  # Always reap every child. A failed wait must not prevent later children from
+  # being collected or hide the resource snapshot behind set -e in a caller.
+  for i in $(seq 1 "$count"); do
+    if wait "${pids[$i]}"; then
+      rc=0
+    else
+      rc=$?
+      any_failure=1
+    fi
+    wait_exits[$i]="$rc"
+    if child_status="$(cat "${status_files[$i]}" 2>/dev/null)"; then
+      child_statuses[$i]="$child_status"
+    else
+      child_statuses[$i]=unavailable
+      any_failure=1
+    fi
+    if [ "${child_statuses[$i]}" != "$rc" ]; then
+      any_failure=1
+    fi
+  done
+
+  if [ -f "$db" ]; then
+    db_exists=1
+  else
+    db_exists=0
+  fi
+  schema_exists=unavailable
+  actual_count=unavailable
+  event_rows=unavailable
+  if [ "$db_exists" -eq 1 ]; then
+    if schema_exists="$(storage_query "$db" \
+      "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='events';" \
+      2>>"$resource_stderr")"; then
+      :
+    else
+      schema_exists=unavailable
+    fi
+    if actual_count="$(storage_query "$db" \
+      "SELECT COUNT(*) FROM events WHERE type='message_sent' AND from_agent='leader';" \
+      2>>"$resource_stderr")"; then
+      :
+    else
+      actual_count=unavailable
+    fi
+    if event_rows="$(storage_query "$db" \
+      "SELECT seq || ':' || id || ':' || to_agent FROM events WHERE type='message_sent' AND from_agent='leader' ORDER BY seq;" \
+      2>>"$resource_stderr")"; then
+      :
+    else
+      event_rows=unavailable
+    fi
+  fi
+
+  if [ "$any_failure" -eq 0 ] && [ "$actual_count" = "$count" ] && \
+    [ "$schema_exists" = 1 ]; then
+    return 0
+  fi
+
+  printf '%s\n' 'p8-failure-packet' >&2
+  printf 'artifact_dir=%s\n' "$artifact_dir" >&2
+  printf 'expected_event_count=%s\n' "$count" >&2
+  printf 'actual_event_count=%s\n' "$actual_count" >&2
+  printf 'resource db_exists=%s events_table=%s\n' "$db_exists" "$schema_exists" >&2
+  printf '%s\n' 'resource event_rows:' >&2
+  if [ -n "$event_rows" ] && [ "$event_rows" != unavailable ]; then
+    while IFS= read -r row; do
+      [ -n "$row" ] && printf '  event_row=%s\n' "$row" >&2
+    done <<EOF
+$event_rows
+EOF
+  else
+    printf '%s\n' '  <unavailable>' >&2
+  fi
+  if [ -s "$resource_stderr" ]; then
+    printf '%s\n' 'resource query stderr:' >&2
+    sed 's/^/  /' "$resource_stderr" >&2
+  fi
+
+  for i in $(seq 1 "$count"); do
+    printf 'child[%s]: pid=%s wait_exit=%s child_status=%s\n' \
+      "$i" "${pids[$i]}" "${wait_exits[$i]}" "${child_statuses[$i]}" >&2
+    printf '%s\n' '  stdout:' >&2
+    if [ -s "${stdout_files[$i]}" ]; then
+      sed 's/^/    /' "${stdout_files[$i]}" >&2
+    else
+      printf '%s\n' '    <empty>' >&2
+    fi
+    printf '%s\n' '  stderr:' >&2
+    if [ -s "${stderr_files[$i]}" ]; then
+      sed 's/^/    /' "${stderr_files[$i]}" >&2
+    else
+      printf '%s\n' '    <empty>' >&2
+    fi
+  done
+  return 1
+}
+
+@test "send: fan-out failure reports child and resource state without stdout" {
+  local packet_stdout="$BATS_TEST_TMPDIR/fanout.stdout"
+  local packet_stderr="$BATS_TEST_TMPDIR/fanout.stderr"
+  local fanout_status fanout_count="${AGMSG_TEST_P8_FANOUT_CHILDREN:-10}"
+
+  if run_storage_fanout_with_packet "$TEST_SKILL_DIR/db" 2 \
+    >"$packet_stdout" 2>"$packet_stderr"; then
+    fanout_status=0
+  else
+    fanout_status=$?
+  fi
+  [ "$fanout_status" -ne 0 ]
+  [ ! -s "$packet_stdout" ]
+  grep -Fq 'p8-failure-packet' "$packet_stderr"
+  grep -Fq "expected_event_count=$fanout_count" "$packet_stderr"
+  grep -Eq 'actual_event_count=[0-9]+' "$packet_stderr"
+  grep -Fq 'resource db_exists=1 events_table=1' "$packet_stderr"
+  grep -Fq 'child[2]: pid=' "$packet_stderr"
+  grep -Fq 'wait_exit=73' "$packet_stderr"
+  grep -Fq 'synthetic P8 child failure index=2' "$packet_stderr"
+  grep -Fq 'event_row=' "$packet_stderr"
+  if grep -Fq 'job 1' "$packet_stderr"; then
+    false
+  fi
+  local i
+  for i in $(seq 1 "$fanout_count"); do
+    [ -f "$BATS_TEST_TMPDIR/p8-fanout/child-$i.status" ]
+  done
+}
+
 @test "send: concurrent fan-out to N recipients all land (no SQLITE_BUSY)" {
   # Without a busy_timeout, concurrent writers fail with SQLITE_BUSY(5) and the
   # sends silently drop. With the wrapper they wait and all land. See #114.
@@ -220,17 +449,12 @@ SH
 
 @test "send: concurrent fan-out to a FRESH (uninitialized) store all lands" {
   # No init-db first — every send races to initialize an override store that
-  # doesn't exist yet. Without idempotent init + INSERT retry, the losers abort
-  # on "already exists" / "no such table" and drop. See #114.
+  # doesn't exist yet. The diagnostic helper retains the original 10/10
+  # acceptance predicate while preserving every child result on failure.
   export AGMSG_STORAGE_PATH="$BATS_TEST_TMPDIR/freshstore"
-  local x
-  for x in 1 2 3 4 5 6 7 8 9 10; do
-    ( bash "$SCRIPTS/send.sh" team leader "tgt$x" "job $x" --force >/dev/null 2>&1 ) 3>&- &
-  done
-  wait
-  local n
-  n=$(sqlite3 "$AGMSG_STORAGE_PATH/messages.db" "SELECT COUNT(*) FROM events WHERE type='message_sent';")
-  [ "$n" -eq 10 ]
+  run run_storage_fanout_with_packet "$AGMSG_STORAGE_PATH"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
 }
 
 @test "storage: the -escape probe is memoized, not re-run on every call (#462)" {

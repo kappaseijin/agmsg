@@ -313,7 +313,9 @@ storage_send() {
   # prevent.
   if ! printf '%s\n' "$insert" | agmsg_sqlite -bail "$db" >/dev/null 2>&1; then
     storage_init "$team" >/dev/null
-    printf '%s\n' "$insert" | agmsg_sqlite -bail "$db" >/dev/null 2>&1 || return 1
+    # The initial probe is intentionally quiet; a failed final retry is the
+    # caller-visible cause packet and must retain SQLite's stderr.
+    printf '%s\n' "$insert" | agmsg_sqlite -bail "$db" >/dev/null || return 1
   fi
   printf '%s\n' "$id"
 }
