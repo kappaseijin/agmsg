@@ -79,3 +79,128 @@ teardown() {
   run grep -F "team/alice is unheld again" "$log"
   [ "$status" -eq 0 ]
 }
+
+@test "watch: persists subscription resolution failure and exits non-zero" {
+  local out="$BATS_TEST_TMPDIR/watch-subscription.out"
+  local log="$RUN_DIR/watch.sid-subscription.log"
+  local watcher watcher_status
+
+  # Mutate only the isolated copy. A fixed non-zero identities.sh result is the
+  # negative control for the downstream resolver failure; the production
+  # watcher still owns the durable-log assertion below.
+  cp "$SCRIPTS/identities.sh" "$BATS_TEST_TMPDIR/identities.sh.copy"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 37' > "$SCRIPTS/identities.sh"
+  chmod +x "$SCRIPTS/identities.sh"
+
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" sid-subscription "$PROJ" claude-code \
+    >"$out" 2>/dev/null 3>&- 4>&- &
+  watcher=$!
+  if ! wait_for_file_contains "$log" "agmsg_subscription_pairs"; then
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+    cat "$out" "$log" >&2 2>/dev/null || true
+    false
+  fi
+
+  if wait "$watcher"; then
+    watcher_status=0
+  else
+    watcher_status="$?"
+  fi
+  [ "$watcher_status" -ne 0 ]
+
+  # fd 2 was /dev/null. The operation and both target dimensions must be in the
+  # durable record, while this subscription failure must not borrow DB wording.
+  run grep -F "agmsg_subscription_pairs" "$log"
+  [ "$status" -eq 0 ]
+  run grep -F "project '$PROJ'" "$log"
+  [ "$status" -eq 0 ]
+  run grep -F "agent type 'claude-code'" "$log"
+  [ "$status" -eq 0 ]
+  run grep -F "cannot open message DB" "$log"
+  [ "$status" -ne 0 ]
+}
+
+@test "watch: persists DB selector failure without DB-open misdiagnosis" {
+  local out="$BATS_TEST_TMPDIR/watch-db-selector.out"
+  local log="$RUN_DIR/watch.sid-db-selector.log"
+  local cfg="$TEST_SKILL_DIR/teams/team/config.json"
+  local updated watcher watcher_status
+
+  # Keep the roster and subscription valid, then make only the team's
+  # partition selector unresolvable. This reaches agmsg_db_path after
+  # subscription resolution and distinguishes selector failure from an
+  # existing unreadable database.
+  updated="$(sqlite_mem "SELECT json_set(CAST(readfile('$(rf "$cfg")') AS TEXT), '\$.drivers.partition', 'missing-driver');")"
+  printf '%s\n' "$updated" > "$cfg"
+
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" sid-db-selector "$PROJ" claude-code \
+    >"$out" 2>/dev/null 3>&- 4>&- &
+  watcher=$!
+  if ! wait_for_file_contains "$log" "agmsg_db_path"; then
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+    cat "$out" "$log" >&2 2>/dev/null || true
+    false
+  fi
+
+  if wait "$watcher"; then
+    watcher_status=0
+  else
+    watcher_status="$?"
+  fi
+  [ "$watcher_status" -ne 0 ]
+
+  # A selector failure names its operation and team. It must not be reported as
+  # an unreadable DB, which is a later watch_check_existing_db condition.
+  run grep -F "agmsg_db_path" "$log"
+  [ "$status" -eq 0 ]
+  run grep -F "team 'team'" "$log"
+  [ "$status" -eq 0 ]
+  run grep -F "cannot open message DB" "$log"
+  [ "$status" -ne 0 ]
+}
+
+@test "watch: persists DB-open failure without subscription misdiagnosis" {
+  local out="$BATS_TEST_TMPDIR/watch-db-open.out"
+  local log="$RUN_DIR/watch.sid-db-open.log"
+  local cfg="$TEST_SKILL_DIR/teams/team/config.json"
+  local updated db watcher watcher_status
+
+  # Keep selector resolution valid, then corrupt only the existing per-team
+  # store. This reaches watch_check_existing_db after subscription resolution,
+  # providing the positive DB-open control for the two selector-failure tests.
+  updated="$(sqlite_mem "SELECT json_set(CAST(readfile('$(rf "$cfg")') AS TEXT), '\$.drivers.partition', 'per-team');")"
+  printf '%s\n' "$updated" > "$cfg"
+  source "$SCRIPTS/lib/storage.sh"
+  agmsg_storage_load
+  db="$(agmsg_db_path team)"
+  mkdir -p "$(dirname "$db")"
+  printf '%s\n' 'not a sqlite database' > "$db"
+
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" sid-db-open "$PROJ" claude-code \
+    >"$out" 2>/dev/null 3>&- 4>&- &
+  watcher=$!
+  if ! wait_for_file_contains "$log" "cannot open message DB"; then
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+    cat "$out" "$log" >&2 2>/dev/null || true
+    false
+  fi
+
+  if wait "$watcher"; then
+    watcher_status=0
+  else
+    watcher_status="$?"
+  fi
+  [ "$watcher_status" -ne 0 ]
+
+  # The real DB-open diagnostic is present, while neither startup resolver
+  # failure label is allowed to stand in for it.
+  run grep -F "cannot open message DB" "$log"
+  [ "$status" -eq 0 ]
+  run grep -F "agmsg_subscription_pairs" "$log"
+  [ "$status" -ne 0 ]
+  run grep -F "agmsg_db_path failed" "$log"
+  [ "$status" -ne 0 ]
+}
