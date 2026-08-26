@@ -160,6 +160,7 @@ teardown() {
   run grep -F "cannot open message DB" "$log"
   [ "$status" -ne 0 ]
 }
+
 @test "watch: persists DB-open failure without subscription misdiagnosis" {
   local out="$BATS_TEST_TMPDIR/watch-db-open.out"
   local log="$RUN_DIR/watch.sid-db-open.log"
