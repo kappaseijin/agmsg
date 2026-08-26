@@ -54,6 +54,11 @@ install_runtime_lock_sqlite_stub() {
         printf 'Error: database is locked (5)\n' >&2
         return 5
         ;;
+      slow-busy)
+        sleep 0.25
+        printf 'Error: database is locked (5)\n' >&2
+        return 5
+        ;;
       permanent)
         printf 'Error: no such table: locks\n' >&2
         return 1
@@ -294,6 +299,111 @@ assert_output_contains() {
   [ "$(cat "$AGMSG_TEST_GATE_STUB_ATTEMPTS")" -eq 4 ]
   assert_output_contains "$output" "classification=transient"
   [ ! -f "$lock_path" ]
+}
+
+@test "delivery gate: writer deadline beats slow SQLITE_BUSY retries" {
+  install_runtime_lock_sqlite_stub slow-busy
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+  local output_file="$BATS_TEST_TMPDIR/gate-output"
+  local status_file="$BATS_TEST_TMPDIR/gate-status"
+  local gate_pid watchdog_pid gate_wait_status=0
+
+  (
+    if AGMSG_TEST_ACTAS_GATE_DEADLINE_S=1 \
+      actas_lock_gate_acquire "$lock_path" >"$output_file" 2>&1; then
+      printf '0\n' > "$status_file"
+    else
+      printf '%s\n' "$?" > "$status_file"
+    fi
+  ) &
+  gate_pid=$!
+  (
+    sleep 3
+    kill "$gate_pid" 2>/dev/null || true
+  ) &
+  watchdog_pid=$!
+
+  wait "$gate_pid" 2>/dev/null || gate_wait_status=$?
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+
+  [ "$gate_wait_status" -eq 0 ]
+  [ -f "$status_file" ]
+  [ "$(cat "$status_file")" -ne 0 ]
+  local output
+  output="$(cat "$output_file")"
+  assert_output_contains "$output" "operation=acquire"
+  assert_output_contains "$output" "classification=transient"
+  assert_output_contains "$output" "reason=retry-deadline-exhausted"
+  assert_output_contains "$output" "deadline_s=1"
+}
+
+@test "delivery gate: live holder deadline preserves ownership and names state" {
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+  local resource holder gate_status gate_output
+  resource="$(actas_lock_gate_resource "$lock_path")"
+  sleep 60 &
+  holder=$!
+  agmsg_runtime_lock_acquire "$resource" "$holder" >/dev/null
+
+  export AGMSG_TEST_ACTAS_GATE_DEADLINE_S=1
+  run actas_lock_gate_acquire "$lock_path"
+  gate_status="$status"
+  gate_output="$output"
+  unset AGMSG_TEST_ACTAS_GATE_DEADLINE_S
+
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+
+  [ "$gate_status" -ne 0 ]
+  assert_output_contains "$gate_output" "operation=acquire"
+  assert_output_contains "$gate_output" "classification=live-holder"
+  assert_output_contains "$gate_output" "reason=retry-deadline-exhausted"
+  assert_output_contains "$gate_output" "deadline_s=1"
+  assert_output_contains "$gate_output" "attempts="
+  [ "$(agmsg_runtime_lock_owner "$resource")" = "$holder" ]
+}
+
+@test "delivery gate: release deadline preserves caller row" {
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+  local resource db output_file status_file
+  local gate_pid watchdog_pid gate_wait_status=0
+  resource="$(actas_lock_gate_resource "$lock_path")"
+  db="$(_agmsg_runtime_db_path)"
+  agmsg_runtime_lock_acquire "$resource" "$$" >/dev/null
+  install_runtime_lock_sqlite_stub slow-busy
+
+  output_file="$BATS_TEST_TMPDIR/release-gate-output"
+  status_file="$BATS_TEST_TMPDIR/release-gate-status"
+  (
+    if AGMSG_TEST_ACTAS_GATE_DEADLINE_S=1 \
+      actas_lock_gate_release "$lock_path" >"$output_file" 2>&1; then
+      printf '0\n' > "$status_file"
+    else
+      printf '%s\n' "$?" > "$status_file"
+    fi
+  ) &
+  gate_pid=$!
+  (
+    sleep 3
+    kill "$gate_pid" 2>/dev/null || true
+  ) &
+  watchdog_pid=$!
+
+  wait "$gate_pid" 2>/dev/null || gate_wait_status=$?
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+
+  [ "$gate_wait_status" -eq 0 ]
+  [ -f "$status_file" ]
+  [ "$(cat "$status_file")" -ne 0 ]
+  local output
+  output="$(cat "$output_file")"
+  assert_output_contains "$output" "operation=release"
+  assert_output_contains "$output" "classification=transient"
+  assert_output_contains "$output" "reason=retry-deadline-exhausted"
+  assert_output_contains "$output" "deadline_s=1"
+  [ "$(sqlite3 "$db" "SELECT owner_pid FROM locks WHERE resource = '$resource';")" = "$$" ]
 }
 
 @test "delivery gate: writer waits for a live holder instead of reclaiming it" {

@@ -142,6 +142,33 @@ _actas_lock_gate_diagnostic() {
   printf '\n' >&2
 }
 
+_ACTAS_LOCK_GATE_DEFAULT_DEADLINE_S=5
+_ACTAS_LOCK_GATE_BUSY_SLICE_MS=100
+
+_actas_lock_gate_deadline_s() {
+  local value="${AGMSG_TEST_ACTAS_GATE_DEADLINE_S:-$_ACTAS_LOCK_GATE_DEFAULT_DEADLINE_S}"
+  case "$value" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  value=$((10#$value))
+  [ "$value" -gt 0 ] || return 1
+  printf '%s\n' "$value"
+}
+
+# Bash's SECONDS counter has one-second precision. Keep a one-second safety
+# margin when selecting sqlite's millisecond busy timeout so a storage attempt
+# cannot be given more wait than the remaining gate budget.
+_actas_lock_gate_busy_timeout_ms() {
+  local deadline="$1" remaining_s
+  remaining_s=$((deadline - SECONDS))
+  [ "$remaining_s" -gt 0 ] || return 1
+  if [ "$remaining_s" -le 1 ]; then
+    printf '0\n'
+  else
+    printf '%s\n' "$_ACTAS_LOCK_GATE_BUSY_SLICE_MS"
+  fi
+}
+
 # Run exactly one storage ABI operation with a caller-selected SQLite busy
 # timeout. The assignment is exported inside this subshell so init scripts and
 # sqlite3 itself account for the same timeout as the outer gate deadline.
@@ -237,18 +264,30 @@ _actas_lock_gate_test_barrier() {
   done
 }
 
-# Acquire a delivery gate for an ownership writer. A live holder is waited on
-# in 100 ms slices; SQLite BUSY/LOCKED consumes the same 100 ms budget per SQL
-# attempt. Fifty attempts therefore bound the total wait to five seconds rather
-# than adding a second timeout around sqlite's own busy timeout.
+# Acquire a delivery gate for an ownership writer. The five-second deadline is
+# fixed at invocation start. A live holder is waited on in 100 ms slices, and
+# SQLite BUSY/LOCKED consumes the same short slice without extending the outer
+# deadline.
 actas_lock_gate_acquire() {
   local lock_path="$1" resource owner next_owner classification
+  local observed_owner='' final_classification=transient
+  local deadline_s started deadline busy_timeout elapsed_s
   local attempts=0 rc
   resource="$(actas_lock_gate_resource "$lock_path")"
+  if ! deadline_s="$(_actas_lock_gate_deadline_s)"; then
+    _actas_lock_gate_diagnostic acquire "$resource" '' unknown \
+      '<not-invoked>' 'invalid-test-deadline'
+    return 1
+  fi
+  started=$SECONDS
+  deadline=$((started + deadline_s))
 
-  while [ "$attempts" -lt 50 ]; do
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if ! busy_timeout="$(_actas_lock_gate_busy_timeout_ms "$deadline")"; then
+      break
+    fi
     attempts=$((attempts + 1))
-    _actas_lock_gate_attempt acquire "$resource" "$$" '' 100
+    _actas_lock_gate_attempt acquire "$resource" "$$" '' "$busy_timeout"
     rc=$?
     if [ "$rc" -ne 0 ]; then
       classification="$(_actas_lock_gate_classify_error "$ACTAS_LOCK_GATE_LAST_SQLITE_ERROR")"
@@ -256,10 +295,12 @@ actas_lock_gate_acquire() {
         "$ACTAS_LOCK_GATE_LAST_OWNER" "$classification" \
         "$ACTAS_LOCK_GATE_LAST_SQLITE_ERROR" 'sqlite-attempt-failed'
       [ "$classification" = transient ] || return 1
+      final_classification=transient
       continue
     fi
 
     owner="$ACTAS_LOCK_GATE_LAST_OWNER"
+    observed_owner="$owner"
     case "$owner" in
       "$$") return 0 ;;
       ''|*[!0-9]*)
@@ -269,21 +310,26 @@ actas_lock_gate_acquire() {
         ;;
     esac
 
+    # Do not start a live-holder poll once the storage attempt has used the
+    # fixed budget. The owner value is still reported, but no mutation follows.
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      final_classification=live-holder
+      break
+    fi
     if _agmsg_pid_alive_local "$owner"; then
-      if [ "$attempts" -lt 50 ]; then
-        sleep 0.1 || return 1
-      fi
+      final_classification=live-holder
+      sleep 0.1 || return 1
       continue
     fi
 
     # A confirmed-dead owner may be replaced only by the storage ABI's
     # expected-owner CAS. This is a second SQL attempt and shares the same
     # bounded budget; it never deletes an unknown/live successor.
-    if [ "$attempts" -ge 50 ]; then
+    if ! busy_timeout="$(_actas_lock_gate_busy_timeout_ms "$deadline")"; then
       break
     fi
     attempts=$((attempts + 1))
-    _actas_lock_gate_attempt acquire "$resource" "$$" "$owner" 100
+    _actas_lock_gate_attempt acquire "$resource" "$$" "$owner" "$busy_timeout"
     rc=$?
     if [ "$rc" -ne 0 ]; then
       classification="$(_actas_lock_gate_classify_error "$ACTAS_LOCK_GATE_LAST_SQLITE_ERROR")"
@@ -291,6 +337,7 @@ actas_lock_gate_acquire() {
         "$classification" "$ACTAS_LOCK_GATE_LAST_SQLITE_ERROR" \
         'sqlite-cas-attempt-failed'
       [ "$classification" = transient ] || return 1
+      final_classification=transient
       continue
     fi
     next_owner="$ACTAS_LOCK_GATE_LAST_OWNER"
@@ -302,11 +349,14 @@ actas_lock_gate_acquire() {
         return 1
         ;;
     esac
+    owner="$next_owner"
+    observed_owner="$next_owner"
   done
 
-  _actas_lock_gate_diagnostic acquire "$resource" "${owner:-}" \
-    transient "${ACTAS_LOCK_GATE_LAST_SQLITE_ERROR:-<not-invoked>}" \
-    'retry-deadline-exhausted'
+  elapsed_s=$((SECONDS - started))
+  _actas_lock_gate_diagnostic acquire "$resource" "${observed_owner:-}" \
+    "$final_classification" "${ACTAS_LOCK_GATE_LAST_SQLITE_ERROR:-<not-invoked>}" \
+    "retry-deadline-exhausted deadline_s=$deadline_s elapsed_s=$elapsed_s attempts=$attempts"
   return 1
 }
 
@@ -315,21 +365,36 @@ actas_lock_gate_acquire() {
 # unknown error is reported and returned without touching a successor row.
 actas_lock_gate_release() {
   local lock_path="$1" resource classification
-  local attempts=0 rc
+  local deadline_s started deadline busy_timeout elapsed_s
+  local attempts=0 rc final_classification=transient
   resource="$(actas_lock_gate_resource "$lock_path")"
-  while [ "$attempts" -lt 50 ]; do
+
+  if ! deadline_s="$(_actas_lock_gate_deadline_s)"; then
+    _actas_lock_gate_diagnostic release "$resource" "$$" unknown \
+      '<not-invoked>' 'invalid-test-deadline'
+    return 1
+  fi
+  started=$SECONDS
+  deadline=$((started + deadline_s))
+
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if ! busy_timeout="$(_actas_lock_gate_busy_timeout_ms "$deadline")"; then
+      break
+    fi
     attempts=$((attempts + 1))
-    _actas_lock_gate_attempt release "$resource" "$$" '' 100
+    _actas_lock_gate_attempt release "$resource" "$$" '' "$busy_timeout"
     rc=$?
     [ "$rc" -eq 0 ] && return 0
     classification="$(_actas_lock_gate_classify_error "$ACTAS_LOCK_GATE_LAST_SQLITE_ERROR")"
     _actas_lock_gate_diagnostic release "$resource" "$$" "$classification" \
       "$ACTAS_LOCK_GATE_LAST_SQLITE_ERROR" 'sqlite-attempt-failed'
     [ "$classification" = transient ] || return 1
+    final_classification=transient
   done
-  _actas_lock_gate_diagnostic release "$resource" "$$" transient \
+  elapsed_s=$((SECONDS - started))
+  _actas_lock_gate_diagnostic release "$resource" "$$" "$final_classification" \
     "${ACTAS_LOCK_GATE_LAST_SQLITE_ERROR:-<not-invoked>}" \
-    'retry-deadline-exhausted'
+    "retry-deadline-exhausted deadline_s=$deadline_s elapsed_s=$elapsed_s attempts=$attempts"
   return 1
 }
 
