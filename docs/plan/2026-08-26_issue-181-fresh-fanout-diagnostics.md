@@ -9,6 +9,7 @@ base_commit: "ab4b365d3a2dace4f42191370cea8e5e734af785"
 producer: agmsg_programmer_codex
 reviewer: agmsg_reviewer_claude
 timestamp: "2026-08-26T22:35:45+09:00"
+updated: "2026-08-26T22:42:00+09:00"
 ---
 
 # Issue #181: fresh-store fan-out 失敗の原因を失敗時だけ残す
@@ -16,6 +17,8 @@ timestamp: "2026-08-26T22:35:45+09:00"
 ## 結論
 
 この PR の唯一の主張は、未初期化 SQLite store への10並行 `send.sh` が失敗したとき、**実件数・各 child の exit/stderr・限定した DB 状態・最終 INSERT retry の SQLite stderr**を CI failure log に残すことである。
+
+これは fail-closed / clean-break の「失敗を分類する前に、理由が残る形にする」を適用した順序である。二回目 INSERT の `2>/dev/null` を残したままbusy対策やretry変更を足さない。診断が unavailable のときは空の正常値として扱わず、unavailable として出し、元の失敗を成功に変えずに停止する。
 
 再試行回数、`busy_timeout`、`storage_init` の競合制御、schema、送信成功条件は変更しない。
 診断が二回目 INSERT の `busy` / SQLite error を示した場合だけ、別 Issue / 別 PR で修復を設計する。init、`send.sh` 前段、count query、または別の経路なら、「retry 1回」修復は台帳へ戻す。
@@ -56,14 +59,14 @@ main の同一 `tests/test_storage.bats:233` assertion は直近80 runで4回、
 - 親は全 PID を個別に `wait` する。最初の failure で `false` せず、全 child の status artifact が揃ってから count と resource state を読む。
 - packet を出す条件は、既存 assertion と同じ **actual count が10でない、又は count query が失敗した** とする。child nonzero はその packet の必須フィールドだが、それだけで既存の count-based acceptance を新しい失敗へ変えない。正常なら header、artifact内容、SQLite stderr を一切標準エラーへ出さない。
 - failure packet は `expected=10 actual=<n-or-unavailable>`、child `index/pid/exit`、その child の stderr、DB の存在、`events` の `seq/id/to_agent` だけを stderr に出す。message body、test の送信本文、環境値、任意の process dump は出さない。
-- DB state query そのものが失敗した場合は、その query の exit/stderr を `state-query` として一度だけ残す。診断出力失敗は元の fan-out failure を success に変えず、`teardown_test_env` は必ず続ける。
+- DB state query そのものが失敗した場合は、その query の exit/stderr を `state-query=unavailable` として一度だけ残す。`n=0` とquery不能を混同しない。診断出力失敗は元の fan-out failure を success に変えず、`teardown_test_env` は必ず続ける。
 
 既存の初期化済み10並行 fan-out test は変更しない。fresh-store normal case も実行時 packet が無いことを確認する負の対照にする。
 
 ### 2. production では最終 retry の失敗だけを見えるようにする
 
 `scripts/drivers/storage/sqlite.sh:storage_send` の最初の INSERT probe は、現行どおり静かに失敗を検出する。
-`storage_init` 後の二回目 INSERT は stdout を捨てるが、`2>&1` で SQLite stderr を捨てない。
+`storage_init` 後の二回目 INSERT は stdout を捨てるが、`2>&1` で SQLite stderr を捨てない。変更後の最終retry経路に旧いstderr抑制経路を併存させない（clean-break）。
 
 `storage_send` が nonzero を返すと、その stderr は既存の `send.sh` command substitution を通って送信者へ届き、既存の empty-id error と同じ failure stream に残る。
 二回目 INSERT が成功したときは SQLite stderr を出さない。初回の missing-table probe、normal init、successful fan-out に診断を常時出さない。
@@ -92,7 +95,7 @@ shim は test fixture 内の `sqlite3` command wrapper とし、INSERT SQL を�
 
 1 PR = 「#181 fresh-store fan-out の失敗理由を失敗時だけ可観測にする」である。producer は `agmsg_programmer_codex`、formal reviewer は `agmsg_reviewer_claude`。#181以外の修復を混ぜない。
 
-診断 packet が二回目 INSERT の busy/error を CI で示したときのみ、producer は結果を Issue #181 に記録してから別 Issue / 1 PR の修復設計を依頼する。別原因または packet不成立なら R5-P8 修復を台帳へ戻す。
+診断 packet が二回目 INSERT のbusy/errorをCIで示したときのみ、その失敗を一時的と分類して、有界retryと上限到達時の停止を満たす修復を別Issue / 1 PRで設計する。別原因またはpacket不成立は原因未確定として停止し、retry回数・deadline・bootstrap協調を推測で変えない。
 
 ## 限界
 
