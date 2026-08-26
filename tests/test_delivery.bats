@@ -4,10 +4,6 @@ load test_helper
 
 setup() {
   setup_test_env
-  # Pin bare instance-id keying (#93) so watcher pidfiles / cc-instance records
-  # stay keyed on the raw session_id these tests pass — deterministic in CI and
-  # when the suite runs under an agent process. Composite path: test_watch.bats.
-  export AGMSG_AGENT_PID=""
   export TEST_PROJECT="$(mktemp -d)"
   DELIVERY_TEST_WATCH_PID=""
   DELIVERY_TEST_BRIDGE_PID=""
@@ -24,6 +20,13 @@ teardown() {
   fi
   teardown_test_env
   rm -rf "$TEST_PROJECT"
+}
+
+use_utf8_locale() {
+  local locale_name
+  locale_name="$(locale -a 2>/dev/null | LC_ALL=C awk 'tolower($0) ~ /utf[._-]?8/ { print; exit }')"
+  [ -n "$locale_name" ] || skip "no UTF-8 locale installed"
+  export LANG="$locale_name" LC_ALL="$locale_name"
 }
 
 # Count agmsg-owned entries in a hooks-event array.
@@ -1030,7 +1033,7 @@ EOF
 # Write a role-session record into the isolated skill dir's run/.
 _seed_role_record() {
   local team="$1" agent="$2" sid="$3" proj="$4" type="${5:-claude-code}"
-  SKILL_DIR="$TEST_SKILL_DIR" bash -c '
+  bash -c '
     source "$1/lib/role-session.sh"
     agmsg_role_session_record "$2" "$3" "$4" "$5" "$6"
   ' _ "$SCRIPTS" "$team" "$agent" "$sid" "$proj" "$type"
@@ -3174,8 +3177,8 @@ JSON
   bash "$SCRIPTS/join.sh" team alice codex "$TEST_PROJECT" >/dev/null
   bash "$SCRIPTS/delivery.sh" set monitor codex "$TEST_PROJECT" >/dev/null
   # shellcheck disable=SC1090
-  SKILL_DIR="$TEST_SKILL_DIR" source "$SCRIPTS/lib/role-session.sh"
-  SKILL_DIR="$TEST_SKILL_DIR" agmsg_role_session_record team alice seat-uuid-1 "$TEST_PROJECT" codex
+  source "$SCRIPTS/lib/role-session.sh"
+  agmsg_role_session_record team alice seat-uuid-1 "$TEST_PROJECT" codex
 
   run bash "$SCRIPTS/delivery.sh" status codex "$TEST_PROJECT"
   [ "$status" -eq 0 ]
@@ -3273,9 +3276,6 @@ JSON
 
   # shellcheck disable=SC1091
   source "$SCRIPTS/lib/hash.sh"
-  # The record has to land in the tree delivery.sh will read, so the helper needs
-  # the test's skill dir rather than the one it would derive for itself.
-  export SKILL_DIR="$TEST_SKILL_DIR"
   # shellcheck disable=SC1091
   source "$SCRIPTS/lib/role-session.sh"
   agmsg_role_session_record team alice thr-alice "$TEST_PROJECT" codex
@@ -3378,6 +3378,7 @@ JSON
   # where chars fit and bytes do not, so the padding is computed from the record
   # this fixture actually produces rather than guessed.
   local log db record chars bytes pad cap live
+  use_utf8_locale
   bash "$SCRIPTS/join.sh" "境界検査のためのとても長い日本語チーム名" alice claude-code "$TEST_PROJECT" >/dev/null
   db="$(cd "$TEST_SKILL_DIR" && bash -c '. scripts/lib/storage.sh; agmsg_db_path 境界検査のためのとても長い日本語チーム名')"
   rm -f "$db"
@@ -3429,6 +3430,7 @@ JSON
   # rotate, or the two behaviours agree and the case proves nothing. Same
   # derivation as the multibyte case: observe the record, then set the cap.
   local log db record chars bytes cap pad live shim wpid waited
+  use_utf8_locale
   bash "$SCRIPTS/join.sh" "境界検査のためのとても長い日本語チーム名" alice claude-code "$TEST_PROJECT" >/dev/null
   db="$(cd "$TEST_SKILL_DIR" && bash -c '. scripts/lib/storage.sh; agmsg_db_path 境界検査のためのとても長い日本語チーム名')"
   rm -f "$db"

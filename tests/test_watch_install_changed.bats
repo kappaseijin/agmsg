@@ -20,7 +20,6 @@ load test_helper
 
 setup() {
   setup_test_env
-  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) export AGMSG_AGENT_PID="" ;; esac
   export PROJ="/tmp/agmsg-watch-install-proj"
   bash "$SCRIPTS/join.sh" team alice claude-code "$PROJ" >/dev/null
   bash "$SCRIPTS/join.sh" team bob claude-code "$PROJ" >/dev/null

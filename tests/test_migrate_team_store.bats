@@ -10,7 +10,6 @@ load test_helper
 setup() {
   setup_test_env
   SHARED="$TEST_SKILL_DIR/db/messages.db"
-  export SKILL_DIR="$TEST_SKILL_DIR"
   bash "$SCRIPTS/join.sh" alpha ann claude-code /tmp/alpha-ann >/dev/null
   bash "$SCRIPTS/join.sh" alpha bob claude-code /tmp/alpha-bob >/dev/null
   bash "$SCRIPTS/join.sh" beta  ann claude-code /tmp/beta-ann  >/dev/null

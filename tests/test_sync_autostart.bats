@@ -14,8 +14,6 @@ load test_helper
 setup() {
   setup_test_env
   # The trigger tests below run the real scripts, which read these two.
-  export SKILL_DIR="$TEST_SKILL_DIR"
-  export RUN_DIR="$SKILL_DIR/run"
   bash "$SCRIPTS/join.sh" testteam alice claude-code /tmp/project-a
 
   local cfg="$TEST_SKILL_DIR/teams/testteam/config.json" escaped updated

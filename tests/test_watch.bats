@@ -8,11 +8,6 @@ load test_helper
 
 setup() {
   setup_test_env
-  # On MSYS2, the compat shim makes the ppid walk succeed; _iid() (bats
-  # subshell) and watch.sh (standalone bash) have different process trees, so
-  # the walk can produce different instance IDs. Pin to bare-sid on MSYS2 so
-  # both contexts agree deterministically.
-  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) export AGMSG_AGENT_PID="" ;; esac
   export PROJ="/tmp/agmsg-watch-proj"
   bash "$SCRIPTS/join.sh" team alice claude-code "$PROJ" >/dev/null
   bash "$SCRIPTS/join.sh" team bob claude-code "$PROJ" >/dev/null
@@ -268,7 +263,7 @@ _wait_for_file_contains() {
   # resolution walk. The command-local overrides are intentional: this test
   # exercises the health gate, not parent-agent discovery, and must not alter
   # the environment of any later test.
-  AGMSG_AGENT_PID="" AGMSG_RESOLVE_PROJECT=0 AGMSG_WATCH_INTERVAL=1 \
+  AGMSG_RESOLVE_PROJECT=0 AGMSG_WATCH_INTERVAL=1 \
     bash "$SCRIPTS/watch.sh" "$sid" "$proj_a" claude-code alice \
     >"$out" 2>"$err" 3>&- 4>&- &
   local watcher=$!
@@ -298,7 +293,7 @@ _wait_for_file_contains() {
   local lock_path="$TEST_SKILL_DIR/run/actas.team__alice.session"
   chmod 000 "$db"
 
-  AGMSG_AGENT_PID="" AGMSG_RESOLVE_PROJECT=0 AGMSG_WATCH_INTERVAL=1 \
+  AGMSG_RESOLVE_PROJECT=0 AGMSG_WATCH_INTERVAL=1 \
     bash "$SCRIPTS/watch.sh" "runtime-db-sid" "$PROJ" claude-code alice \
     >"$out" 2>"$err" 3>&- 4>&- &
   local watcher=$!

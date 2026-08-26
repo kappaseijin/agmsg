@@ -4,7 +4,6 @@ load test_helper
 
 setup() {
   setup_test_env
-  export AGMSG_AGENT_PID=""
   export PROJ="$(mktemp -d)"
   bash "$SCRIPTS/join.sh" team alice claude-code "$PROJ" >/dev/null
 }

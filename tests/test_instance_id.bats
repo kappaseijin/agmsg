@@ -10,9 +10,6 @@ load test_helper
 
 setup() {
   setup_test_env
-  export SKILL_DIR="$TEST_SKILL_DIR"
-  export RUN_DIR="$SKILL_DIR/run"
-  mkdir -p "$RUN_DIR"
   # shellcheck disable=SC1090
   source "$SKILL_DIR/scripts/lib/resolve-project.sh"
   # shellcheck disable=SC1090

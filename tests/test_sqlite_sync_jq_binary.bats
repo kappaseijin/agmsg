@@ -123,7 +123,6 @@ STUB
 }
 
 push_fixture() {
-  export SKILL_DIR="$TEST_SKILL_DIR"
   export AGMSG_STORAGE_PATH="$BATS_TEST_TMPDIR/store"
   export AGMSG_STORAGE_DRIVER=sqlite
   # shellcheck disable=SC1091

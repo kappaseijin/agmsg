@@ -4,7 +4,6 @@ load test_helper
 
 setup() {
   setup_test_env
-  export SKILL_DIR="$TEST_SKILL_DIR"
   export PROJ_A="/tmp/agmsg-reset-a"
   export PROJ_B="/tmp/agmsg-reset-b"
   bash "$SCRIPTS/join.sh" team-a alice claude-code "$PROJ_A" >/dev/null
