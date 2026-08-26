@@ -164,6 +164,272 @@ EOF
   [ "$output" -eq $((n + 1)) ]
 }
 
+@test "join: holder generation progress resets the no-progress deadline" {
+  skip_on_windows "registry progress fan-out uses POSIX process and PATH fixtures"
+  local n=4 real_sqlite real_date shim hold_dir clock
+  real_sqlite="$(command -v sqlite3)"
+  real_date="$(command -v date)"
+  shim="$TEST_SKILL_DIR/registry-progress-bin"
+  hold_dir="$TEST_SKILL_DIR/registry-progress"
+  clock="$hold_dir/clock"
+  mkdir -p "$shim" "$hold_dir"
+  printf '%s\n' 0 > "$clock"
+  cat > "$shim/sqlite3" <<EOF
+#!/usr/bin/env bash
+if [ -n "\${AGMSG_TEST_HOLD_DIR:-}" ] &&
+   [ -n "\${AGMSG_TEST_WORKER_ID:-}" ] &&
+   [ -f "\${AGMSG_TEST_TEAM_DIR:-}/.config.lock.holder" ]; then
+  case "\$*" in
+    *json_set*)
+      marker="\${AGMSG_TEST_HOLD_DIR}/entered.\${AGMSG_TEST_WORKER_ID}"
+      if [ ! -f "\$marker" ]; then
+        : > "\$marker"
+        while [ ! -f "\${AGMSG_TEST_HOLD_DIR}/release.\${AGMSG_TEST_WORKER_ID}" ]; do
+          sleep 0.01
+        done
+      fi
+      ;;
+  esac
+fi
+exec "$real_sqlite" "\$@"
+EOF
+  cat > "$shim/date" <<EOF
+#!/usr/bin/env bash
+if [ "\$#" -eq 1 ] && [ "\$1" = "+%s" ]; then
+  cat "$clock"
+  exit 0
+fi
+exec "$real_date" "\$@"
+EOF
+  chmod +x "$shim/sqlite3" "$shim/date"
+
+  bash "$SCRIPTS/join.sh" progress seed claude-code /tmp/seed >/dev/null
+  local pids=() rcs=() i rc failed=0 handled=0 found=0 start deadline timed_out=0
+  for i in $(seq 1 "$n"); do
+    PATH="$shim:$PATH" AGMSG_LOCK_SECONDS=10 \
+      AGMSG_TEST_HOLD_DIR="$hold_dir" \
+      AGMSG_TEST_TEAM_DIR="$TEST_SKILL_DIR/teams/progress" \
+      AGMSG_TEST_WORKER_ID="$i" \
+      bash "$SCRIPTS/join.sh" progress "agent$i" claude-code "/tmp/p$i" \
+      >"$TEST_SKILL_DIR/join-$i.stdout" 2>"$TEST_SKILL_DIR/join-$i.stderr" &
+    pids+=("$!")
+  done
+
+  # Release exactly one post-lock critical section at a time. The logical
+  # clock advances by four seconds per holder generation, so the queue's
+  # elapsed time exceeds the ten-second budget while each no-progress window
+  # remains below it. The markers are written only after the real lock holder
+  # record exists; no blind sleep stands in for lock progress.
+  start=$SECONDS
+  deadline=$((start + 15))
+  while [ "$handled" -lt "$n" ] && [ "$SECONDS" -lt "$deadline" ]; do
+    found=0
+    for i in $(seq 1 "$n"); do
+      if [ -f "$hold_dir/entered.$i" ] && [ ! -f "$hold_dir/release.$i" ]; then
+        printf '%s\n' "$(( (handled + 1) * 4 ))" > "$clock"
+        : > "$hold_dir/release.$i"
+        handled=$((handled + 1))
+        found=1
+        break
+      fi
+    done
+    [ "$found" -eq 1 ] || sleep 0.01
+  done
+
+  if [ "$handled" -lt "$n" ]; then
+    timed_out=1
+    echo "failure packet: barrier timeout handled=$handled expected=$n" >&2
+    for i in $(seq 1 "$n"); do
+      kill "${pids[$((i - 1))]}" 2>/dev/null || true
+    done
+  fi
+
+  for i in $(seq 1 "$n"); do
+    if wait "${pids[$((i - 1))]}"; then
+      rc=0
+    else
+      rc=$?
+      failed=1
+    fi
+    rcs[$((i - 1))]="$rc"
+  done
+
+  local cfg="$TEST_SKILL_DIR/teams/progress/config.json" actual
+  actual="$(sqlite_mem "SELECT count(*) FROM json_each(json_extract(CAST(readfile('$(rf "$cfg")') AS TEXT), '\$.agents'));" 2>&1)" || true
+  if [ "$failed" -ne 0 ] || [ "$actual" != "$((n + 1))" ]; then
+    echo "failure packet: expected_agents=$((n + 1)) actual_agents=$actual" >&2
+    for i in $(seq 1 "$n"); do
+      echo "child index=$i pid=${pids[$((i - 1))]} exit=${rcs[$((i - 1))]}" >&2
+      echo "child stdout:" >&2
+      cat "$TEST_SKILL_DIR/join-$i.stdout" >&2 || true
+      echo "child stderr:" >&2
+      cat "$TEST_SKILL_DIR/join-$i.stderr" >&2 || true
+    done
+    echo "lock timeout messages:" >&2
+    for i in $(seq 1 "$n"); do
+      if grep -F "timed out acquiring registry lock" "$TEST_SKILL_DIR/join-$i.stderr" >/dev/null 2>&1; then
+        echo "child index=$i" >&2
+      fi
+    done
+  fi
+  [ "$timed_out" -eq 0 ]
+  [ "$failed" -eq 0 ]
+  [ "$actual" = "$((n + 1))" ]
+}
+
+@test "join: a holder with no generation progress fails closed at the deadline" {
+  local team_dir="$TEST_SKILL_DIR/teams/wedged" unrelated_dir="$TEST_SKILL_DIR/teams/unrelated"
+  local holder_script="$TEST_SKILL_DIR/live-lock-holder.sh"
+  local ready="$TEST_SKILL_DIR/live-lock-holder.ready" release="$TEST_SKILL_DIR/live-lock-holder.release"
+  local holder_pid blocked_status blocked_stderr unrelated_before unrelated_after holder_rc target_lock_present=0
+  bash "$SCRIPTS/join.sh" wedged seed claude-code /tmp/seed >/dev/null
+  bash "$SCRIPTS/join.sh" unrelated seed claude-code /tmp/unrelated >/dev/null
+  cat > "$holder_script" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+team_dir="$1"
+ready="$2"
+release="$3"
+library="$4"
+source "$library"
+agmsg_lock_acquire "$team_dir"
+: > "$ready"
+while [ ! -f "$release" ]; do
+  sleep 0.01
+done
+agmsg_lock_release
+EOF
+  chmod +x "$holder_script"
+  bash "$holder_script" "$team_dir" "$ready" "$release" \
+    "$SCRIPTS/lib/registry-lock.sh" >"$TEST_SKILL_DIR/live-lock-holder.stdout" \
+    2>"$TEST_SKILL_DIR/live-lock-holder.stderr" &
+  holder_pid="$!"
+  wait_for_file "$ready"
+  kill -0 "$holder_pid"
+
+  mkdir -p "$unrelated_dir/.config.lock"
+  printf '%s\n' 'token unrelated-generation' 'pid 1' 'command unrelated' 'host test' \
+    > "$unrelated_dir/.config.lock.holder"
+  unrelated_before="$(cat "$unrelated_dir/.config.lock.holder")"
+
+  run --separate-stderr env AGMSG_LOCK_SECONDS=1 AGMSG_LOCK_TRIES=50 \
+    bash "$SCRIPTS/join.sh" wedged blocked claude-code /tmp/blocked
+  blocked_status="$status"
+  blocked_stderr="$stderr"
+  [ -d "$team_dir/.config.lock" ] && target_lock_present=1
+
+  : > "$release"
+  if wait "$holder_pid"; then
+    holder_rc=0
+  else
+    holder_rc="$?"
+  fi
+  unrelated_after="$(cat "$unrelated_dir/.config.lock.holder")"
+
+  [ "$holder_rc" -eq 0 ]
+  [ "$blocked_status" -ne 0 ]
+  case "$blocked_stderr" in
+    *"timed out acquiring registry lock"*) ;;
+    *) false ;;
+  esac
+  case "$blocked_stderr" in
+    *"no holder generation progress"*) ;;
+    *) false ;;
+  esac
+  [ "$target_lock_present" -eq 1 ]
+  [ "$unrelated_after" = "$unrelated_before" ]
+  [ -d "$unrelated_dir/.config.lock" ]
+}
+
+@test "join: production-default no-progress deadline cannot hang" {
+  skip_on_windows "registry progress watchdog uses POSIX process and signal fixtures"
+  local team_dir="$TEST_SKILL_DIR/teams/wedged-default"
+  local holder_script="$TEST_SKILL_DIR/default-live-lock-holder.sh"
+  local ready="$TEST_SKILL_DIR/default-live-lock-holder.ready"
+  local release="$TEST_SKILL_DIR/default-live-lock-holder.release"
+  local watchdog_script="$TEST_SKILL_DIR/default-lock-watchdog.sh"
+  local watchdog_killed="$TEST_SKILL_DIR/default-lock-watchdog.killed"
+  local blocked_stdout="$TEST_SKILL_DIR/default-blocked.stdout"
+  local blocked_stderr="$TEST_SKILL_DIR/default-blocked.stderr"
+  local holder_pid blocked_pid watchdog_pid blocked_status holder_rc blocked_error
+
+  bash "$SCRIPTS/join.sh" wedged-default seed claude-code /tmp/seed >/dev/null
+  cat > "$holder_script" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+team_dir="$1"
+ready="$2"
+release="$3"
+library="$4"
+source "$library"
+agmsg_lock_acquire "$team_dir"
+: > "$ready"
+while [ ! -f "$release" ]; do
+  sleep 0.01
+done
+agmsg_lock_release
+EOF
+  chmod +x "$holder_script"
+  bash "$holder_script" "$team_dir" "$ready" "$release" \
+    "$SCRIPTS/lib/registry-lock.sh" >"$TEST_SKILL_DIR/default-live-lock-holder.stdout" \
+    2>"$TEST_SKILL_DIR/default-live-lock-holder.stderr" &
+  holder_pid="$!"
+  wait_for_file "$ready"
+  kill -0 "$holder_pid"
+
+  cat > "$watchdog_script" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+target="$1"
+marker="$2"
+sleep 8
+if kill -0 "$target" 2>/dev/null; then
+  : > "$marker"
+  kill -KILL "$target" 2>/dev/null || true
+fi
+EOF
+  chmod +x "$watchdog_script"
+
+  (
+    unset AGMSG_LOCK_TRIES
+    AGMSG_LOCK_SECONDS=1 bash "$SCRIPTS/join.sh" wedged-default blocked claude-code /tmp/blocked
+  ) >"$blocked_stdout" 2>"$blocked_stderr" &
+  blocked_pid="$!"
+  bash "$watchdog_script" "$blocked_pid" "$watchdog_killed" &
+  watchdog_pid="$!"
+
+  if wait "$blocked_pid"; then
+    blocked_status=0
+  else
+    blocked_status="$?"
+  fi
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+
+  local target_lock_present=0
+  [ -d "$team_dir/.config.lock" ] && target_lock_present=1
+  : > "$release"
+  if wait "$holder_pid"; then
+    holder_rc=0
+  else
+    holder_rc="$?"
+  fi
+  blocked_error="$(cat "$blocked_stderr")"
+
+  [ "$holder_rc" -eq 0 ]
+  [ "$blocked_status" -ne 0 ]
+  [ "$target_lock_present" -eq 1 ]
+  [ ! -e "$watchdog_killed" ]
+  case "$blocked_error" in
+    *"timed out acquiring registry lock"*) ;;
+    *) false ;;
+  esac
+  case "$blocked_error" in
+    *"no holder generation progress"*) ;;
+    *) false ;;
+  esac
+}
+
 @test "join: releases its lock (no .config.lock left behind)" {
   bash "$SCRIPTS/join.sh" myteam alice claude-code /tmp/proj
   [ ! -e "$TEST_SKILL_DIR/teams/myteam/.config.lock" ]

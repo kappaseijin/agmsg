@@ -30,20 +30,19 @@ AGMSG_HELD_LOCKS="${AGMSG_HELD_LOCKS:-}"
 # Acquire <team_dir>'s lock. <team_dir> (teams/<team>) must already exist — the
 # caller creates it for a brand-new/target team before locking, so this never
 # resurrects a team dir that a concurrent leave/reset just removed. Spins with a
-# short sleep until AGMSG_LOCK_SECONDS elapse (default 10), then fails non-zero
-# so the caller can abort rather than silently skip the team.
+# short sleep until AGMSG_LOCK_SECONDS elapse (default 10) without observing a
+# new holder token, then fails non-zero so the caller can abort rather than
+# silently skip the team. A new holder generation resets that no-progress
+# deadline; a missing or unreadable holder record is not progress.
 #
-# BUDGETED IN TIME, NOT ITERATIONS (#779). The old budget was 1000 attempts and
-# the comment beside it read "= ~10s", which is arithmetic that holds only where
-# an mkdir and a sleep are free. Measured on macOS: 100 attempts take 3 seconds,
-# not 1 — already three times the stated figure, before Windows, where the
-# report that raised this saw minutes. A wait announced in seconds has to be
-# counted in seconds, or the number in the message is not about the wait.
+# BUDGETED BY HOLDER PROGRESS, NOT QUEUE AGE (#189). The old global elapsed
+# budget made a healthy queue fail while holder generations were advancing.
+# Measuring time since the last observed token change keeps the bound on a
+# stalled holder without promising a global queue scheduler or fairness.
 #
-# AGMSG_LOCK_TRIES still caps the attempt count and still defaults to 1000. It
-# is set by four tests to make them fail fast and by nothing in production, so
-# it stays as a ceiling — whichever bound is reached first ends the wait, and
-# each one names itself when it does.
+# AGMSG_LOCK_TRIES is an explicit test control only. It is unset in production,
+# so queue length cannot become a second production timeout. When explicitly
+# set, whichever bound is reached first ends the wait and names itself.
 # Who owns the directory and what this process is, for a failure that is about
 # neither the team nor the lock. `ls -ld` and `id` rather than stat(1), whose
 # flags differ between BSD and GNU, and both are already required here.
@@ -54,9 +53,11 @@ _agmsg_lock_describe_dir() {
 }
 
 agmsg_lock_acquire() {
-  local team_dir="$1" lock i=0 max="${AGMSG_LOCK_TRIES:-1000}" err=""
-  local budget="${AGMSG_LOCK_SECONDS:-10}" started elapsed
+  local team_dir="$1" lock i=0 max="${AGMSG_LOCK_TRIES:-}" err=""
+  local budget="${AGMSG_LOCK_SECONDS:-10}" started elapsed progress_started
+  local holder_output holder_token last_holder_token="" holder_reason=""
   started="$(date +%s)"
+  progress_started="$started"
   lock="$team_dir/.config.lock"
   until err="$(mkdir "$lock" 2>&1)"; do
     # WHY mkdir failed decides whether waiting can help, and only one reason
@@ -85,25 +86,48 @@ agmsg_lock_acquire() {
       _agmsg_lock_describe_dir "$team_dir"
       return 1
     fi
+
+    # A lock that is still present is not enough to prove that no work is
+    # happening. Each successful holder writes a new token beside the lock;
+    # observing a different token is the only progress signal available to a
+    # waiter. Missing/unreadable holder state is deliberately not progress and
+    # never triggers stale-lock reclamation.
+    holder_reason=""
+    if [ -d "$lock" ]; then
+      if [ ! -f "$lock.holder" ]; then
+        holder_reason="holder record missing"
+      elif holder_output="$(sed -n 's/^token //p' "$lock.holder" 2>&1)"; then
+        holder_token="${holder_output%%$'\n'*}"
+        if [ -z "$holder_token" ]; then
+          holder_reason="holder token missing"
+        elif [ -z "$last_holder_token" ] || [ "$holder_token" != "$last_holder_token" ]; then
+          last_holder_token="$holder_token"
+          progress_started="$(date +%s)"
+        fi
+      else
+        holder_reason="holder token unreadable: $holder_output"
+      fi
+    fi
     i=$((i + 1))
-    elapsed=$(( $(date +%s) - started ))
-    # Whichever bound arrives first, and the message says which — "1000 tries"
-    # and "10 seconds" are different facts about a wait, and an operator
-    # deciding whether to retry needs the one that actually stopped it.
-    if [ "$elapsed" -ge "$budget" ] || [ "$i" -ge "$max" ]; then
+    elapsed=$(( $(date +%s) - progress_started ))
+    # Production is bounded by no-progress time. AGMSG_LOCK_TRIES is an
+    # explicit test control only; an unset value must not turn queue length into
+    # a second production timeout.
+    if [ "$elapsed" -ge "$budget" ] || { [ -n "$max" ] && [ "$i" -ge "$max" ]; }; then
       # ONE PHRASE, then which bound. Callers match on "timed out acquiring
       # registry lock" — `test_remote.bats` does, with a short attempt budget —
       # and inventing a second sentence for the attempt ceiling broke them
       # while telling the operator nothing they could not be told in a clause.
       if [ "$elapsed" -ge "$budget" ]; then
-        echo "agmsg: timed out acquiring registry lock for $team_dir after ${elapsed}s" >&2
+        echo "agmsg: timed out acquiring registry lock for $team_dir after ${elapsed}s (no holder generation progress)" >&2
       else
-        echo "agmsg: timed out acquiring registry lock for $team_dir after $i attempts (${elapsed}s)" >&2
+        echo "agmsg: timed out acquiring registry lock for $team_dir after $i attempts (${elapsed}s; explicit attempt control)" >&2
       fi
       # The reason travels with the timeout too. If the wait was hopeless for
       # a cause this function did not anticipate, the errno is the only thing
       # that will say so.
       [ -n "$err" ] && echo "agmsg: last mkdir error: $err" >&2
+      [ -n "$holder_reason" ] && echo "agmsg: holder generation unavailable: $holder_reason" >&2
       return 1
     fi
     sleep 0.01
