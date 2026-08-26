@@ -4,7 +4,7 @@ title: R-series ledger and closure の事実検証
 status: changes_requested
 target: "/Users/kappa/Dropbox/data/dev/agmsg/docs/decisions/2026-08-26T225926_r-series-ledger-and-closure.md"
 timestamp: "2026-08-26T22:56:04+09:00"
-updated: "2026-08-26T23:02:33+09:00"
+updated: "2026-08-26T23:04:41+09:00"
 ---
 
 # R-series ledger and closure の事実検証
@@ -60,3 +60,7 @@ targetは `2026-08-26T225926_r-series-ledger-and-closure.md` へ改名され、f
 breakerはpacketとsourceを照合し、#181を別Issueにせず、同じIssue内で `init-db.sh` のschema/triggers適用を単一トランザクションへ原子化する修復と断定した。migration guardの `1|0` fail-closedは正しいため変えず、lock・guard fallback・`send.sh` retry契約も変更しない。
 
 よってactive項目の#181行には、producer=programmer、前提=PR #201の診断merge後、修復=初期化の原子化、verification=verifierによるdiagnostic付きfan-out 60回、close不可理由=修復PRとfixed-HEAD検証が未完了、と記す必要がある。#189も実装中のactive項目として同じ区分へ置く。
+
+## 判定保留の最終1点
+
+targetは未解決表を追加した一方、冒頭で「実際には2種類」とし、分類表も修正・決着の2行だけである。未解決は第3区分なので、冒頭を3種類へ改め、`未解決（実害あり、修復または検証中、epic closeで解決扱いにしない）` の表行を追加するまでPASSにしない。
