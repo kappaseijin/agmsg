@@ -2,9 +2,9 @@
 type: Verification
 title: R-series ledger and closure の事実検証
 status: changes_requested
-target: "/Users/kappa/Dropbox/data/dev/agmsg/docs/decisions/2026-08-26T235500_r-series-ledger-and-closure.md"
+target: "/Users/kappa/Dropbox/data/dev/agmsg/docs/decisions/2026-08-26T225926_r-series-ledger-and-closure.md"
 timestamp: "2026-08-26T22:56:04+09:00"
-updated: "2026-08-26T22:58:18+09:00"
+updated: "2026-08-26T23:00:14+09:00"
 ---
 
 # R-series ledger and closure の事実検証
@@ -43,3 +43,14 @@ PMはレビュー後、R5-C1/C2と#189の文言を訂正した。両方ともtar
 ただし、stub無し10並行fan-outのvalid attempt 51で、#181のactual packetが `expected=10` / `actual=9`、child 1件のexit 1、`team-work dispatch migration requires both legacy tables` を示した。これはfinal retry SQLite busyではなく初期化/migration経路である。したがってtargetの#181節は、値の変更を待つ段階ではなく、**retry修復を停止しmigration failureを別に分類する**現在の根拠へ更新しなければならない。
 
 targetのfrontmatter時刻は再検証時にも未来であり、R5-P4〜P7のreopen条件もpath別に未分化のままである。この2点と#181節が残るため、検証結果は引き続き`changes_requested`である。
+
+## 最終再検証
+
+targetは `2026-08-26T225926_r-series-ledger-and-closure.md` へ改名され、frontmatter時刻、R5-P4〜P7のpath別reopen、R5-C1/C2、#189の進行中表現は訂正済みである。
+
+残る指摘は2件である。
+
+1. #181節は実packetの **value** を載せたが、`cutoff`（valid attempt 51で停止）、`source`（PR #201の旧HEAD `ea72704a6f4736932ccde72d077aa7230cbe03dc`）、`command`（stub無しのFRESH Bats反復）を載せていない。live PR #201 HEADは `2d3bb346c11b2271d64315604a11998be977982c` へ進んでおり、旧HEADの観測を新HEADの証拠として扱えない。値と固定HEADを同じ節へ記録すること。
+2. GitHubでは #176、#178、#181、#189 がOPENである。#181はactual migration failureを得たが修復範囲のbreaker断定待ち、#189は実装中である。epic close用台帳には「修正」「reopen条件つき決着」に加え、**未解決（Issue、次の決定者、close不可の理由）**を明記する。現状の#181/#189節だけでは、決着済みとの誤読を防げない。
+
+この2件が直るまで、最終判定は`changes_requested`である。
