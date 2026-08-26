@@ -273,3 +273,83 @@ teardown() {
   run grep -F "scan-failure-marker" "$out"
   [ "$status" -ne 0 ]
 }
+
+@test "watch: consume failure is logged after stdout delivery" {
+  local out="$BATS_TEST_TMPDIR/watch-consume-failure.out"
+  local log="$RUN_DIR/watch.sid-consume-failure.log"
+  local watcher
+
+  # The message must reach stdout before the isolated consume seam fails. The
+  # failure is post-delivery state only; it must not change delivery semantics.
+  bash "$SCRIPTS/send.sh" team alice carol consume-failure-marker >/dev/null
+  export AGMSG_STORAGE_DRIVER=sqlite
+  printf '%s\n' '' 'storage_read_cursor_consume() {' '  return 13' '}' \
+    >> "$SCRIPTS/drivers/storage/sqlite.sh"
+
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" sid-consume-failure "$PROJ" claude-code \
+    >"$out" 2>/dev/null 3>&- 4>&- &
+  watcher=$!
+  if ! wait_for_file_contains "$out" "consume-failure-marker"; then
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+    cat "$out" "$log" >&2 2>/dev/null || true
+    false
+  fi
+  if ! wait_for_file_contains "$log" "storage_read_cursor_consume failed"; then
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+    cat "$out" "$log" >&2 2>/dev/null || true
+    false
+  fi
+  kill "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+
+  # fd 2 was /dev/null. The durable diagnostic identifies the post-delivery
+  # operation, recipient pair, and fixed seam status.
+  run grep -F "consume-failure-marker" "$out"
+  [ "$status" -eq 0 ]
+  run grep -F "team/carol: storage_read_cursor_consume failed" "$log"
+  [ "$status" -eq 0 ]
+  run grep -F "status 13" "$log"
+  [ "$status" -eq 0 ]
+}
+
+@test "watch: receipt failure is logged after stdout delivery" {
+  local out="$BATS_TEST_TMPDIR/watch-receipt-failure.out"
+  local log="$RUN_DIR/watch.sid-receipt-failure.log"
+  local watcher
+
+  # Receipt persistence is also post-delivery state. A fixed non-zero seam
+  # must leave the already emitted message visible to the recipient.
+  bash "$SCRIPTS/send.sh" team alice carol receipt-failure-marker >/dev/null
+  export AGMSG_STORAGE_DRIVER=sqlite
+  printf '%s\n' '' 'storage_record_receipts() {' '  return 13' '}' \
+    >> "$SCRIPTS/drivers/storage/sqlite.sh"
+
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" sid-receipt-failure "$PROJ" claude-code \
+    >"$out" 2>/dev/null 3>&- 4>&- &
+  watcher=$!
+  if ! wait_for_file_contains "$out" "receipt-failure-marker"; then
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+    cat "$out" "$log" >&2 2>/dev/null || true
+    false
+  fi
+  if ! wait_for_file_contains "$log" "storage_record_receipts failed"; then
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+    cat "$out" "$log" >&2 2>/dev/null || true
+    false
+  fi
+  kill "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+
+  # fd 2 was /dev/null. The durable diagnostic identifies the post-delivery
+  # receipt operation, recipient pair, and fixed seam status.
+  run grep -F "receipt-failure-marker" "$out"
+  [ "$status" -eq 0 ]
+  run grep -F "team/carol: storage_record_receipts failed" "$log"
+  [ "$status" -eq 0 ]
+  run grep -F "status 13" "$log"
+  [ "$status" -eq 0 ]
+}
