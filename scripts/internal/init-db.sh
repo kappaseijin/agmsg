@@ -314,6 +314,15 @@ SQL
 # Dispatch has its own schema lifecycle because deployed stores may still have
 # the legacy CHECK constraint that excludes `abandoned`. Migration runs before
 # this fresh-schema creation, so this shared definition is safe for both fresh
-# and already-migrated stores.
-agmsg_sqlite "$DB" < "$SCRIPT_DIR/team-work-dispatch-schema.sql"
-agmsg_sqlite "$DB" < "$SCRIPT_DIR/team-work-dispatch-triggers.sql"
+# and already-migrated stores. Apply both files in one transaction so a
+# concurrent migration guard cannot observe only one of the two tables.
+dispatch_schema_sql="$(<"$SCRIPT_DIR/team-work-dispatch-schema.sql")"
+dispatch_trigger_sql="$(<"$SCRIPT_DIR/team-work-dispatch-triggers.sql")"
+agmsg_sqlite "$DB" <<SQL
+.bail on
+.timeout 5000
+BEGIN IMMEDIATE;
+$dispatch_schema_sql
+$dispatch_trigger_sql
+COMMIT;
+SQL
