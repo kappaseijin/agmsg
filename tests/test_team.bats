@@ -341,6 +341,95 @@ EOF
   [ -d "$unrelated_dir/.config.lock" ]
 }
 
+@test "join: production-default no-progress deadline cannot hang" {
+  skip_on_windows "registry progress watchdog uses POSIX process and signal fixtures"
+  local team_dir="$TEST_SKILL_DIR/teams/wedged-default"
+  local holder_script="$TEST_SKILL_DIR/default-live-lock-holder.sh"
+  local ready="$TEST_SKILL_DIR/default-live-lock-holder.ready"
+  local release="$TEST_SKILL_DIR/default-live-lock-holder.release"
+  local watchdog_script="$TEST_SKILL_DIR/default-lock-watchdog.sh"
+  local watchdog_killed="$TEST_SKILL_DIR/default-lock-watchdog.killed"
+  local blocked_stdout="$TEST_SKILL_DIR/default-blocked.stdout"
+  local blocked_stderr="$TEST_SKILL_DIR/default-blocked.stderr"
+  local holder_pid blocked_pid watchdog_pid blocked_status holder_rc blocked_error
+
+  bash "$SCRIPTS/join.sh" wedged-default seed claude-code /tmp/seed >/dev/null
+  cat > "$holder_script" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+team_dir="$1"
+ready="$2"
+release="$3"
+library="$4"
+source "$library"
+agmsg_lock_acquire "$team_dir"
+: > "$ready"
+while [ ! -f "$release" ]; do
+  sleep 0.01
+done
+agmsg_lock_release
+EOF
+  chmod +x "$holder_script"
+  bash "$holder_script" "$team_dir" "$ready" "$release" \
+    "$SCRIPTS/lib/registry-lock.sh" >"$TEST_SKILL_DIR/default-live-lock-holder.stdout" \
+    2>"$TEST_SKILL_DIR/default-live-lock-holder.stderr" &
+  holder_pid="$!"
+  wait_for_file "$ready"
+  kill -0 "$holder_pid"
+
+  cat > "$watchdog_script" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+target="$1"
+marker="$2"
+sleep 8
+if kill -0 "$target" 2>/dev/null; then
+  : > "$marker"
+  kill -KILL "$target" 2>/dev/null || true
+fi
+EOF
+  chmod +x "$watchdog_script"
+
+  (
+    unset AGMSG_LOCK_TRIES
+    AGMSG_LOCK_SECONDS=1 bash "$SCRIPTS/join.sh" wedged-default blocked claude-code /tmp/blocked
+  ) >"$blocked_stdout" 2>"$blocked_stderr" &
+  blocked_pid="$!"
+  bash "$watchdog_script" "$blocked_pid" "$watchdog_killed" &
+  watchdog_pid="$!"
+
+  if wait "$blocked_pid"; then
+    blocked_status=0
+  else
+    blocked_status="$?"
+  fi
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+
+  local target_lock_present=0
+  [ -d "$team_dir/.config.lock" ] && target_lock_present=1
+  : > "$release"
+  if wait "$holder_pid"; then
+    holder_rc=0
+  else
+    holder_rc="$?"
+  fi
+  blocked_error="$(cat "$blocked_stderr")"
+
+  [ "$holder_rc" -eq 0 ]
+  [ "$blocked_status" -ne 0 ]
+  [ "$target_lock_present" -eq 1 ]
+  [ ! -e "$watchdog_killed" ]
+  case "$blocked_error" in
+    *"timed out acquiring registry lock"*) ;;
+    *) false ;;
+  esac
+  case "$blocked_error" in
+    *"no holder generation progress"*) ;;
+    *) false ;;
+  esac
+}
+
 @test "join: releases its lock (no .config.lock left behind)" {
   bash "$SCRIPTS/join.sh" myteam alice claude-code /tmp/proj
   [ ! -e "$TEST_SKILL_DIR/teams/myteam/.config.lock" ]
