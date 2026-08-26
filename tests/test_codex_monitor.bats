@@ -203,8 +203,8 @@ teardown() {
 # the suite-local reaper is exercised. The reaper itself must take one snapshot
 # and must not use this polling loop for cleanup.
 wait_for_codex_monitor_launcher() {
-  local launcher="$1" project="$2" pid table ticks=0
-  while [ "$ticks" -lt "$_WAIT_TICKS" ]; do
+  local launcher="$1" project="$2" pid table max_ticks=100 interval=0.1 ticks=0
+  while [ "$ticks" -lt "$max_ticks" ]; do
     ticks=$((ticks + 1))
     table="$(ps -Ao pid=,args= 2>/dev/null || true)"
     pid="$(printf '%s\n' "$table" \
@@ -214,7 +214,7 @@ wait_for_codex_monitor_launcher() {
       ''|*[!0-9]*) ;;
       *) printf '%s\n' "$pid"; return 0 ;;
     esac
-    sleep "$_WAIT_INTERVAL"
+    sleep "$interval"
   done
   return 1
 }

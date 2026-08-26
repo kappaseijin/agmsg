@@ -267,7 +267,7 @@ _wait_for_file_contains() {
     bash "$SCRIPTS/watch.sh" "$sid" "$proj_a" claude-code alice \
     >"$out" 2>"$err" 3>&- 4>&- &
   local watcher=$!
-  if ! _WAIT_TICKS=600 wait_for_file_contains "$log" "ERROR: cannot open message DB"; then
+  if ! AGMSG_TEST_WAIT_TIMEOUT_S=60 wait_for_file_contains "$log" "ERROR: cannot open message DB"; then
     _stop_watcher "$watcher"
     false
   fi
@@ -297,7 +297,7 @@ _wait_for_file_contains() {
     bash "$SCRIPTS/watch.sh" "runtime-db-sid" "$PROJ" claude-code alice \
     >"$out" 2>"$err" 3>&- 4>&- &
   local watcher=$!
-  if ! _WAIT_TICKS=600 wait_for_file_contains "$log" "ERROR: cannot open message DB"; then
+  if ! AGMSG_TEST_WAIT_TIMEOUT_S=60 wait_for_file_contains "$log" "ERROR: cannot open message DB"; then
     _stop_watcher "$watcher"
     chmod 0644 "$db"
     false
@@ -984,7 +984,7 @@ _record_handover_events() {
   AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "sess-hc" "$PROJ" claude-code \
     >"$out" 2>"$err" 3>&- 4>&- &
   local pid=$!
-  if ! _WAIT_TICKS=600 wait_for_file_contains "$log" "ERROR: cannot open message DB"; then
+  if ! AGMSG_TEST_WAIT_TIMEOUT_S=60 wait_for_file_contains "$log" "ERROR: cannot open message DB"; then
     _stop_watcher "$pid"
     chmod 644 "$DB" 2>/dev/null || true
     false

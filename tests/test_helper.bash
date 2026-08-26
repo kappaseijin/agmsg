@@ -544,40 +544,124 @@ rf() {
 # before it was hoisted here.
 #
 # Each returns non-zero on timeout, so a caller can fail with its own message or
-# clean up a background process first. The 10s ceiling is far above any real
-# local transition and well under the per-job CI timeout.
+# clean up a background process first. The deadline is fixed when the helper is
+# called; the poll interval only controls how often the predicate is checked.
+# A timeout reports only safe metadata, never test data or a process command
+# line.
 #
 # NOTE: these replace waits for a condition that will become TRUE. A test that
 # asserts something does NOT happen cannot poll for it — see the comment at the
 # remaining fixed sleeps in test_delivery.bats.
 
-_WAIT_TICKS=100    # x 0.1s = 10s ceiling
-_WAIT_INTERVAL=0.1
+_agmsg_test_wait_timeout_s() {
+  local value="${AGMSG_TEST_WAIT_TIMEOUT_S:-10}" normalized
+  case "$value" in
+    ''|*[!0-9]*)
+      echo "agmsg test wait: AGMSG_TEST_WAIT_TIMEOUT_S must be a positive integer" >&2
+      return 1
+      ;;
+  esac
+  normalized=$((10#$value))
+  if [ "$normalized" -le 0 ]; then
+    echo "agmsg test wait: AGMSG_TEST_WAIT_TIMEOUT_S must be a positive integer" >&2
+    return 1
+  fi
+  printf '%s\n' "$normalized"
+}
+
+_agmsg_test_wait_poll_s() {
+  local value="${AGMSG_TEST_WAIT_POLL_S:-0.1}"
+  if ! LC_ALL=C awk -v value="$value" \
+    'BEGIN { exit !(value ~ /^[0-9]+([.][0-9]+)?$/ && value > 0) }'; then
+    echo "agmsg test wait: AGMSG_TEST_WAIT_POLL_S must be a positive number" >&2
+    return 1
+  fi
+  printf '%s\n' "$value"
+}
+
+_agmsg_test_wait_timeout_diag() {
+  local helper="$1" predicate="$2" target="$3" timeout_s="$4"
+  local start="$5" poll_s="$6" attempts="$7" state="$8" process_stat="${9:-}"
+  local elapsed_s=$((SECONDS - start))
+  if [ -n "$process_stat" ]; then
+    printf 'agmsg test wait timeout: helper=%s predicate=%s target=%s timeout_s=%s elapsed_s=%s poll_s=%s attempts=%s state=%s process_stat=%s\n' \
+      "$helper" "$predicate" "$target" "$timeout_s" "$elapsed_s" \
+      "$poll_s" "$attempts" "$state" "$process_stat" >&2
+  else
+    printf 'agmsg test wait timeout: helper=%s predicate=%s target=%s timeout_s=%s elapsed_s=%s poll_s=%s attempts=%s state=%s\n' \
+      "$helper" "$predicate" "$target" "$timeout_s" "$elapsed_s" \
+      "$poll_s" "$attempts" "$state" >&2
+  fi
+}
 
 wait_for_file() {
-  local file="$1" i
-  for i in $(seq 1 $_WAIT_TICKS); do
-    [ -f "$file" ] && return 0
-    sleep $_WAIT_INTERVAL
+  local file="$1" timeout_s poll_s start deadline attempts=0
+  timeout_s="$(_agmsg_test_wait_timeout_s)" || return 1
+  poll_s="$(_agmsg_test_wait_poll_s)" || return 1
+  start=$SECONDS
+  deadline=$((start + timeout_s))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    attempts=$((attempts + 1))
+    if [ -f "$file" ]; then
+      if [ "$SECONDS" -lt "$deadline" ]; then
+        return 0
+      fi
+      break
+    fi
+    sleep "$poll_s"
   done
+  _agmsg_test_wait_timeout_diag \
+    wait_for_file file-present "$file" "$timeout_s" "$start" "$poll_s" \
+    "$attempts" absent
   return 1
 }
 
 wait_for_missing() {
-  local path="$1" i
-  for i in $(seq 1 $_WAIT_TICKS); do
-    [ ! -e "$path" ] && return 0
-    sleep $_WAIT_INTERVAL
+  local path="$1" timeout_s poll_s start deadline attempts=0
+  timeout_s="$(_agmsg_test_wait_timeout_s)" || return 1
+  poll_s="$(_agmsg_test_wait_poll_s)" || return 1
+  start=$SECONDS
+  deadline=$((start + timeout_s))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    attempts=$((attempts + 1))
+    if [ ! -e "$path" ]; then
+      if [ "$SECONDS" -lt "$deadline" ]; then
+        return 0
+      fi
+      break
+    fi
+    sleep "$poll_s"
   done
+  _agmsg_test_wait_timeout_diag \
+    wait_for_missing path-absent "$path" "$timeout_s" "$start" "$poll_s" \
+    "$attempts" still-present
   return 1
 }
 
 wait_for_file_contains() {
-  local file="$1" needle="$2" i
-  for i in $(seq 1 $_WAIT_TICKS); do
-    [ -f "$file" ] && grep -q "$needle" "$file" && return 0
-    sleep $_WAIT_INTERVAL
+  local file="$1" needle="$2" timeout_s poll_s start deadline attempts=0 state
+  timeout_s="$(_agmsg_test_wait_timeout_s)" || return 1
+  poll_s="$(_agmsg_test_wait_poll_s)" || return 1
+  start=$SECONDS
+  deadline=$((start + timeout_s))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    attempts=$((attempts + 1))
+    if [ -f "$file" ] && grep -q "$needle" "$file"; then
+      if [ "$SECONDS" -lt "$deadline" ]; then
+        return 0
+      fi
+      break
+    fi
+    sleep "$poll_s"
   done
+  if [ -f "$file" ]; then
+    state=needle-not-observed
+  else
+    state=absent
+  fi
+  _agmsg_test_wait_timeout_diag \
+    wait_for_file_contains file-contains "$file" "$timeout_s" "$start" \
+    "$poll_s" "$attempts" "$state"
   return 1
 }
 
@@ -613,28 +697,59 @@ _pid_gone() {
 # atomic, so asserting `! kill -0 $pid` the instant a pidfile disappears races
 # the TERM trap (#124).
 wait_for_pid_exit() {
-  local pid="$1" i
-  for i in $(seq 1 $_WAIT_TICKS); do
+  local pid="$1" timeout_s poll_s start deadline attempts=0 process_stat
+  timeout_s="$(_agmsg_test_wait_timeout_s)" || return 1
+  poll_s="$(_agmsg_test_wait_poll_s)" || return 1
+  start=$SECONDS
+  deadline=$((start + timeout_s))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    attempts=$((attempts + 1))
     # Reap finished children first: an unreaped zombie still answers `kill -0`,
     # so without this a process that HAS exited can keep looking alive for the
     # whole timeout. `jobs` is what makes bash collect them.
     jobs >/dev/null 2>&1 || true
-    _pid_gone "$pid" && return 0
-    sleep $_WAIT_INTERVAL
+    if _pid_gone "$pid"; then
+      if [ "$SECONDS" -lt "$deadline" ]; then
+        return 0
+      fi
+      break
+    fi
+    sleep "$poll_s"
   done
+  process_stat="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d ' ')"
+  [ -n "$process_stat" ] || process_stat=unknown
+  _agmsg_test_wait_timeout_diag \
+    wait_for_pid_exit pid-gone "$pid" "$timeout_s" "$start" "$poll_s" \
+    "$attempts" not-gone "$process_stat"
   return 1
 }
 
 # Wait for <file> to contain exactly <expected>, for pidfile handoffs where the
 # file exists throughout but its contents flip to the successor.
 wait_for_file_is() {
-  local file="$1" expected="$2" i
-  for i in $(seq 1 $_WAIT_TICKS); do
+  local file="$1" expected="$2" timeout_s poll_s start deadline attempts=0 state
+  timeout_s="$(_agmsg_test_wait_timeout_s)" || return 1
+  poll_s="$(_agmsg_test_wait_poll_s)" || return 1
+  start=$SECONDS
+  deadline=$((start + timeout_s))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    attempts=$((attempts + 1))
     if [ -f "$file" ] && [ "$(cat "$file" 2>/dev/null)" = "$expected" ]; then
-      return 0
+      if [ "$SECONDS" -lt "$deadline" ]; then
+        return 0
+      fi
+      break
     fi
-    sleep $_WAIT_INTERVAL
+    sleep "$poll_s"
   done
+  if [ -f "$file" ]; then
+    state=content-mismatch
+  else
+    state=absent
+  fi
+  _agmsg_test_wait_timeout_diag \
+    wait_for_file_is file-content "$file" "$timeout_s" "$start" "$poll_s" \
+    "$attempts" "$state"
   return 1
 }
 

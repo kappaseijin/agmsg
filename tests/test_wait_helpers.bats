@@ -55,11 +55,194 @@ setup() { load 'test_helper'; }
 @test "wait_for_pid_exit: times out rather than claiming a live process exited" {
   sleep 30 &
   local p=$!
-  # Shrink the budget so the negative case does not cost the full ceiling.
-  _WAIT_TICKS=3 run wait_for_pid_exit "$p"
+  local wait_status=0
+  if AGMSG_TEST_WAIT_TIMEOUT_S=1 AGMSG_TEST_WAIT_POLL_S=0.1 \
+    wait_for_pid_exit "$p"; then
+    wait_status=0
+  else
+    wait_status=$?
+  fi
   kill "$p" 2>/dev/null || true
   wait "$p" 2>/dev/null || true
-  [ "$status" -ne 0 ]
+  [ "$wait_status" -eq 1 ]
+}
+
+@test "wait_for_file: timeout is a named real-time deadline" {
+  local missing="$BATS_TEST_TMPDIR/never"
+  local error="$BATS_TEST_TMPDIR/wait.err" target watchdog started elapsed target_status=0
+
+  AGMSG_TEST_WAIT_TIMEOUT_S=1 AGMSG_TEST_WAIT_POLL_S=0.25 \
+    bash -c 'source "$1"; wait_for_file "$2"' _ \
+    "$BATS_TEST_DIRNAME/test_helper.bash" "$missing" >/dev/null 2>"$error" &
+  target=$!
+  (
+    sleep 4
+    kill "$target" 2>/dev/null || true
+  ) &
+  watchdog=$!
+  started=$SECONDS
+
+  wait "$target" || target_status=$?
+  elapsed=$((SECONDS - started))
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+
+  [ "$target_status" -eq 1 ]
+  [ "$elapsed" -lt 4 ]
+  [ "$(grep -Fc 'helper=wait_for_file' "$error")" -eq 1 ]
+  [ "$(grep -Fc 'predicate=file-present' "$error")" -eq 1 ]
+  [ "$(grep -Fc 'timeout_s=1' "$error")" -eq 1 ]
+  [ "$(grep -Fc 'poll_s=0.25' "$error")" -eq 1 ]
+  [ "$(grep -Fc 'state=absent' "$error")" -eq 1 ]
+}
+
+@test "wait_for_file: observes a delayed regular file before deadline" {
+  local file="$BATS_TEST_TMPDIR/delayed-file"
+  : > "$file.tmp"
+  rm -f "$file"
+  ( sleep 0.2; mv "$file.tmp" "$file" ) &
+  local writer=$!
+
+  AGMSG_TEST_WAIT_TIMEOUT_S=2 wait_for_file "$file"
+  wait "$writer" 2>/dev/null || true
+  [ -f "$file" ]
+}
+
+@test "wait_for_missing: observes a delayed file removal before deadline" {
+  local file="$BATS_TEST_TMPDIR/delayed-removal"
+  : > "$file"
+  ( sleep 0.2; rm -f "$file" ) &
+  local remover=$!
+
+  AGMSG_TEST_WAIT_TIMEOUT_S=2 wait_for_missing "$file"
+  wait "$remover" 2>/dev/null || true
+  [ ! -e "$file" ]
+}
+
+@test "wait_for_file_contains: observes delayed content before deadline" {
+  local file="$BATS_TEST_TMPDIR/delayed-content"
+  : > "$file"
+  ( sleep 0.2; printf '%s\n' ready >> "$file" ) &
+  local writer=$!
+
+  AGMSG_TEST_WAIT_TIMEOUT_S=2 wait_for_file_contains "$file" ready
+  wait "$writer" 2>/dev/null || true
+  [ "$(grep -Fc ready "$file")" -eq 1 ]
+}
+
+@test "wait_for_pid_exit: observes delayed process exit before deadline" {
+  sleep 0.2 &
+  local p=$!
+
+  AGMSG_TEST_WAIT_TIMEOUT_S=2 wait_for_pid_exit "$p"
+  wait "$p" 2>/dev/null || true
+  [ "$(_pid_gone "$p"; echo "$?")" -eq 0 ]
+}
+
+@test "wait_for_file_is: observes delayed content replacement before deadline" {
+  local file="$BATS_TEST_TMPDIR/content-replacement"
+  printf '%s\n' old > "$file"
+  ( sleep 0.2; printf '%s\n' new > "$file" ) &
+  local writer=$!
+
+  AGMSG_TEST_WAIT_TIMEOUT_S=2 wait_for_file_is "$file" new
+  wait "$writer" 2>/dev/null || true
+  [ "$(cat "$file")" = new ]
+}
+
+@test "wait_for_file: reports safe metadata on timeout" {
+  local error="$BATS_TEST_TMPDIR/file-timeout.err"
+  local missing="$BATS_TEST_TMPDIR/missing-file" wait_status=0
+  if AGMSG_TEST_WAIT_TIMEOUT_S=1 AGMSG_TEST_WAIT_POLL_S=0.1 \
+    wait_for_file "$missing" 2>"$error"; then
+    wait_status=0
+  else
+    wait_status=$?
+  fi
+
+  [ "$wait_status" -eq 1 ]
+  [ "$(grep -Fc 'helper=wait_for_file' "$error")" -eq 1 ]
+  [ "$(grep -Fc 'predicate=file-present' "$error")" -eq 1 ]
+  [ "$(grep -Fc 'timeout_s=1' "$error")" -eq 1 ]
+  [ "$(grep -Fc 'poll_s=0.1' "$error")" -eq 1 ]
+  [ "$(grep -Fc 'state=absent' "$error")" -eq 1 ]
+  [ "$(grep -Ec 'elapsed_s=[0-9]+' "$error")" -eq 1 ]
+  [ "$(grep -Ec 'attempts=[0-9]+' "$error")" -eq 1 ]
+}
+
+@test "wait_for_missing: reports still-present on timeout" {
+  local error="$BATS_TEST_TMPDIR/missing-timeout.err"
+  local file="$BATS_TEST_TMPDIR/present-file" wait_status=0
+  : > "$file"
+  if AGMSG_TEST_WAIT_TIMEOUT_S=1 AGMSG_TEST_WAIT_POLL_S=0.1 \
+    wait_for_missing "$file" 2>"$error"; then
+    wait_status=0
+  else
+    wait_status=$?
+  fi
+
+  [ "$wait_status" -eq 1 ]
+  [ "$(grep -Fc 'helper=wait_for_missing' "$error")" -eq 1 ]
+  [ "$(grep -Fc 'predicate=path-absent' "$error")" -eq 1 ]
+  [ "$(grep -Fc 'state=still-present' "$error")" -eq 1 ]
+}
+
+@test "wait_for_file_contains: omits the needle from timeout diagnostics" {
+  local error="$BATS_TEST_TMPDIR/contains-timeout.err"
+  local file="$BATS_TEST_TMPDIR/contains-file" needle=never-this-value wait_status=0
+  printf '%s\n' other > "$file"
+  if AGMSG_TEST_WAIT_TIMEOUT_S=1 AGMSG_TEST_WAIT_POLL_S=0.1 \
+    wait_for_file_contains "$file" "$needle" 2>"$error"; then
+    wait_status=0
+  else
+    wait_status=$?
+  fi
+
+  [ "$wait_status" -eq 1 ]
+  [ "$(grep -Fc 'helper=wait_for_file_contains' "$error")" -eq 1 ]
+  [ "$(grep -Fc 'predicate=file-contains' "$error")" -eq 1 ]
+  [ "$(grep -Fc 'state=needle-not-observed' "$error")" -eq 1 ]
+  [ "$(grep -Fc "$needle" "$error")" -eq 0 ]
+}
+
+@test "wait_for_pid_exit: reports safe process state on timeout" {
+  local error="$BATS_TEST_TMPDIR/pid-timeout.err"
+  local p wait_status=0
+  sleep 30 &
+  p=$!
+  if AGMSG_TEST_WAIT_TIMEOUT_S=1 AGMSG_TEST_WAIT_POLL_S=0.1 \
+    wait_for_pid_exit "$p" 2>"$error"; then
+    wait_status=0
+  else
+    wait_status=$?
+  fi
+  kill "$p" 2>/dev/null || true
+  wait "$p" 2>/dev/null || true
+
+  [ "$wait_status" -eq 1 ]
+  [ "$(grep -Fc 'helper=wait_for_pid_exit' "$error")" -eq 1 ]
+  [ "$(grep -Fc 'predicate=pid-gone' "$error")" -eq 1 ]
+  [ "$(grep -Fc 'state=not-gone' "$error")" -eq 1 ]
+  [ "$(grep -Fc 'process_stat=' "$error")" -eq 1 ]
+  [ "$(grep -Fc 'sleep 30' "$error")" -eq 0 ]
+}
+
+@test "wait_for_file_is: omits expected content from timeout diagnostics" {
+  local error="$BATS_TEST_TMPDIR/file-is-timeout.err"
+  local file="$BATS_TEST_TMPDIR/file-is" expected=expected-only wait_status=0
+  printf '%s\n' actual > "$file"
+  if AGMSG_TEST_WAIT_TIMEOUT_S=1 AGMSG_TEST_WAIT_POLL_S=0.1 \
+    wait_for_file_is "$file" "$expected" 2>"$error"; then
+    wait_status=0
+  else
+    wait_status=$?
+  fi
+
+  [ "$wait_status" -eq 1 ]
+  [ "$(grep -Fc 'helper=wait_for_file_is' "$error")" -eq 1 ]
+  [ "$(grep -Fc 'predicate=file-content' "$error")" -eq 1 ]
+  [ "$(grep -Fc 'state=content-mismatch' "$error")" -eq 1 ]
+  [ "$(grep -Fc "$expected" "$error")" -eq 0 ]
 }
 
 @test "wait_for_file / wait_for_missing / wait_for_file_is agree with the filesystem" {
