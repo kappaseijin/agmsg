@@ -4,7 +4,7 @@ title: R-series ledger and closure の事実検証
 status: changes_requested
 target: "/Users/kappa/Dropbox/data/dev/agmsg/docs/decisions/2026-08-26T225926_r-series-ledger-and-closure.md"
 timestamp: "2026-08-26T22:56:04+09:00"
-updated: "2026-08-26T23:00:14+09:00"
+updated: "2026-08-26T23:02:33+09:00"
 ---
 
 # R-series ledger and closure の事実検証
@@ -54,3 +54,9 @@ targetは `2026-08-26T225926_r-series-ledger-and-closure.md` へ改名され、f
 2. GitHubでは #176、#178、#181、#189 がOPENである。#181はactual migration failureを得たが修復範囲のbreaker断定待ち、#189は実装中である。epic close用台帳には「修正」「reopen条件つき決着」に加え、**未解決（Issue、次の決定者、close不可の理由）**を明記する。現状の#181/#189節だけでは、決着済みとの誤読を防げない。
 
 この2件が直るまで、最終判定は`changes_requested`である。
+
+## breaker再断定後の補正
+
+breakerはpacketとsourceを照合し、#181を別Issueにせず、同じIssue内で `init-db.sh` のschema/triggers適用を単一トランザクションへ原子化する修復と断定した。migration guardの `1|0` fail-closedは正しいため変えず、lock・guard fallback・`send.sh` retry契約も変更しない。
+
+よってactive項目の#181行には、producer=programmer、前提=PR #201の診断merge後、修復=初期化の原子化、verification=verifierによるdiagnostic付きfan-out 60回、close不可理由=修復PRとfixed-HEAD検証が未完了、と記す必要がある。#189も実装中のactive項目として同じ区分へ置く。
