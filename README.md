@@ -127,8 +127,20 @@ After install, **restart your agent** (Claude Code / Codex / Gemini CLI / Copilo
 
 When `gh` is installed, `install.sh` also installs `~/.agents/bin/gh`. Put
 `~/.agents/bin` before the real GitHub CLI on the agent PATH if it is not
-already there. The launcher fixes both the guard script and the real `gh`
-executable to absolute paths at install time; it does not search PATH again.
+already there. The installer manages a marked block at the end of
+`~/.zshrc`, `~/.bashrc`, and the effective Bash login file. For Bash login
+shells, the effective file is the first existing file among `~/.bash_profile`,
+`~/.bash_login`, and `~/.profile`; if none exists, `~/.bash_profile` is
+created. The block sources a helper that removes duplicate `~/.agents/bin`
+entries and prepends it, so Bash and Zsh interactive login and non-login shells
+select the guard even when macOS `path_helper` has reordered the inherited
+PATH. Installation and update are idempotent. A malformed or ambiguous marker
+is left unchanged and causes the installer to stop.
+
+Verify the effective command in each shell with `command -v gh` and `which gh`;
+both must print the installed `~/.agents/bin/gh` path. The launcher fixes both
+the guard script and the real `gh` executable to absolute paths at install time;
+it does not search PATH again.
 
 The guard allows read-only commands and destination-checks GitHub writes. A
 write is allowed only when the resolved URL is exactly on `github.com` and the
@@ -153,7 +165,10 @@ in force. Tokens are never printed or logged.
 The installer refuses to overwrite a non-agmsg `~/.agents/bin/gh`. If `gh` is
 not installed, it leaves the guard uninstalled and prints a message; rerun
 `./install.sh --update` after installing `gh`. `uninstall.sh` removes only the
-agmsg-generated guard.
+agmsg-generated guard. Uninstall removes and validates the managed startup
+blocks before removing the helper and launcher; a malformed marker stops the
+operation without removing either. User-owned startup settings outside the
+marked blocks are preserved.
 
 ### Git push destination guard
 

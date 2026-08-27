@@ -127,7 +127,17 @@ cd agmsg
 
 `gh` がインストール済みの場合、`install.sh` は
 `~/.agents/bin/gh` も配置する。まだ設定されていなければ、エージェントの
-PATHで `~/.agents/bin` を実体のGitHub CLIより前に置くこと。ランチャーは
+PATHで `~/.agents/bin` を実体のGitHub CLIより前に置くこと。インストーラーは
+`~/.zshrc`、`~/.bashrc`、および有効な Bash login ファイルの末尾に管理ブロックを
+配置する。有効なファイルは `~/.bash_profile`、`~/.bash_login`、`~/.profile` の
+順で最初に存在するものとし、どれも無ければ `~/.bash_profile` を作成する。
+ブロックが読む helper は `~/.agents/bin` の重複を除去して先頭へ置くため、macOSの
+`path_helper` が継承したPATHの順序を変えても、Bash/Zshのinteractive login・
+non-login shellはガードを選ぶ。インストールと更新は冪等であり、markerが壊れている
+または曖昧な場合はファイルを変更せず停止する。
+
+各shellで `command -v gh` と `which gh` を実行して確認する。どちらも
+インストールされた `~/.agents/bin/gh` のパスを返さなければならない。ランチャーは
 インストール時にガードスクリプトと実 `gh` の絶対パスを固定し、後からPATHを
 再探索しない。
 
@@ -153,7 +163,9 @@ tokenを取得する。token取得に成功した呼び出しだけはそのア�
 インストーラーは、agmsg製でない `~/.agents/bin/gh` を上書きしない。`gh` が
 未インストールの場合はガードを配置せずメッセージを表示するため、`gh` の導入後に
 `./install.sh --update` を再実行すること。`uninstall.sh` が削除するのはagmsgが
-生成したガードだけである。
+生成したガードだけである。アンインストールは管理ブロックを検査・削除してから
+helperとランチャーを削除する。markerが壊れている場合は削除を行わず停止し、marker
+外のユーザー設定は保持する。
 
 ### Git pushの宛先ガード
 

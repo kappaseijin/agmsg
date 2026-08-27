@@ -304,6 +304,170 @@ is_agmsg_gh_owner_guard() {
   grep -Eq '^# (agmsg gh owner guard launcher|gh write guard shim)' "$target" 2>/dev/null
 }
 
+AGMSG_GH_OWNER_GUARD_PATH_START='# >>> agmsg gh owner guard PATH >>>'
+AGMSG_GH_OWNER_GUARD_PATH_END='# <<< agmsg gh owner guard PATH <<<'
+AGMSG_GH_OWNER_GUARD_PATH_HEADER='# agmsg gh owner guard PATH helper'
+
+is_agmsg_gh_owner_guard_path() {
+  local target="$AGENTS_DIR/bin/gh-owner-guard-path.sh"
+  [ -f "$target" ] || return 1
+  grep -q "^$AGMSG_GH_OWNER_GUARD_PATH_HEADER$" "$target" 2>/dev/null
+}
+
+agmsg_gh_owner_guard_path_login_file() {
+  local candidate
+  for candidate in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+    if [ -e "$candidate" ] || [ -L "$candidate" ]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  printf '%s/.bash_profile' "$HOME"
+}
+
+agmsg_gh_owner_guard_path_marker_state() {
+  local file="$1"
+  awk -v start="$AGMSG_GH_OWNER_GUARD_PATH_START" \
+      -v end="$AGMSG_GH_OWNER_GUARD_PATH_END" '
+    $0 == start { starts++; start_line = NR }
+    $0 == end { ends++; end_line = NR }
+    END {
+      if (starts == 0 && ends == 0) print "none"
+      else if (starts == 1 && ends == 1 && start_line < end_line) print "valid"
+      else print "malformed"
+    }
+  ' "$file"
+}
+
+agmsg_gh_owner_guard_path_write_block() {
+  printf '%s\n' \
+    "$AGMSG_GH_OWNER_GUARD_PATH_START" \
+    "if [ -r \"\$HOME/.agents/bin/gh-owner-guard-path.sh\" ]; then" \
+    "  . \"\$HOME/.agents/bin/gh-owner-guard-path.sh\"" \
+    'fi' \
+    "$AGMSG_GH_OWNER_GUARD_PATH_END"
+}
+
+agmsg_gh_owner_guard_path_prepare_rc_temp() {
+  local file="$1" state="$2" tmp
+  tmp="$(mktemp "$(dirname "$file")/.agmsg-gh-owner-guard-path.XXXXXX")" || return 1
+
+  if [ -e "$file" ] || [ -L "$file" ]; then
+    if [ -L "$file" ] || [ ! -f "$file" ] || ! cp -p "$file" "$tmp"; then
+      rm -f "$tmp"
+      return 1
+    fi
+  fi
+
+  case "$state" in
+    none)
+      if [ -s "$file" ] && [ "$(tail -c 1 "$file" | wc -l | tr -d ' ')" -eq 0 ]; then
+        printf '\n' >> "$tmp"
+      fi
+      agmsg_gh_owner_guard_path_write_block >> "$tmp"
+      ;;
+    valid)
+      awk -v start="$AGMSG_GH_OWNER_GUARD_PATH_START" \
+          -v end="$AGMSG_GH_OWNER_GUARD_PATH_END" '
+        $0 == start {
+          print start
+          print "if [ -r \"$HOME/.agents/bin/gh-owner-guard-path.sh\" ]; then"
+          print "  . \"$HOME/.agents/bin/gh-owner-guard-path.sh\""
+          print "fi"
+          print end
+          inside = 1
+          next
+        }
+        inside && $0 == end { inside = 0; next }
+        !inside { print }
+      ' "$file" > "$tmp"
+      ;;
+    *)
+      rm -f "$tmp"
+      return 1
+      ;;
+  esac
+
+  printf '%s' "$tmp"
+}
+
+install_gh_owner_guard_path_activation() {
+  local helper_source="$SKILL_DIR/scripts/guards/gh-owner-guard-path.sh"
+  local helper_target="$AGENTS_DIR/bin/gh-owner-guard-path.sh"
+  local helper_tmp file state tmp i
+  local -a rc_files=() rc_states=() rc_temps=()
+
+  if ! is_agmsg_gh_owner_guard; then
+    echo "  ! gh owner guard launcher was not verified; refusing PATH activation" >&2
+    return 1
+  fi
+  if [ ! -f "$helper_source" ]; then
+    echo "  ! gh owner guard PATH helper is missing from $SKILL_DIR" >&2
+    return 1
+  fi
+  if { [ -e "$helper_target" ] || [ -L "$helper_target" ]; } \
+      && { [ -L "$helper_target" ] || ! is_agmsg_gh_owner_guard_path; }; then
+    echo "  ! Refusing to overwrite non-agmsg $helper_target" >&2
+    return 1
+  fi
+
+  rc_files=("$HOME/.zshrc" "$HOME/.bashrc" "$(agmsg_gh_owner_guard_path_login_file)")
+  for file in "${rc_files[@]}"; do
+    state=none
+    if [ -e "$file" ] || [ -L "$file" ]; then
+      if [ -L "$file" ] || [ ! -f "$file" ]; then
+        echo "  ! Refusing to modify non-regular startup file $file" >&2
+        return 1
+      fi
+      state="$(agmsg_gh_owner_guard_path_marker_state "$file")"
+      if [ "$state" = malformed ]; then
+        echo "  ! Refusing to modify startup file with malformed agmsg marker: $file" >&2
+        return 1
+      fi
+    fi
+    rc_states+=("$state")
+  done
+
+  mkdir -p "$AGENTS_DIR/bin"
+  helper_tmp="$(mktemp "$AGENTS_DIR/bin/.agmsg-gh-owner-guard-path.XXXXXX")" || return 1
+  if ! cp "$helper_source" "$helper_tmp" || ! chmod +x "$helper_tmp"; then
+    rm -f "$helper_tmp"
+    return 1
+  fi
+
+  for i in "${!rc_files[@]}"; do
+    file="${rc_files[i]}"
+    state="${rc_states[i]}"
+    if ! tmp="$(agmsg_gh_owner_guard_path_prepare_rc_temp "$file" "$state")"; then
+      rm -f "$helper_tmp"
+      for tmp in "${rc_temps[@]}"; do [ -n "$tmp" ] && rm -f "$tmp"; done
+      echo "  ! Could not prepare startup file $file" >&2
+      return 1
+    fi
+    if [ -f "$file" ] && cmp -s "$tmp" "$file"; then
+      rm -f "$tmp"
+      rc_temps+=("")
+    else
+      rc_temps+=("$tmp")
+    fi
+  done
+
+  if ! mv -f "$helper_tmp" "$helper_target"; then
+    rm -f "$helper_tmp"
+    for tmp in "${rc_temps[@]}"; do [ -n "$tmp" ] && rm -f "$tmp"; done
+    return 1
+  fi
+  for i in "${!rc_files[@]}"; do
+    tmp="${rc_temps[i]}"
+    [ -n "$tmp" ] || continue
+    if ! mv -f "$tmp" "${rc_files[i]}"; then
+      echo "  ! Could not install startup integration in ${rc_files[i]}" >&2
+      return 1
+    fi
+  done
+  echo "  + activated gh owner guard in Bash/Zsh startup files"
+}
+
 install_gh_owner_guard() {
   local target="$AGENTS_DIR/bin/gh"
   local guard_script="$SKILL_DIR/scripts/guards/gh-write-owner-guard.sh"
@@ -334,6 +498,7 @@ install_gh_owner_guard() {
   chmod +x "$tmp"
   mv -f "$tmp" "$target"
   echo "  + installed gh owner guard (~/.agents/bin/gh; real gh: $real_gh)"
+  install_gh_owner_guard_path_activation
 }
 
 # --- Parse args ---

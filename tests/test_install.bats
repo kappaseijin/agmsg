@@ -66,6 +66,138 @@ teardown() {
   grep -Fq 'printf user-owned' "$guard"
 }
 
+@test "install: gh owner guard activates through Bash and Zsh startup files" {
+  local real_bin="$FAKE_HOME/real-bin" guard="$FAKE_HOME/.agents/bin/gh"
+  local helper="$FAKE_HOME/.agents/bin/gh-owner-guard-path.sh"
+  mkdir -p "$real_bin"
+  printf '#!/bin/sh\nexit 0\n' > "$real_bin/gh"
+  chmod +x "$real_bin/gh"
+
+  local baseline
+  baseline="$(env HOME="$FAKE_HOME" PATH="$real_bin:$FAKE_HOME/.agents/bin:$PATH" \
+    zsh -f -ilc 'command -v gh')"
+  [ "$baseline" = "$real_bin/gh" ]
+
+  HOME="$FAKE_HOME" PATH="$real_bin:$PATH" bash "$REPO_ROOT/install.sh" --cmd agmsg
+
+  [ -x "$guard" ]
+  [ -x "$helper" ]
+  for rc in "$FAKE_HOME/.zshrc" "$FAKE_HOME/.bashrc" "$FAKE_HOME/.bash_profile"; do
+    [ "$(grep -Fc '# >>> agmsg gh owner guard PATH >>>' "$rc")" -eq 1 ]
+    [ "$(grep -Fc '# <<< agmsg gh owner guard PATH <<<' "$rc")" -eq 1 ]
+  done
+
+  local output
+  output="$(env HOME="$FAKE_HOME" PATH="$real_bin:$FAKE_HOME/.agents/bin:$PATH" \
+    bash --login -c 'command -v gh; which gh')"
+  [[ "$output" == *"$guard"* ]]
+  output="$(env HOME="$FAKE_HOME" PATH="$real_bin:$FAKE_HOME/.agents/bin:$PATH" \
+    bash --noprofile --rcfile "$FAKE_HOME/.bashrc" -ic 'command -v gh; which gh' 2>/dev/null)"
+  [[ "$output" == *"$guard"* ]]
+  output="$(env HOME="$FAKE_HOME" PATH="$real_bin:$FAKE_HOME/.agents/bin:$PATH" \
+    zsh -ilc 'command -v gh; which gh')"
+  [[ "$output" == *"$guard"* ]]
+  output="$(env HOME="$FAKE_HOME" PATH="$real_bin:$FAKE_HOME/.agents/bin:$PATH" \
+    zsh -ic 'command -v gh; which gh')"
+  [[ "$output" == *"$guard"* ]]
+}
+
+@test "install: gh owner guard startup integration is idempotent" {
+  local real_bin="$FAKE_HOME/real-bin" helper="$FAKE_HOME/.agents/bin/gh-owner-guard-path.sh"
+  mkdir -p "$real_bin"
+  printf '#!/bin/sh\nexit 0\n' > "$real_bin/gh"
+  chmod +x "$real_bin/gh"
+
+  HOME="$FAKE_HOME" PATH="$real_bin:$PATH" bash "$REPO_ROOT/install.sh" --cmd agmsg
+  local before_hash
+  before_hash="$(shasum "$helper" | awk '{print $1}')"
+  HOME="$FAKE_HOME" PATH="$real_bin:$PATH" bash "$REPO_ROOT/install.sh" --update
+  [ "$(shasum "$helper" | awk '{print $1}')" = "$before_hash" ]
+  for rc in "$FAKE_HOME/.zshrc" "$FAKE_HOME/.bashrc" "$FAKE_HOME/.bash_profile"; do
+    [ "$(grep -Fc '# >>> agmsg gh owner guard PATH >>>' "$rc")" -eq 1 ]
+    [ "$(grep -Fc '# <<< agmsg gh owner guard PATH <<<' "$rc")" -eq 1 ]
+  done
+  local normalized
+  normalized="$(env HOME="$FAKE_HOME" \
+    PATH="$real_bin:$FAKE_HOME/.agents/bin::/usr/bin:/bin:$FAKE_HOME/.agents/bin" \
+    sh -c '. "$HOME/.agents/bin/gh-owner-guard-path.sh"; printf "%s" "$PATH"')"
+  [ "$normalized" = "$FAKE_HOME/.agents/bin:$real_bin::/usr/bin:/bin" ]
+}
+
+@test "install: malformed gh owner guard marker refuses without changing rc files" {
+  local real_bin="$FAKE_HOME/real-bin" rc="$FAKE_HOME/.zshrc"
+  mkdir -p "$real_bin"
+  printf '#!/bin/sh\nexit 0\n' > "$real_bin/gh"
+  chmod +x "$real_bin/gh"
+  printf 'user setting\n# >>> agmsg gh owner guard PATH >>>\n' > "$rc"
+  local before
+  before="$(shasum "$rc" | awk '{print $1}')"
+
+  run env HOME="$FAKE_HOME" PATH="$real_bin:$PATH" \
+    bash "$REPO_ROOT/install.sh" --cmd agmsg
+  [ "$status" -ne 0 ]
+  [ "$(shasum "$rc" | awk '{print $1}')" = "$before" ]
+}
+
+@test "install: gh owner guard refuses a user-owned PATH helper without changing rc files" {
+  local real_bin="$FAKE_HOME/real-bin" helper="$FAKE_HOME/.agents/bin/gh-owner-guard-path.sh"
+  mkdir -p "$real_bin" "${helper%/*}"
+  printf '#!/bin/sh\nexit 0\n' > "$real_bin/gh"
+  chmod +x "$real_bin/gh"
+  printf '#!/bin/sh\nprintf user-owned-helper\n' > "$helper"
+  chmod +x "$helper"
+
+  run env HOME="$FAKE_HOME" PATH="$real_bin:$PATH" \
+    bash "$REPO_ROOT/install.sh" --cmd agmsg
+  [ "$status" -ne 0 ]
+  grep -Fq 'printf user-owned-helper' "$helper"
+  [ ! -e "$FAKE_HOME/.zshrc" ]
+  [ ! -e "$FAKE_HOME/.bashrc" ]
+  [ ! -e "$FAKE_HOME/.bash_profile" ]
+}
+
+@test "uninstall: removes gh owner guard blocks before managed launchers" {
+  local real_bin="$FAKE_HOME/real-bin" guard="$FAKE_HOME/.agents/bin/gh"
+  local helper="$FAKE_HOME/.agents/bin/gh-owner-guard-path.sh"
+  mkdir -p "$real_bin"
+  printf '#!/bin/sh\nexit 0\n' > "$real_bin/gh"
+  chmod +x "$real_bin/gh"
+  HOME="$FAKE_HOME" PATH="$real_bin:$PATH" bash "$REPO_ROOT/install.sh" --cmd agmsg
+  [ -x "$guard" ]
+  [ -x "$helper" ]
+  for rc in "$FAKE_HOME/.zshrc" "$FAKE_HOME/.bashrc" "$FAKE_HOME/.bash_profile"; do
+    printf 'sentinel\n%s\n' "$(cat "$rc")" > "$rc.tmp"
+    mv "$rc.tmp" "$rc"
+  done
+
+  run env HOME="$FAKE_HOME" bash "$REPO_ROOT/uninstall.sh" --yes
+  [ "$status" -eq 0 ]
+  [ ! -e "$guard" ]
+  [ ! -e "$helper" ]
+  for rc in "$FAKE_HOME/.zshrc" "$FAKE_HOME/.bashrc" "$FAKE_HOME/.bash_profile"; do
+    [ "$(grep -Fc '# >>> agmsg gh owner guard PATH >>>' "$rc" || true)" -eq 0 ]
+    grep -Fq 'sentinel' "$rc"
+  done
+}
+
+@test "uninstall: malformed gh owner guard marker keeps helper and launcher" {
+  local real_bin="$FAKE_HOME/real-bin" guard="$FAKE_HOME/.agents/bin/gh"
+  local helper="$FAKE_HOME/.agents/bin/gh-owner-guard-path.sh"
+  mkdir -p "$real_bin"
+  printf '#!/bin/sh\nexit 0\n' > "$real_bin/gh"
+  chmod +x "$real_bin/gh"
+  HOME="$FAKE_HOME" PATH="$real_bin:$PATH" bash "$REPO_ROOT/install.sh" --cmd agmsg
+  printf 'broken\n# >>> agmsg gh owner guard PATH >>>\n' > "$FAKE_HOME/.bashrc"
+  local before
+  before="$(shasum "$FAKE_HOME/.bashrc" | awk '{print $1}')"
+
+  run env HOME="$FAKE_HOME" bash "$REPO_ROOT/uninstall.sh" --yes
+  [ "$status" -ne 0 ]
+  [ -x "$guard" ]
+  [ -x "$helper" ]
+  [ "$(shasum "$FAKE_HOME/.bashrc" | awk '{print $1}')" = "$before" ]
+}
+
 @test "install: git push owner guard fixes the inner script and real git to absolute paths" {
   local real_bin="$FAKE_HOME/real-bin" guard="$FAKE_HOME/.agents/bin/git"
   local real_git
