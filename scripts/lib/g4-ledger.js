@@ -405,6 +405,7 @@ function transitionOutput(team, source, expectedRevision, managerSeat, evidence,
     revision: null,
     previousRevision: null,
     transitioned: false,
+    transitionKind: null,
     remediation: [],
   }, details || {});
 }
@@ -425,6 +426,30 @@ function auditMatchesContract(audit, contract) {
     .map((source) => sourceKey(source))
     .sort();
   return expected.length === actual.length && expected.every((value, index) => value === actual[index]);
+}
+
+function basisExtends(currentBasis, targetBasis) {
+  if (!isObject(currentBasis) || !Array.isArray(currentBasis.refs) ||
+      !isObject(targetBasis) || !Array.isArray(targetBasis.refs) ||
+      targetBasis.refs.length <= currentBasis.refs.length) {
+    return false;
+  }
+  return currentBasis.refs.every((reference, index) =>
+    canonicalJson(reference) === canonicalJson(targetBasis.refs[index]));
+}
+
+function auditSupportsReblock(audit, contract, target) {
+  if (!audit || audit.packDigest !== contract.packDigest ||
+      !auditMatchesContract(audit, contract) ||
+      !audit.classificationBasis || !Array.isArray(audit.classificationBasis.reasons)) {
+    return false;
+  }
+
+  const basis = audit.classificationBasis;
+  if (basis.status === "complete") return basis.reasons.length === 0;
+  if (basis.status !== "unknown" || basis.reasons.length !== 1) return false;
+  const reason = basis.reasons[0];
+  return reason.code === "blocked_predicate_false" && reason.source === target.sourceKey;
 }
 
 function transitionG4(team, pack, roster, repository, issueNumber, expectedRevision, managerSeat, evidence) {
@@ -502,7 +527,9 @@ function transitionG4(team, pack, roster, repository, issueNumber, expectedRevis
       entryDigest: target.entryDigest,
     });
   }
-  if (current.state !== "blocked" || target.entry.state !== "ready") {
+  const isReleaseTransition = current.state === "blocked" && target.entry.state === "ready";
+  const isReblockTransition = current.state === "ready" && target.entry.state === "blocked";
+  if (!isReleaseTransition && !isReblockTransition) {
     return transitionRejected(team, source, expected, managerSeat, evidence, "unsupported_transition", {
       packDigest: contract.packDigest,
       entryDigest: target.entryDigest,
@@ -510,13 +537,15 @@ function transitionG4(team, pack, roster, repository, issueNumber, expectedRevis
   }
   if (current.ownerSeat !== target.entry.ownerSeat ||
       canonicalJson(current.workKinds) !== canonicalJson(target.entry.workKinds) ||
-      basisIdentity(current.basis) !== basisIdentity(target.entry.basis)) {
+      (isReleaseTransition
+        ? basisIdentity(current.basis) !== basisIdentity(target.entry.basis)
+        : !basisExtends(current.basis, target.entry.basis))) {
     return transitionRejected(team, source, expected, managerSeat, evidence, "immutable_mismatch", {
       packDigest: contract.packDigest,
       entryDigest: target.entryDigest,
     });
   }
-  if (!isObject(current.blocker) || !isObject(current.blocker.releasePredicate)) {
+  if (isReleaseTransition && (!isObject(current.blocker) || !isObject(current.blocker.releasePredicate))) {
     return transitionRejected(team, source, expected, managerSeat, evidence, "current_blocker_missing", {
       packDigest: contract.packDigest,
       entryDigest: target.entryDigest,
@@ -538,26 +567,38 @@ function transitionG4(team, pack, roster, repository, issueNumber, expectedRevis
     coverageDigest: audit.coverageDigest,
     auditDigest: audit.auditDigest,
   };
-  if (!audit.classificationBasis || audit.classificationBasis.status !== "complete" ||
-      !auditMatchesContract(audit, contract)) {
+  if (isReleaseTransition &&
+      (!audit.classificationBasis || audit.classificationBasis.status !== "complete" ||
+       !auditMatchesContract(audit, contract))) {
+    return transitionRejected(team, source, expected, managerSeat, evidence, "audit_incomplete", auditDetails);
+  }
+  if (isReblockTransition && !auditSupportsReblock(audit, contract, target)) {
     return transitionRejected(team, source, expected, managerSeat, evidence, "audit_incomplete", auditDetails);
   }
 
   let predicateObservation;
   try {
-    predicateObservation = evaluatePredicate(current.blocker.releasePredicate, Date.now());
+    const predicate = isReleaseTransition
+      ? current.blocker.releasePredicate
+      : target.entry.blocker.releasePredicate;
+    predicateObservation = evaluatePredicate(predicate, Date.now());
   } catch (_) {
     predicateObservation = {status: "unknown"};
   }
-  if (!predicateObservation || predicateObservation.status !== "true") {
-    return transitionRejected(team, source, expected, managerSeat, evidence, "predicate_not_true", auditDetails);
+  const predicateAccepted = isReleaseTransition
+    ? predicateObservation && predicateObservation.status === "true"
+    : predicateObservation && predicateObservation.status === "false";
+  if (!predicateAccepted) {
+    const code = isReleaseTransition ? "predicate_not_true" : "predicate_not_false";
+    return transitionRejected(team, source, expected, managerSeat, evidence, code, auditDetails);
   }
 
   const oldBasis = canonicalJson(current.basis);
-  const oldBlocker = canonicalJson(current.blocker);
+  const oldBlocker = isReleaseTransition ? canonicalJson(current.blocker) : null;
   const now = "CAST(strftime('%s', 'now') AS INTEGER)";
-  const statements = [
-    `UPDATE team_work_g4_current
+  const statements = [];
+  if (isReleaseTransition) {
+    statements.push(`UPDATE team_work_g4_current
 SET state = 'ready',
     blocker_json = NULL,
     revision = ${expected + 1},
@@ -579,11 +620,38 @@ WHERE team = ${sqlLiteral(team)}
   AND basis_json = json(${sqlLiteral(oldBasis)})
   AND blocker_json = json(${sqlLiteral(oldBlocker)})
   AND entry_digest = ${sqlLiteral(current.entryDigest)};`,
+    );
+  } else {
+    statements.push(`UPDATE team_work_g4_current
+SET state = 'blocked',
+    blocker_json = json(${sqlLiteral(canonicalJson(target.entry.blocker))}),
+    revision = ${expected + 1},
+    pack_digest = ${sqlLiteral(audit.packDigest)},
+    entry_digest = ${sqlLiteral(target.entryDigest)},
+    coverage_digest = ${sqlLiteral(audit.coverageDigest)},
+    audit_digest = ${sqlLiteral(audit.auditDigest)},
+    basis_json = json(${sqlLiteral(canonicalJson(target.entry.basis))}),
+    evidence = ${sqlLiteral(evidence)},
+    last_action = 'g4-reblock',
+    last_actor = ${sqlLiteral(managerSeat)},
+    updated_at = ${now}
+WHERE team = ${sqlLiteral(team)}
+  AND source_repository = ${sqlLiteral(source.repository)}
+  AND source_number = ${source.number}
+  AND state = 'ready'
+  AND revision = ${expected}
+  AND owner_seat = ${sqlLiteral(current.ownerSeat)}
+  AND work_kinds_json = json(${sqlLiteral(canonicalJson(current.workKinds))})
+  AND basis_json = json(${sqlLiteral(oldBasis)})
+  AND blocker_json IS NULL
+  AND entry_digest = ${sqlLiteral(current.entryDigest)};`);
+  }
+  statements.push(
     "CREATE TEMP TABLE g4_transition_exact_one(value INTEGER NOT NULL, CONSTRAINT g4_transition_exact_one_guard CHECK(value = 1));",
     "INSERT INTO g4_transition_exact_one(value) SELECT changes();",
     "DROP TABLE g4_transition_exact_one;",
     g4CurrentResultSql(team, source),
-  ];
+  );
 
   let updatedRow;
   try {
@@ -603,6 +671,7 @@ WHERE team = ${sqlLiteral(team)}
     revision: updatedRow.revision,
     previousRevision: expected,
     transitioned: true,
+    transitionKind: isReleaseTransition ? "release" : "reblock",
     remediation: [],
   });
 }
