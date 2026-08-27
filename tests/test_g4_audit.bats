@@ -6,6 +6,10 @@ setup() {
   setup_test_env
   bash "$SCRIPTS/join.sh" demo owner codex /tmp/demo-owner --role programmer --kind seat >/dev/null
   bash "$SCRIPTS/join.sh" demo manager codex /tmp/demo-manager --role manager --kind seat >/dev/null
+  bash "$SCRIPTS/join.sh" demo worker-a codex /tmp/demo-worker-a --role worker --kind seat >/dev/null
+  bash "$SCRIPTS/join.sh" demo worker-b codex /tmp/demo-worker-b --role worker --kind seat >/dev/null
+  bash "$SCRIPTS/join.sh" demo pm codex /tmp/demo-pm --role pm --kind seat >/dev/null
+  bash "$SCRIPTS/join.sh" demo service codex /tmp/demo-service --role service --kind service >/dev/null
 
   setup_g4_fixture
 }
@@ -460,4 +464,96 @@ load helpers/g4-fixtures
     [ "$status" -ne 0 ]
     grep -Fq 'unknown team-work command' <<<"$output"
   done
+}
+
+@test "g4-reconcile: reports the stable eligible owner-set difference" {
+  local pack="$BATS_TEST_TMPDIR/g4-reconcile-pack.json"
+  write_reconcile_pack "$pack"
+
+  run_g4_reconcile "$G4_FIXTURES/two-open.json" "$pack"
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" command)" = "g4-reconcile" ]
+  [ "$(json_value "$output" classificationBasis.status)" = "complete" ]
+  [ "$(json_value "$output" findings[0].code)" = "unassigned_seat" ]
+  [ "$(json_value "$output" findings[0].seat)" = "worker-b" ]
+  [ "$(json_value "$output" findings)" = '[{"code":"unassigned_seat","seat":"worker-b"}]' ]
+  assert_canonical_json "$output"
+}
+
+@test "g4-reconcile: excludes manager, pm, and service members from findings" {
+  local pack="$BATS_TEST_TMPDIR/g4-reconcile-pack.json"
+  write_reconcile_pack "$pack"
+
+  run_g4_reconcile "$G4_FIXTURES/two-open.json" "$pack"
+
+  [ "$status" -eq 0 ]
+  refute grep -Fq '"seat":"manager"' <<<"$output"
+  refute grep -Fq '"seat":"pm"' <<<"$output"
+  refute grep -Fq '"seat":"service"' <<<"$output"
+}
+
+@test "g4-reconcile: counts a blocked owner as assigned" {
+  local pack="$BATS_TEST_TMPDIR/g4-reconcile-blocked-owner.json"
+  write_reconcile_blocked_owner_pack "$pack"
+
+  run_g4_reconcile "$G4_FIXTURES/two-open.json" "$pack"
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" classificationBasis.status)" = "unknown" ]
+  refute grep -Fq '"seat":"worker-b"' <<<"$output"
+  grep -Fq '"seat":"worker-a"' <<<"$output"
+}
+
+@test "g4-reconcile: reasonless blocked entry is a schema error, not healthy output" {
+  local pack="$BATS_TEST_TMPDIR/g4-reconcile-pack.json"
+  write_reconcile_pack "$pack"
+  mutate_g4_pack "$pack" blocked-no-predicate
+
+  run_g4_reconcile "$G4_FIXTURES/two-open.json" "$pack"
+
+  [ "$status" -eq 2 ]
+  refute grep -Fq 'classificationBasis' <<<"$output"
+  grep -Fq 'blocked entry requires blocker.reasonCode and blocker.releasePredicate' <<<"$output"
+}
+
+@test "g4-reconcile: GitHub source failure remains unknown and not healthy" {
+  local pack="$BATS_TEST_TMPDIR/g4-reconcile-pack.json"
+  write_reconcile_pack "$pack"
+
+  run_g4_reconcile "$G4_FIXTURES/error.json" "$pack"
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" classificationBasis.status)" = "unknown" ]
+  refute grep -Fq '"healthy"' <<<"$output"
+  [ "$(json_value "$output" ready)" = "[]" ]
+}
+
+@test "g4-reconcile: removing owner-set difference is killed by the positive assertion" {
+  local pack="$BATS_TEST_TMPDIR/g4-reconcile-pack.json" mutation_status
+  write_reconcile_pack "$pack"
+  sed -i.bak 's/\.filter((seat) => !owners\.has(seat))/.filter(() => false)/' "$SCRIPTS/lib/g4-audit.js"
+
+  run_g4_reconcile "$G4_FIXTURES/two-open.json" "$pack"
+  [ "$status" -eq 0 ]
+  set +e
+  [ "$(json_value "$output" findings[0].seat)" = "worker-b" ]
+  mutation_status="$?"
+  set -e
+  [ "$mutation_status" -ne 0 ]
+}
+
+@test "g4-reconcile: remains read-only and does not use the team-work store" {
+  local pack="$BATS_TEST_TMPDIR/g4-reconcile-pack.json" before after
+  write_reconcile_pack "$pack"
+  before="$(shasum -a 256 "$TEST_SKILL_DIR/db/messages.db" | awk '{print $1}')"
+
+  run_g4_reconcile "$G4_FIXTURES/two-open.json" "$pack"
+
+  [ "$status" -eq 0 ]
+  after="$(shasum -a 256 "$TEST_SKILL_DIR/db/messages.db" | awk '{print $1}')"
+  [ "$before" = "$after" ]
+  refute grep -q '"kind":"write"' "$G4_GH_LOG"
+  refute grep -Fq 'send.sh' "$G4_GH_LOG"
+  refute grep -Fq 'spawn.sh' "$G4_GH_LOG"
 }

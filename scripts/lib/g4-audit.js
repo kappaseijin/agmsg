@@ -14,7 +14,7 @@ const {
   parseJson,
 } = require("./g4-contract");
 
-const AUDIT_COMMANDS = new Set(["g4-audit"]);
+const AUDIT_COMMANDS = new Set(["g4-audit", "g4-reconcile"]);
 const MAX_PAGES = 10000;
 
 class LiveSourceError extends Error {
@@ -404,6 +404,16 @@ function sortReasons(reasons) {
   return unique.sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right)));
 }
 
+function reconcileFindings(contract) {
+  const owners = new Set(contract.entries.map((info) => info.entry.ownerSeat));
+  return Array.from(contract.seats.values())
+    .filter((member) => member.kind === "seat" && member.role !== "manager" && member.role !== "pm")
+    .map((member) => member.name)
+    .filter((seat) => !owners.has(seat))
+    .sort((left, right) => left.localeCompare(right))
+    .map((seat) => ({code: "unassigned_seat", seat}));
+}
+
 function outputEntry(info, predicateObservation) {
   const entry = info.entry;
   const result = {
@@ -525,6 +535,7 @@ function runAudit(command, team, pack, roster) {
     sourceDigest,
     ready,
   };
+  if (command === "g4-reconcile") output.findings = reconcileFindings(contract);
   output.auditDigest = sha256Digest(output);
   return output;
 }

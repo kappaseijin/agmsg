@@ -6,8 +6,8 @@ set -euo pipefail
 # Validates a work-state contract pack against the selected team's versioned
 # roster JSON contract. Mutating commands use the local SQLite store; legacy
 # audit commands read GitHub and local state without changing either one.
-# Phase 1A g4-audit is deliberately GitHub-only and does not initialize/open
-# the local SQLite store.
+# Phase 1A G4 audit commands are deliberately GitHub-only and do not
+# initialize/open the local SQLite store.
 
 COMMAND="${1:-}"
 TEAM="${2:-}"
@@ -29,6 +29,12 @@ case "$COMMAND" in
   g4-audit)
     if [ "$#" -ne 3 ]; then
       echo "Usage: team-work.sh g4-audit <team> <g4-state-pack.json>" >&2
+      exit 1
+    fi
+    ;;
+  g4-reconcile)
+    if [ "$#" -ne 3 ]; then
+      echo "Usage: team-work.sh g4-reconcile <team> <g4-state-pack.json>" >&2
       exit 1
     fi
     ;;
@@ -139,7 +145,7 @@ case "$COMMAND" in
   validate|self-check)
     printf '%s' "$ROSTER_JSON" | node "$SCRIPT_DIR/lib/team-work.js" "$@"
     ;;
-  g4-audit)
+  g4-audit|g4-reconcile)
     # Phase 1A is intentionally independent of the team-work SQLite store.
     # Do not initialize or open a database on this path.
     printf '%s' "$ROSTER_JSON" | node "$SCRIPT_DIR/lib/g4-audit.js" "$@"

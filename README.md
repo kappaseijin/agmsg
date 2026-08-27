@@ -867,6 +867,34 @@ labels, or call any GitHub write method. `g4-pull` remains a Phase 2 command and
 is not published here. The Phase 1B commands below require the #97 recovery
 work and the #98 roster/delivery acceptance gates to be live.
 
+### G4 closeout reconcile (Phase 1A)
+
+Use `g4-reconcile` when a manager explicitly closes a turn and needs the G4
+state pack checked against the complete team roster:
+
+```bash
+~/.agents/skills/<cmd>/scripts/team-work.sh g4-reconcile demo .g4-state-pack.json
+```
+
+This command is the read-only G4-pack audit plus an owner-set check. It considers
+only roster members with `kind: "seat"` whose role is not `manager` or `pm`.
+`human`, `service`, manager, and pm members are not expected to own an Issue and
+are not reported. A seat that is absent from every pack entry's `ownerSeat` is
+reported as a stable `{"code":"unassigned_seat","seat":"..."}` finding;
+`blocked` entries still count as assigned work.
+
+The result is one canonical JSON object containing the normal G4 audit fields and
+a top-level `findings` array. Empty findings with `classificationBasis.status`
+`complete` or `quiescent` are the only healthy closeout result. A valid
+`unknown` result is never healthy; malformed packs, including blocked entries
+without both `reasonCode` and `releasePredicate`, return exit code `2` without a
+healthy JSON result. Live GitHub or pagination failures remain valid `unknown`
+JSON with exit code `0`.
+
+`g4-reconcile` does not invoke the automatic bridge turn-end hook, initialize or
+write the team-work SQLite store, mutate GitHub, send messages, spawn agents, or
+change pack/Issue state. The manager invokes it explicitly at turn end.
+
 ### G4 bootstrap ledger (Phase 1B)
 
 After those gates are accepted, an exact roster member with `kind: "seat"` and

@@ -77,6 +77,89 @@ fs.writeFileSync(process.env.G4_PACK_PATH, JSON.stringify({
 NODE
 }
 
+write_reconcile_pack() {
+  local path="$1"
+  write_g4_pack "$path" two
+  G4_PACK_PATH="$path" node <<'NODE'
+const crypto = require("crypto");
+const fs = require("fs");
+const pack = JSON.parse(fs.readFileSync(process.env.G4_PACK_PATH, "utf8"));
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    const result = {};
+    for (const key of Object.keys(value).sort()) result[key] = canonicalize(value[key]);
+    return result;
+  }
+  return value;
+}
+function digest(value) {
+  return "sha256:" + crypto.createHash("sha256")
+    .update(JSON.stringify(canonicalize(value)), "utf8").digest("hex");
+}
+function refreshEntry(entry) {
+  const basisInput = Object.assign({}, entry);
+  delete basisInput.basis;
+  delete basisInput.entryDigest;
+  entry.basis.contentDigest = digest(basisInput);
+  const entryInput = Object.assign({}, entry);
+  delete entryInput.entryDigest;
+  entry.entryDigest = digest(entryInput);
+}
+
+pack.entries[0].ownerSeat = "worker-a";
+pack.entries[1].ownerSeat = "owner";
+pack.entries.forEach(refreshEntry);
+fs.writeFileSync(process.env.G4_PACK_PATH, JSON.stringify(pack));
+NODE
+}
+
+write_reconcile_blocked_owner_pack() {
+  local path="$1"
+  write_reconcile_pack "$path"
+  G4_PACK_PATH="$path" node <<'NODE'
+const crypto = require("crypto");
+const fs = require("fs");
+const pack = JSON.parse(fs.readFileSync(process.env.G4_PACK_PATH, "utf8"));
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    const result = {};
+    for (const key of Object.keys(value).sort()) result[key] = canonicalize(value[key]);
+    return result;
+  }
+  return value;
+}
+function digest(value) {
+  return "sha256:" + crypto.createHash("sha256")
+    .update(JSON.stringify(canonicalize(value)), "utf8").digest("hex");
+}
+function refreshEntry(entry) {
+  const basisInput = Object.assign({}, entry);
+  delete basisInput.basis;
+  delete basisInput.entryDigest;
+  entry.basis.contentDigest = digest(basisInput);
+  const entryInput = Object.assign({}, entry);
+  delete entryInput.entryDigest;
+  entry.entryDigest = digest(entryInput);
+}
+
+pack.entries[0].ownerSeat = "owner";
+refreshEntry(pack.entries[0]);
+const entry = pack.entries[1];
+entry.ownerSeat = "worker-b";
+entry.state = "blocked";
+entry.blocker = {
+  reasonCode: "upstream_issue",
+  releasePredicate: {kind: "not_before", at: "2099-01-01T00:00:00+09:00"},
+};
+refreshEntry(entry);
+fs.writeFileSync(process.env.G4_PACK_PATH, JSON.stringify(pack));
+NODE
+}
+
 write_predicate_pack() {
   local path="$1"
   local kind="$2"
@@ -211,6 +294,13 @@ run_g4_audit() {
   local pack="$2"
   run env PATH="$G4_FAKE_GH_BIN:$PATH" G4_GH_FIXTURE="$fixture" G4_GH_LOG="$G4_GH_LOG" \
     bash "$SCRIPTS/team-work.sh" g4-audit demo "$pack"
+}
+
+run_g4_reconcile() {
+  local fixture="$1"
+  local pack="$2"
+  run env PATH="$G4_FAKE_GH_BIN:$PATH" G4_GH_FIXTURE="$fixture" G4_GH_LOG="$G4_GH_LOG" \
+    bash "$SCRIPTS/team-work.sh" g4-reconcile demo "$pack"
 }
 
 json_value() {
