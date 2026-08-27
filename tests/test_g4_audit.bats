@@ -488,9 +488,9 @@ load helpers/g4-fixtures
   run_g4_reconcile "$G4_FIXTURES/two-open.json" "$pack"
 
   [ "$status" -eq 0 ]
-  ! grep -Fq '"seat":"manager"' <<<"$output"
-  ! grep -Fq '"seat":"pm"' <<<"$output"
-  ! grep -Fq '"seat":"service"' <<<"$output"
+  refute grep -Fq '"seat":"manager"' <<<"$output"
+  refute grep -Fq '"seat":"pm"' <<<"$output"
+  refute grep -Fq '"seat":"service"' <<<"$output"
 }
 
 @test "g4-reconcile: counts a blocked owner as assigned" {
@@ -501,7 +501,7 @@ load helpers/g4-fixtures
 
   [ "$status" -eq 0 ]
   [ "$(json_value "$output" classificationBasis.status)" = "unknown" ]
-  ! grep -Fq '"seat":"worker-b"' <<<"$output"
+  refute grep -Fq '"seat":"worker-b"' <<<"$output"
   grep -Fq '"seat":"worker-a"' <<<"$output"
 }
 
@@ -513,7 +513,7 @@ load helpers/g4-fixtures
   run_g4_reconcile "$G4_FIXTURES/two-open.json" "$pack"
 
   [ "$status" -eq 2 ]
-  ! grep -Fq 'classificationBasis' <<<"$output"
+  refute grep -Fq 'classificationBasis' <<<"$output"
   grep -Fq 'blocked entry requires blocker.reasonCode and blocker.releasePredicate' <<<"$output"
 }
 
@@ -525,7 +525,7 @@ load helpers/g4-fixtures
 
   [ "$status" -eq 0 ]
   [ "$(json_value "$output" classificationBasis.status)" = "unknown" ]
-  ! grep -Fq '"healthy"' <<<"$output"
+  refute grep -Fq '"healthy"' <<<"$output"
   [ "$(json_value "$output" ready)" = "[]" ]
 }
 
@@ -553,7 +553,7 @@ load helpers/g4-fixtures
   [ "$status" -eq 0 ]
   after="$(shasum -a 256 "$TEST_SKILL_DIR/db/messages.db" | awk '{print $1}')"
   [ "$before" = "$after" ]
-  ! grep -q '"kind":"write"' "$G4_GH_LOG"
-  ! grep -Fq 'send.sh' "$G4_GH_LOG"
-  ! grep -Fq 'spawn.sh' "$G4_GH_LOG"
+  refute grep -q '"kind":"write"' "$G4_GH_LOG"
+  refute grep -Fq 'send.sh' "$G4_GH_LOG"
+  refute grep -Fq 'spawn.sh' "$G4_GH_LOG"
 }
