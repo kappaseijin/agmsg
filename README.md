@@ -907,11 +907,11 @@ items, it exits with code `1`; a successful `bootstrapped: true` result exits
 with code `0`. Malformed input and usage/schema errors still exit with code
 `2` and write `schema error:` to stderr.
 
-### G4 blocked-to-ready transition (Phase 1B)
+### G4 blocked-to-ready and ready-to-blocked transition (Phase 1B)
 
 After a source has been bootstrapped, an exact roster seat with `kind: "seat"`
 and `role: "manager"` or `role: "pm"` can record only the next expected
-revision when the saved blocker predicate is freshly true:
+revision through one of the two explicit transitions below:
 
 ```bash
 ~/.agents/skills/<cmd>/scripts/team-work.sh g4-transition demo \
@@ -921,21 +921,25 @@ revision when the saved blocker predicate is freshly true:
 
 The command accepts exactly the team, G4 state pack, source repository, Issue
 number, expected current revision, manager seat, and non-empty evidence. The
-submitted entry must be `revision: expected-revision + 1`, must change exactly
-from `blocked` to `ready`, and must preserve the source, owner seat, work kinds,
-and immutable basis references. The current local row must still be the
-expected revision and blocked; stale, skipped, unsupported, or immutable-field
-changes are rejected without mutation.
+submitted entry must be `revision: expected-revision + 1`. A release changes
+`blocked` to `ready` only when the current blocker predicate is freshly true,
+the audit is complete, and basis references are unchanged. A re-block changes
+`ready` to `blocked` only when the target blocker predicate is freshly false,
+the audit is re-block safe, and the current basis references are a strict
+prefix of the target references. The source, owner seat, and work kinds are
+immutable in both directions. Stale, skipped, unsupported, true or unknown
+re-block predicates, and immutable-field changes are rejected without mutation.
 
-Each transition performs a fresh complete scope audit and directly
-re-evaluates the release predicate saved in the current blocked row. A false,
-unknown, unavailable, or incomplete observation is fail-closed. A successful
-transition updates exactly one `team_work_g4_current` row in a local
-`BEGIN IMMEDIATE` transaction; the append-only trigger records the next
-revision. The command never writes GitHub, changes labels, creates claims,
-dispatches work, or invokes `g4-pull`. Retry with a refreshed pack and the
-current revision after a rejection; rejected results retain the identity and
-digest fields with `transitioned: false` and a stable
+Each transition performs a fresh scope audit and directly re-evaluates the
+relevant predicate. A false, true, unknown, unavailable, or incomplete
+observation is fail-closed for the direction where it is not permitted. A
+successful transition updates exactly one `team_work_g4_current` row in a
+local `BEGIN IMMEDIATE` transaction; the append-only trigger records the next
+revision. Successful JSON contains `transitionKind: "release"` or
+`transitionKind: "reblock"`. The command never writes GitHub, changes labels,
+creates claims, dispatches work, or invokes `g4-pull`. Retry with a refreshed
+pack and the current revision after a rejection; rejected results retain the
+identity and digest fields with `transitioned: false` and a stable
 `remediation[0].code`. A JSON result with remediation items exits with code
 `1`, while a successful `transitioned: true` result exits with code `0`.
 Malformed input and usage/schema errors remain exit code `2` with

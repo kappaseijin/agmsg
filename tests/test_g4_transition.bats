@@ -78,6 +78,72 @@ fs.writeFileSync(process.env.G4_PACK_PATH, JSON.stringify(pack));
 NODE
 }
 
+write_reblock_pack() {
+  local path="$1"
+  write_transition_pack "$path" blocked 2
+  mutate_reblock_pack "$path" basis-append
+}
+
+mutate_reblock_pack() {
+  local path="$1" mutation="$2"
+  G4_PACK_PATH="$path" G4_REBLOCK_MUTATION="$mutation" node <<'NODE'
+const crypto = require("crypto");
+const fs = require("fs");
+const pack = JSON.parse(fs.readFileSync(process.env.G4_PACK_PATH, "utf8"));
+function isObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (isObject(value)) {
+    const result = {};
+    for (const key of Object.keys(value).sort()) result[key] = canonicalize(value[key]);
+    return result;
+  }
+  return value;
+}
+function digest(value) {
+  return "sha256:" + crypto.createHash("sha256")
+    .update(JSON.stringify(canonicalize(value)), "utf8").digest("hex");
+}
+function refreshEntry(entry) {
+  const basisInput = Object.assign({}, entry);
+  delete basisInput.basis;
+  delete basisInput.entryDigest;
+  entry.basis.contentDigest = digest(basisInput);
+  const entryInput = Object.assign({}, entry);
+  delete entryInput.entryDigest;
+  entry.entryDigest = digest(entryInput);
+}
+
+const entry = pack.entries[0];
+switch (process.env.G4_REBLOCK_MUTATION) {
+  case "basis-append":
+    entry.basis.refs.push({kind: "evidence", url: "https://example.test/g4-reblock"});
+    break;
+  case "basis-delete":
+    entry.basis.refs.pop();
+    break;
+  case "basis-reorder":
+    entry.basis.refs.reverse();
+    break;
+  case "basis-rewrite":
+    entry.basis.refs[0].number = 99;
+    break;
+  case "owner":
+    entry.ownerSeat = "manager";
+    break;
+  case "work-kinds":
+    entry.workKinds = ["writeback"];
+    break;
+  default:
+    throw new Error("unknown reblock mutation");
+}
+refreshEntry(entry);
+fs.writeFileSync(process.env.G4_PACK_PATH, JSON.stringify(pack));
+NODE
+}
+
 mutate_transition_pack() {
   local path="$1" mutation="$2"
   G4_PACK_PATH="$path" G4_TRANSITION_MUTATION="$mutation" node <<'NODE'
@@ -165,6 +231,7 @@ SQL
 
   [ "$status" -eq 0 ]
   [ "$(json_value "$output" transitioned)" = "true" ]
+  [ "$(json_value "$output" transitionKind)" = "release" ]
   [ "$(json_value "$output" state)" = "ready" ]
   [ "$(json_value "$output" revision)" = "2" ]
   [ "$(json_value "$output" previousRevision)" = "1" ]
@@ -297,18 +364,165 @@ SQL
   done
 }
 
-@test "g4-transition: ready-to-blocked is rejected" {
+@test "g4-transition: manager reblocks ready with a false predicate and appended basis" {
+  local bootstrap_pack="$BATS_TEST_TMPDIR/bootstrap.json" transition_pack="$BATS_TEST_TMPDIR/transition.json"
+
+  write_g4_pack "$bootstrap_pack" two
+  run_g4_bootstrap "$G4_FIXTURES/two-open.json" "$bootstrap_pack"
+  [ "$status" -eq 0 ]
+  cp "$bootstrap_pack" "$transition_pack"
+  write_reblock_pack "$transition_pack"
+  : > "$G4_GH_LOG"
+
+  run_g4_transition "$G4_FIXTURES/predicate-negative.json" "$transition_pack"
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" transitioned)" = "true" ]
+  [ "$(json_value "$output" transitionKind)" = "reblock" ]
+  [ "$(json_value "$output" state)" = "blocked" ]
+  [ "$(json_value "$output" revision)" = "2" ]
+  [ "$(json_value "$output" previousRevision)" = "1" ]
+  [ "$(json_value "$output" remediation)" = "[]" ]
+  [ "$(sqlite3 "$DBPATH" "SELECT state || ':' || revision || ':' || last_action || ':' || last_actor || ':' || evidence FROM team_work_g4_current WHERE team = 'demo' AND source_number = 42;")" = "blocked:2:g4-reblock:manager:https://example.test/g4-transition" ]
+  [ "$(sqlite3 "$DBPATH" "SELECT json_extract(blocker_json, '$.reasonCode') || ':' || json_extract(blocker_json, '$.releasePredicate.kind') FROM team_work_g4_current WHERE team = 'demo' AND source_number = 42;")" = "issue_closed_gate:issue_closed" ]
+  [ "$(sqlite3 "$DBPATH" "SELECT json_array_length(json_extract(basis_json, '$.refs')) FROM team_work_g4_current WHERE team = 'demo' AND source_number = 42;")" = "2" ]
+  [ "$(sqlite3 "$DBPATH" "SELECT previous_revision || ':' || action || ':' || actor || ':' || json_extract(snapshot_json, '$.state') FROM team_work_g4_revisions WHERE team = 'demo' AND source_number = 42 AND revision = 2;")" = "1:g4-reblock:manager:blocked" ]
+  grep -q '"kind":"read"' "$G4_GH_LOG"
+  refute grep -q '"kind":"write"' "$G4_GH_LOG"
+  assert_canonical_json "$output"
+}
+
+@test "g4-transition: reblock rejects basis deletion, reorder, and rewrite" {
+  local bootstrap_pack="$BATS_TEST_TMPDIR/bootstrap.json" transition_pack="$BATS_TEST_TMPDIR/transition.json" mutation before
+
+  write_g4_pack "$bootstrap_pack" two
+  run_g4_bootstrap "$G4_FIXTURES/two-open.json" "$bootstrap_pack"
+  [ "$status" -eq 0 ]
+  for mutation in basis-delete basis-reorder basis-rewrite; do
+    cp "$bootstrap_pack" "$transition_pack"
+    write_reblock_pack "$transition_pack"
+    mutate_reblock_pack "$transition_pack" "$mutation"
+    before="$(shasum -a 256 "$DBPATH" | awk '{print $1}')"
+    run_g4_transition "$G4_FIXTURES/predicate-negative.json" "$transition_pack"
+    [ "$status" -eq 1 ]
+    [ "$(json_value "$output" transitioned)" = "false" ]
+    [ "$(json_value "$output" remediation[0].code)" = "immutable_mismatch" ]
+    [ "$(shasum -a 256 "$DBPATH" | awk '{print $1}')" = "$before" ]
+    [ "$(sqlite3 "$DBPATH" "SELECT COUNT(*) FROM team_work_g4_revisions WHERE team = 'demo' AND source_number = 42;")" = "1" ]
+  done
+}
+
+@test "g4-transition: reblock rejects true and unknown predicates without mutation" {
+  local bootstrap_pack="$BATS_TEST_TMPDIR/bootstrap.json" transition_pack="$BATS_TEST_TMPDIR/transition.json" before
+
+  write_g4_pack "$bootstrap_pack" two
+  run_g4_bootstrap "$G4_FIXTURES/two-open.json" "$bootstrap_pack"
+  [ "$status" -eq 0 ]
+  for fixture in predicate-positive.json predicate-gh-failure.json; do
+    cp "$bootstrap_pack" "$transition_pack"
+    write_reblock_pack "$transition_pack"
+    before="$(shasum -a 256 "$DBPATH" | awk '{print $1}')"
+    run_g4_transition "$G4_FIXTURES/$fixture" "$transition_pack"
+    [ "$status" -eq 1 ]
+    [ "$(json_value "$output" transitioned)" = "false" ]
+    if [ "$fixture" = "predicate-positive.json" ]; then
+      [ "$(json_value "$output" remediation[0].code)" = "predicate_not_false" ]
+    else
+      [ "$(json_value "$output" remediation[0].code)" = "audit_incomplete" ]
+    fi
+    [ "$(shasum -a 256 "$DBPATH" | awk '{print $1}')" = "$before" ]
+    [ "$(sqlite3 "$DBPATH" "SELECT COUNT(*) FROM team_work_g4_revisions WHERE team = 'demo' AND source_number = 42;")" = "1" ]
+  done
+}
+
+@test "g4-transition: exact update rejects a current-state race" {
   local bootstrap_pack="$BATS_TEST_TMPDIR/bootstrap.json" transition_pack="$BATS_TEST_TMPDIR/transition.json" before
 
   write_g4_pack "$bootstrap_pack" two
   run_g4_bootstrap "$G4_FIXTURES/two-open.json" "$bootstrap_pack"
   [ "$status" -eq 0 ]
   cp "$bootstrap_pack" "$transition_pack"
-  write_transition_pack "$transition_pack" blocked 2
+  write_reblock_pack "$transition_pack"
+
+  # The harness changes only the current state after readG4Current() and
+  # before the transaction. Disable the history trigger so the fixture can
+  # keep revision 1 while changing state; the normal path tests the trigger.
+  cp "$G4_FAKE_GH_BIN/gh" "$G4_FAKE_GH_BIN/gh-delegate"
+  cat > "$G4_FAKE_GH_BIN/gh" <<EOF
+#!/usr/bin/env bash
+"$G4_FAKE_GH_BIN/gh-delegate" "\$@"
+status=\$?
+if [ "\$status" -eq 0 ] && [ ! -f "$G4_FAKE_GH_BIN/race-done" ]; then
+  : > "$G4_FAKE_GH_BIN/race-done"
+  sqlite3 "$DBPATH" "DROP TRIGGER team_work_g4_current_history_update;"
+  sqlite3 "$DBPATH" "UPDATE team_work_g4_current SET state = 'unknown', blocker_json = NULL WHERE team = 'demo' AND source_number = 42;"
+fi
+exit "\$status"
+EOF
+  chmod +x "$G4_FAKE_GH_BIN/gh"
+
   before="$(shasum -a 256 "$DBPATH" | awk '{print $1}')"
-  run_g4_transition "$G4_FIXTURES/predicate-positive.json" "$transition_pack"
+  run_g4_transition "$G4_FIXTURES/predicate-negative.json" "$transition_pack"
+
   [ "$status" -eq 1 ]
   [ "$(json_value "$output" transitioned)" = "false" ]
+  [ "$(json_value "$output" remediation[0].code)" = "transition_conflict" ]
+  [ "$(sqlite3 "$DBPATH" "SELECT state || ':' || revision FROM team_work_g4_current WHERE team = 'demo' AND source_number = 42;")" = "unknown:1" ]
+  [ "$(sqlite3 "$DBPATH" "SELECT COUNT(*) FROM team_work_g4_revisions WHERE team = 'demo' AND source_number = 42;")" = "1" ]
+  [ "$(shasum -a 256 "$DBPATH" | awk '{print $1}')" != "$before" ]
+}
+
+@test "g4-transition: reblock rejects owner, workKinds, and manager changes" {
+  local bootstrap_pack="$BATS_TEST_TMPDIR/bootstrap.json" transition_pack="$BATS_TEST_TMPDIR/transition.json" mutation before
+
+  write_g4_pack "$bootstrap_pack" two
+  run_g4_bootstrap "$G4_FIXTURES/two-open.json" "$bootstrap_pack"
+  [ "$status" -eq 0 ]
+  for mutation in owner work-kinds; do
+    cp "$bootstrap_pack" "$transition_pack"
+    write_reblock_pack "$transition_pack"
+    mutate_reblock_pack "$transition_pack" "$mutation"
+    before="$(shasum -a 256 "$DBPATH" | awk '{print $1}')"
+    run_g4_transition "$G4_FIXTURES/predicate-negative.json" "$transition_pack"
+    [ "$status" -eq 1 ]
+    [ "$(json_value "$output" transitioned)" = "false" ]
+    [ "$(json_value "$output" remediation[0].code)" = "immutable_mismatch" ]
+    [ "$(shasum -a 256 "$DBPATH" | awk '{print $1}')" = "$before" ]
+  done
+
+  cp "$bootstrap_pack" "$transition_pack"
+  write_reblock_pack "$transition_pack"
+  before="$(shasum -a 256 "$DBPATH" | awk '{print $1}')"
+  run_g4_transition "$G4_FIXTURES/predicate-negative.json" "$transition_pack" kappaseijin/example 42 1 owner
+  [ "$status" -eq 1 ]
+  [ "$(json_value "$output" transitioned)" = "false" ]
+  [ "$(json_value "$output" remediation[0].code)" = "invalid_manager" ]
+  [ "$(shasum -a 256 "$DBPATH" | awk '{print $1}')" = "$before" ]
+}
+
+@test "g4-transition: reblock rejects audit failure and coverage mismatch" {
+  local bootstrap_pack="$BATS_TEST_TMPDIR/bootstrap.json" transition_pack="$BATS_TEST_TMPDIR/transition.json" before
+
+  write_g4_pack "$bootstrap_pack" two
+  run_g4_bootstrap "$G4_FIXTURES/two-open.json" "$bootstrap_pack"
+  [ "$status" -eq 0 ]
+  cp "$bootstrap_pack" "$transition_pack"
+  write_reblock_pack "$transition_pack"
+  before="$(shasum -a 256 "$DBPATH" | awk '{print $1}')"
+  run_g4_transition "$G4_FIXTURES/error.json" "$transition_pack"
+  [ "$status" -eq 1 ]
+  [ "$(json_value "$output" transitioned)" = "false" ]
+  [ "$(json_value "$output" remediation[0].code)" = "audit_incomplete" ]
+  [ "$(shasum -a 256 "$DBPATH" | awk '{print $1}')" = "$before" ]
+
+  write_g4_pack "$bootstrap_pack" one
+  cp "$bootstrap_pack" "$transition_pack"
+  write_reblock_pack "$transition_pack"
+  before="$(shasum -a 256 "$DBPATH" | awk '{print $1}')"
+  run_g4_transition "$G4_FIXTURES/two-open.json" "$transition_pack"
+  [ "$status" -eq 1 ]
+  [ "$(json_value "$output" transitioned)" = "false" ]
+  [ "$(json_value "$output" remediation[0].code)" = "audit_incomplete" ]
   [ "$(shasum -a 256 "$DBPATH" | awk '{print $1}')" = "$before" ]
 }
 
