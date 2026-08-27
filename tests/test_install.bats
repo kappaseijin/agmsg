@@ -90,16 +90,16 @@ teardown() {
   local output
   output="$(env HOME="$FAKE_HOME" PATH="$real_bin:$FAKE_HOME/.agents/bin:$PATH" \
     bash --login -c 'command -v gh; which gh')"
-  [[ "$output" == *"$guard"* ]]
+  grep -Fq "$guard" <<< "$output"
   output="$(env HOME="$FAKE_HOME" PATH="$real_bin:$FAKE_HOME/.agents/bin:$PATH" \
     bash --noprofile --rcfile "$FAKE_HOME/.bashrc" -ic 'command -v gh; which gh' 2>/dev/null)"
-  [[ "$output" == *"$guard"* ]]
+  grep -Fq "$guard" <<< "$output"
   output="$(env HOME="$FAKE_HOME" PATH="$real_bin:$FAKE_HOME/.agents/bin:$PATH" \
     zsh -ilc 'command -v gh; which gh')"
-  [[ "$output" == *"$guard"* ]]
+  grep -Fq "$guard" <<< "$output"
   output="$(env HOME="$FAKE_HOME" PATH="$real_bin:$FAKE_HOME/.agents/bin:$PATH" \
     zsh -ic 'command -v gh; which gh')"
-  [[ "$output" == *"$guard"* ]]
+  grep -Fq "$guard" <<< "$output"
 }
 
 @test "install: gh owner guard startup integration is idempotent" {
