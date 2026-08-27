@@ -67,6 +67,10 @@ teardown() {
 }
 
 @test "install: gh owner guard activates through Bash and Zsh startup files" {
+  if ! command -v zsh >/dev/null 2>&1; then
+    skip "zsh is not installed"
+  fi
+
   local real_bin="$FAKE_HOME/real-bin" guard="$FAKE_HOME/.agents/bin/gh"
   local helper="$FAKE_HOME/.agents/bin/gh-owner-guard-path.sh"
   mkdir -p "$real_bin"
