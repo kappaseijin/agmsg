@@ -42,6 +42,94 @@ confirm() {
   [ "${input:-n}" = "y" ] || [ "${input:-n}" = "Y" ]
 }
 
+AGMSG_GH_OWNER_GUARD_PATH_START='# >>> agmsg gh owner guard PATH >>>'
+AGMSG_GH_OWNER_GUARD_PATH_END='# <<< agmsg gh owner guard PATH <<<'
+AGMSG_GH_OWNER_GUARD_PATH_HEADER='# agmsg gh owner guard PATH helper'
+
+agmsg_gh_owner_guard_path_marker_state() {
+  local file="$1"
+  awk -v start="$AGMSG_GH_OWNER_GUARD_PATH_START" \
+      -v end="$AGMSG_GH_OWNER_GUARD_PATH_END" '
+    $0 == start { starts++; start_line = NR }
+    $0 == end { ends++; end_line = NR }
+    END {
+      if (starts == 0 && ends == 0) print "none"
+      else if (starts == 1 && ends == 1 && start_line < end_line) print "valid"
+      else print "malformed"
+    }
+  ' "$file"
+}
+
+agmsg_gh_owner_guard_path_prepare_remove() {
+  local file="$1" tmp
+  tmp="$(mktemp "$(dirname "$file")/.agmsg-gh-owner-guard-path.XXXXXX")" || return 1
+  if ! cp -p "$file" "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  awk -v start="$AGMSG_GH_OWNER_GUARD_PATH_START" \
+      -v end="$AGMSG_GH_OWNER_GUARD_PATH_END" '
+    $0 == start { inside = 1; next }
+    inside && $0 == end { inside = 0; next }
+    !inside { print }
+  ' "$file" > "$tmp"
+  printf '%s' "$tmp"
+}
+
+remove_gh_owner_guard_path_activation() {
+  local file state tmp i
+  local -a rc_files=("$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile")
+  local -a rc_temps=()
+
+  # Inspect every candidate before changing any of them. A malformed marker is
+  # an ambiguous ownership boundary; stop before removing the helper or the
+  # launcher, and leave all startup files byte-for-byte unchanged.
+  for file in "${rc_files[@]}"; do
+    if [ -e "$file" ] || [ -L "$file" ]; then
+      if [ -L "$file" ] || [ ! -f "$file" ]; then
+        echo "  ! Refusing to modify non-regular startup file $file" >&2
+        return 1
+      fi
+      state="$(agmsg_gh_owner_guard_path_marker_state "$file")"
+      case "$state" in
+        none) rc_temps+=("") ;;
+        valid)
+          if ! tmp="$(agmsg_gh_owner_guard_path_prepare_remove "$file")"; then
+            for tmp in "${rc_temps[@]}"; do [ -n "$tmp" ] && rm -f "$tmp"; done
+            echo "  ! Could not prepare startup file $file" >&2
+            return 1
+          fi
+          rc_temps+=("$tmp")
+          ;;
+        *)
+          for tmp in "${rc_temps[@]}"; do [ -n "$tmp" ] && rm -f "$tmp"; done
+          echo "  ! Refusing to modify startup file with malformed agmsg marker: $file" >&2
+          return 1
+          ;;
+      esac
+    else
+      rc_temps+=("")
+    fi
+  done
+
+  for i in "${!rc_files[@]}"; do
+    tmp="${rc_temps[i]}"
+    [ -n "$tmp" ] || continue
+    if ! mv -f "$tmp" "${rc_files[i]}"; then
+      echo "  ! Could not remove startup integration from ${rc_files[i]}" >&2
+      return 1
+    fi
+  done
+
+  local path_helper="$AGENTS_DIR/bin/gh-owner-guard-path.sh"
+  if [ -f "$path_helper" ] && [ ! -L "$path_helper" ] \
+      && grep -q "^$AGMSG_GH_OWNER_GUARD_PATH_HEADER$" "$path_helper" 2>/dev/null; then
+    rm -f "$path_helper"
+    echo "  - removed $path_helper"
+    REMOVED=true
+  fi
+}
+
 # --- Find installed skill directories ---
 SKILL_DIRS=()
 for d in "$AGENTS_DIR"/skills/*/; do
@@ -212,6 +300,11 @@ if [ "$REMOVED_SQLITE_SHIM" = true ] && [ -f "$SQLITE_SHIM_CACHE" ]; then
   echo "  - removed $SQLITE_SHIM_CACHE"
   REMOVED=true
 fi
+
+# Remove managed shell activation before deleting the launchers it sources.
+# Ambiguous marker state fails closed and prevents both the helper and launcher
+# from being removed.
+remove_gh_owner_guard_path_activation
 
 # Remove only the agmsg-generated GitHub CLI and Git owner guards. User-owned
 # executables, including older non-agmsg wrappers, are never touched.
