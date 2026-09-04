@@ -20,6 +20,7 @@ setup() {
   export FAKE_JOB_ID=67890
   export FAKE_ENV_LOG="$TEST_SKILL_DIR/fake-env.log"
   export FAKE_AUTH_TOKEN_MODE=fail
+  export FAKE_API_USER_MODE=empty
   mkdir -p "$FAKE_BIN" "$TEST_SKILL_DIR/scratch"
   : > "$FAKE_WRITE_LOG"
   : > "$FAKE_READ_LOG"
@@ -43,6 +44,18 @@ if [ "${1:-}" = auth ] && [ "${2:-}" = token ] && [ "${3:-}" = --user ]; then
       esac
       ;;
     empty) printf '\n' ;;
+    fail) exit 1 ;;
+  esac
+  exit 0
+fi
+
+if [ "${1:-}" = api ] && [ "${2:-}" = user ]; then
+  printf '%s\n' "$*" >> "$FAKE_READ_LOG"
+  case "${FAKE_API_USER_MODE:-empty}" in
+    personal) printf 'kappaseijin\n' ;;
+    claude) printf 'kappaseijin4claude\n' ;;
+    codex) printf 'kappaseijin4codex\n' ;;
+    empty) : ;;
     fail) exit 1 ;;
   esac
   exit 0
@@ -173,17 +186,60 @@ assert_rejected() {
   : > "$FAKE_WRITE_LOG"
 }
 
-# Writes a fake whoami.sh printing a fixed line, and points
-# AGMSG_WHOAMI_SCRIPT at it. Mirrors the real script's plain-text contract
-# (`agent=... teams=... type=...`, optionally ` multiple=true`).
+# Writes a fake whoami.sh and points AGMSG_WHOAMI_SCRIPT at it. The JSON path
+# mirrors the versioned machine-readable contract while the plain path keeps
+# the human-output fixture available for the explicit contract test.
 fake_whoami() {
-  local line="$1" path="$TEST_SKILL_DIR/fake-whoami.sh"
-  cat > "$path" <<EOF
+  local line="$1" json="${2:-}" path="$TEST_SKILL_DIR/fake-whoami.sh"
+  export FAKE_WHOAMI_HUMAN="$line"
+  export FAKE_WHOAMI_JSON="$json"
+  export FAKE_WHOAMI_MODE=output
+  cat > "$path" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' '$line'
+if [ "${2:-}" = --format ] && [ "${3:-}" = json ]; then
+  case "${FAKE_WHOAMI_MODE:-output}" in
+    output) printf '%s\n' "${FAKE_WHOAMI_JSON:-}" ;;
+    empty) : ;;
+    malformed) printf '%s\n' '{not-json' ;;
+    fail) exit 1 ;;
+    *) exit 2 ;;
+  esac
+else
+  printf '%s\n' "${FAKE_WHOAMI_HUMAN:-}"
+fi
 EOF
   chmod +x "$path"
   export AGMSG_WHOAMI_SCRIPT="$path"
+}
+
+whoami_registration() {
+  local runtime="$1" project="$2" name="$3" team="$4"
+  printf '{"team":"%s","name":"%s","kind":"seat","role":"reviewer","registration":{"type":"%s","project":"%s"}}' \
+    "$team" "$name" "$runtime" "$project"
+}
+
+whoami_json() {
+  local runtime="$1" session_project="$2" registrations="$3" schema="${4:-1}"
+  printf '{"schemaVersion":%s,"runtime":"%s","session":{"project":"%s"},"registrations":%s}' \
+    "$schema" "$runtime" "$session_project" "$registrations"
+}
+
+accepting_personal_policy() {
+  local policy="$TEST_SKILL_DIR/pr-account-policy.conf"
+  printf 'map=%s=creator\ncreator_login=kappaseijin\n' "$(pwd -P)" > "$policy"
+  export PR_ACCOUNT_POLICY="$policy"
+  export FAKE_API_USER_MODE=personal
+}
+
+assert_pr_write_rejected_without_static_fallback() {
+  local -a args=("$@")
+  : > "$FAKE_WRITE_LOG"
+  : > "$FAKE_READ_LOG"
+  run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" "${args[@]}"
+  [ "$status" -ne 0 ]
+  [ ! -s "$FAKE_WRITE_LOG" ]
+  run grep -Fq 'api user' "$FAKE_READ_LOG"
+  [ "$status" -ne 0 ]
 }
 
 @test "GHG-01: rejects an issue writer targeting a third-party owner" {
@@ -191,7 +247,7 @@ EOF
 }
 
 @test "GHG-02: allows an owner PR review and preserves the original argv" {
-  run_guard pr review 42 --repo kappaseijin/fixture --approve
+  run env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR=/somewhere "$LAUNCHER" pr review 42 --repo kappaseijin/fixture --approve
   [ "$status" -eq 0 ]
   grep -Fq 'pr review 42 --repo kappaseijin/fixture --approve' "$FAKE_WRITE_LOG"
 }
@@ -279,20 +335,14 @@ EOF
   assert_rejected issue comment 10 --body "blocked"
 }
 
-# --- Proactive account selection (agmsg#83) ---
-#
-# whoami.sh already disambiguates "which agmsg seat is THIS calling process"
-# far better than a bare cwd (a single cwd routinely hosts more than one
-# vendor's registration -- e.g. this repo's own agmsg_owner_claude and
-# agmsg_owner_codex are both registered at the same project path, which is
-# exactly why the withdrawn herdr-agent-monitor resolve_roster_vendor()
-# design, keyed on cwd alone, could not have resolved this repo's own
-# directory). These tests exercise the new proactively_select_account(),
-# gated so it only ever fills in a credential the caller left unset -- never
-# overriding an explicit choice, never turning a working call into a failure.
+# --- Account selection (Issue #221) ---
 
-@test "GHG-P1: proactively selects the claude-code account when identity resolves cleanly" {
-  fake_whoami 'agent=agmsg_owner_claude teams=agmsg type=claude-code project=/work'
+@test "GHG-P1: selects the expected account for one Claude registration" {
+  local project registration json
+  project="$(pwd -P)"
+  registration="$(whoami_registration claude-code "$project" alice myteam)"
+  json="$(whoami_json claude-code "$project" "[$registration]")"
+  fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
   export FAKE_AUTH_TOKEN_MODE=known
   run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
   [ "$status" -eq 0 ]
@@ -300,79 +350,181 @@ EOF
   grep -q '^GH_TOKEN=tok-claude argv=pr create' "$FAKE_ENV_LOG"
 }
 
-@test "GHG-P2: proactively selects the codex account when identity resolves cleanly" {
-  fake_whoami 'agent=agmsg_owner_codex teams=agmsg type=codex project=/work'
+@test "GHG-P2: selects the expected account for one Codex registration" {
+  local project registration json
+  project="$(pwd -P)"
+  registration="$(whoami_registration codex "$project" alice myteam)"
+  json="$(whoami_json codex "$project" "[$registration]")"
+  fake_whoami "agent=alice teams=myteam type=codex project=$project" "$json"
   export FAKE_AUTH_TOKEN_MODE=known
   run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
   [ "$status" -eq 0 ]
   grep -q '^GH_TOKEN=tok-codex argv=pr create' "$FAKE_ENV_LOG"
 }
 
-@test "GHG-P3: an explicit GH_CONFIG_DIR is never overridden" {
-  fake_whoami 'agent=agmsg_owner_claude teams=agmsg type=claude-code project=/work'
+@test "GHG-P3: explicit credentials are preserved and selector is skipped" {
+  local project registration json credential value
+  project="$(pwd -P)"
+  registration="$(whoami_registration claude-code "$project" alice myteam)"
+  json="$(whoami_json claude-code "$project" "[$registration]")"
+  fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
   export FAKE_AUTH_TOKEN_MODE=known
-  run env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR=/somewhere "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
-  [ "$status" -eq 0 ]
-  run grep -q 'auth token' "$FAKE_ENV_LOG"
-  [ "$status" -ne 0 ]
+
+  for credential in GH_CONFIG_DIR GH_TOKEN GITHUB_TOKEN; do
+    case "$credential" in
+      GH_CONFIG_DIR) value=/somewhere ;;
+      GH_TOKEN) value=explicit-token ;;
+      GITHUB_TOKEN) value=explicit-token ;;
+    esac
+    : > "$FAKE_ENV_LOG"
+    run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$credential=$value" "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
+    [ "$status" -eq 0 ]
+    run grep -q 'auth token' "$FAKE_ENV_LOG"
+    [ "$status" -ne 0 ]
+  done
 }
 
-@test "GHG-P4: an ambiguous identity (multiple=true) is not proactively selected" {
-  fake_whoami 'agent=alice teams=myteam type=claude-code multiple=true project=/work'
-  export FAKE_AUTH_TOKEN_MODE=known
-  run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
-  [ "$status" -eq 0 ]
-  run grep -q 'auth token' "$FAKE_ENV_LOG"
-  [ "$status" -ne 0 ]
+@test "GHG-P4: every non-exact identity rejects all PR writes before static policy" {
+  local project registration json state operation
+  project="$(pwd -P)"
+  accepting_personal_policy
+
+  for state in not_joined multiple suggest; do
+    case "$state" in
+      not_joined)
+        json="$(whoami_json claude-code "$project" '[]')"
+        fake_whoami 'not_joined=true available_teams=myteam' "$json"
+        ;;
+      multiple)
+        registration="$(whoami_registration claude-code "$project" alice myteam)"
+        registration="$(whoami_registration claude-code "$project" bob myteam),$registration"
+        json="$(whoami_json claude-code "$project" "[$registration]")"
+        fake_whoami "agent=alice teams=myteam type=claude-code multiple=true project=$project" "$json"
+        ;;
+      suggest)
+        json="$(whoami_json claude-code "$project" '[]')"
+        fake_whoami 'suggest=true agents=alice teams=myteam type=claude-code project=/elsewhere available_teams=myteam' "$json"
+        ;;
+    esac
+
+    for operation in create comment review; do
+      case "$operation" in
+        create) assert_pr_write_rejected_without_static_fallback pr create --repo kappaseijin/fixture --title blocked ;;
+        comment) assert_pr_write_rejected_without_static_fallback pr comment 10 --repo kappaseijin/fixture --body blocked ;;
+        review) assert_pr_write_rejected_without_static_fallback pr review 10 --repo kappaseijin/fixture --approve ;;
+      esac
+    done
+  done
 }
 
-@test "GHG-P5: a not-joined identity is not proactively selected" {
-  fake_whoami 'status=not_joined available_teams=myteam'
+@test "GHG-P5: JSON registration count rejects same-name ambiguity" {
+  local project registration_one registration_two json
+  project="$(pwd -P)"
+  registration_one="$(whoami_registration codex "$project" alice myteam)"
+  registration_two="$(whoami_registration codex "$project" alice otherteam)"
+  json="$(whoami_json codex "$project" "[$registration_one,$registration_two]")"
+  fake_whoami "agent=alice teams=myteam,otherteam type=codex project=$project" "$json"
+  accepting_personal_policy
   export FAKE_AUTH_TOKEN_MODE=known
-  run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
-  [ "$status" -eq 0 ]
-  run grep -q 'auth token' "$FAKE_ENV_LOG"
-  [ "$status" -ne 0 ]
+  assert_pr_write_rejected_without_static_fallback pr create --repo kappaseijin/fixture --title blocked
 }
 
-@test "GHG-P6: a command outside the PR-account scope is not proactively selected" {
-  fake_whoami 'agent=agmsg_owner_claude teams=agmsg type=claude-code project=/work'
+@test "GHG-P6: malformed, mismatched, unsupported, and unavailable identities reject" {
+  local project registration json fixture
+  project="$(pwd -P)"
+  registration="$(whoami_registration claude-code "$project" alice myteam)"
+  accepting_personal_policy
+
+  for fixture in schema empty runtime unsupported; do
+    case "$fixture" in
+      schema) json="$(whoami_json claude-code "$project" "[$registration]" 2)" ;;
+      empty) json="$(whoami_json claude-code "$project" '[]')" ;;
+      runtime)
+        json="$(whoami_json claude-code "$project" "[$(whoami_registration codex "$project" alice myteam)]")"
+        ;;
+      unsupported)
+        json="$(whoami_json gemini "$project" "[$(whoami_registration gemini "$project" alice myteam)]")"
+        ;;
+    esac
+    fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
+    assert_pr_write_rejected_without_static_fallback pr create --repo kappaseijin/fixture --title blocked
+  done
+
+  fake_whoami "agent=alice teams=myteam type=claude-code project=$project" '{}'
+  for mode in malformed empty fail; do
+    export FAKE_WHOAMI_MODE="$mode"
+    assert_pr_write_rejected_without_static_fallback pr create --repo kappaseijin/fixture --title blocked
+  done
+
+  fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$(whoami_json claude-code "$project" "[$registration]")"
+  for mode in fail empty; do
+    export FAKE_AUTH_TOKEN_MODE="$mode"
+    assert_pr_write_rejected_without_static_fallback pr create --repo kappaseijin/fixture --title blocked
+  done
+}
+
+@test "GHG-P6b: project mismatch rejects before token lookup" {
+  local project registration json
+  project="$(pwd -P)"
+  registration="$(whoami_registration claude-code "$project" alice myteam)"
+  json="$(whoami_json claude-code "$TEST_SKILL_DIR/other" "[$registration]")"
+  fake_whoami 'agent=alice teams=myteam type=claude-code project=/elsewhere' "$json"
+  accepting_personal_policy
+  export FAKE_AUTH_TOKEN_MODE=known
+
+  assert_pr_write_rejected_without_static_fallback pr create --repo kappaseijin/fixture --title blocked
+}
+
+@test "GHG-P7: non-PR writes remain not_applicable to account selection" {
+  fake_whoami 'not_joined=true available_teams=myteam' '{not-json'
   export FAKE_AUTH_TOKEN_MODE=known
   run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" issue create --repo kappaseijin/fixture --title allowed
   [ "$status" -eq 0 ]
+  grep -Fq 'issue create --repo kappaseijin/fixture --title allowed' "$FAKE_WRITE_LOG"
   run grep -q 'auth token' "$FAKE_ENV_LOG"
   [ "$status" -ne 0 ]
 }
 
-@test "GHG-P7: a failed token lookup falls through without failing the call" {
-  fake_whoami 'agent=agmsg_owner_claude teams=agmsg type=claude-code project=/work'
-  export FAKE_AUTH_TOKEN_MODE=fail
-  run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
-  [ "$status" -eq 0 ]
-  grep -q '^GH_TOKEN= argv=pr create' "$FAKE_ENV_LOG"
-}
-
-@test "GHG-P8: dynamic Claude account selection bypasses a conflicting static policy" {
-  local policy="$TEST_SKILL_DIR/pr-account-policy.conf"
-  printf 'map=%s=creator\ncreator_login=kappaseijin4codex\n' "$(pwd -P)" > "$policy"
+@test "GHG-P8: selected Claude account bypasses a conflicting static policy" {
+  local project registration json policy
+  project="$(pwd -P)"
+  registration="$(whoami_registration claude-code "$project" alice myteam)"
+  json="$(whoami_json claude-code "$project" "[$registration]")"
+  fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
+  policy="$TEST_SKILL_DIR/pr-account-policy.conf"
+  printf 'map=%s=creator\ncreator_login=kappaseijin4codex\n' "$project" > "$policy"
   export PR_ACCOUNT_POLICY="$policy"
-  fake_whoami 'agent=agmsg_owner_claude teams=agmsg type=claude-code project=/work'
   export FAKE_AUTH_TOKEN_MODE=known
   run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
   [ "$status" -eq 0 ]
   grep -q '^GH_TOKEN=tok-claude argv=pr create' "$FAKE_ENV_LOG"
 }
 
-@test "GHG-P9: token lookup failure preserves the conflicting static policy rejection" {
-  local policy="$TEST_SKILL_DIR/pr-account-policy.conf"
-  printf 'map=%s=creator\ncreator_login=kappaseijin4codex\n' "$(pwd -P)" > "$policy"
+@test "GHG-P9: token lookup failure is unresolved, not a static-policy fallback" {
+  local project registration json policy
+  project="$(pwd -P)"
+  registration="$(whoami_registration claude-code "$project" alice myteam)"
+  json="$(whoami_json claude-code "$project" "[$registration]")"
+  fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
+  policy="$TEST_SKILL_DIR/pr-account-policy.conf"
+  printf 'map=%s=creator\ncreator_login=kappaseijin\n' "$project" > "$policy"
   export PR_ACCOUNT_POLICY="$policy"
-  fake_whoami 'agent=agmsg_owner_claude teams=agmsg type=claude-code project=/work'
   export FAKE_AUTH_TOKEN_MODE=fail
-  run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title blocked
-  [ "$status" -ne 0 ]
-  [ ! -s "$FAKE_WRITE_LOG" ]
-  grep -Fq "account policy rejected role 'creator'" <<<"$output"
+  assert_pr_write_rejected_without_static_fallback pr create --repo kappaseijin/fixture --title blocked
+}
+
+@test "GHG-P10: MSYS session and drive-letter registration spellings select" {
+  local session_project registration_project registration json
+  session_project=/c/Users/alice/agmsg
+  registration_project=C:/Users/alice/agmsg
+  registration="$(whoami_registration codex "$registration_project" alice myteam)"
+  json="$(whoami_json codex "$session_project" "[$registration]")"
+  fake_whoami "agent=alice teams=myteam type=codex project=$session_project" "$json"
+  export FAKE_AUTH_TOKEN_MODE=known
+
+  run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
+  [ "$status" -eq 0 ]
+  grep -q '^GH_TOKEN=tok-codex argv=pr create' "$FAKE_ENV_LOG"
 }
 
 @test "GHG-09: parses the equals form of --repo" {

@@ -759,41 +759,113 @@ enforce_optional_pr_account_guard() {
 # This only removes the "remember to type GH_CONFIG_DIR=..." step for the
 # common case where the caller hasn't already chosen an account.
 #
-# Every failure mode (whoami.sh missing or ambiguous/absent identity, no
-# matching gh-logged-in account) returns 1 so the caller can preserve the
-# static policy fallback. This never overrides an explicit caller-set
-# credential or turns a currently-working call into a failing one.
+# The caller distinguishes three outcomes: selected, not_applicable, and
+# unresolved. An unresolved PR write must stop before either the static policy
+# or the real gh is reached; otherwise an accepting cwd policy can turn an
+# ambiguous identity into a personal-account write.
 proactively_select_account() {
   case "$SUBCOMMAND" in
     'pr create'|'pr comment'|'pr review') ;;
-    *) return 1 ;;
+    *)
+      ACCOUNT_SELECTION_OUTCOME=not_applicable
+      return 0
+      ;;
   esac
-  [ -z "${GH_CONFIG_DIR:-}" ] || return 1
-  { [ -z "${GH_TOKEN:-}" ] && [ -z "${GITHUB_TOKEN:-}" ]; } || return 1
+
+  if [ -n "${GH_CONFIG_DIR:-}" ] || [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
+    ACCOUNT_SELECTION_OUTCOME=not_applicable
+    return 0
+  fi
+
   local whoami_script="${AGMSG_WHOAMI_SCRIPT:-$HOME/.agents/skills/agmsg/scripts/whoami.sh}"
-  [ -x "$whoami_script" ] || return 1
-  local out type expected token
-  out="$(bash "$whoami_script" "$CURRENT_CWD" 2>/dev/null)" || return 1
-  case "$out" in
-    agent=*' teams='*' type='*) ;;
-    *) return 1 ;;
-  esac
-  case "$out" in *' multiple=true'*) return 1 ;; esac
-  type="${out#*type=}"; type="${type%% *}"
-  case "$type" in
+  [ -x "$whoami_script" ] || return 0
+
+  local guard_dir skill_dir
+  local out json_sql json_valid session_project registration_project
+  local normalized_session_project normalized_registration_project
+  local selected_type expected token
+  if ! out="$(bash "$whoami_script" "$CURRENT_CWD" --format json 2>/dev/null)"; then
+    return 0
+  fi
+
+  guard_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || return 0
+  skill_dir="$(cd "$guard_dir/../.." && pwd)" || return 0
+  export SKILL_DIR="$skill_dir"
+  # Use the same path spelling rule as roster matching. On Git Bash, whoami
+  # may report the session in MSYS form while join.sh stores the registration
+  # in drive-letter form. The guard keeps the exact project check, but compares
+  # the two logical paths in their canonical spelling.
+  # shellcheck disable=SC1091
+  if ! . "$skill_dir/scripts/lib/resolve-project.sh"; then
+    return 0
+  fi
+
+  # Keep the JSON as data inside a SQLite string literal. Doubling single
+  # quotes is the SQLite escaping rule and prevents fixture/user text from
+  # changing the validation query.
+  json_sql="$(printf '%s' "$out" | sed "s/'/''/g")"
+  if ! json_valid="$(sqlite3 -batch -noheader :memory: \
+    "SELECT json_valid('$json_sql');" 2>/dev/null)"; then
+    return 0
+  fi
+  [ "$json_valid" = 1 ] || return 0
+
+  if ! session_project="$(sqlite3 -batch -noheader :memory: \
+    "SELECT json_extract('$json_sql', '\$.session.project');" 2>/dev/null)"; then
+    return 0
+  fi
+  if ! registration_project="$(sqlite3 -batch -noheader :memory: \
+    "SELECT json_extract('$json_sql', '\$.registrations[0].registration.project');" 2>/dev/null)"; then
+    return 0
+  fi
+  normalized_session_project="$(agmsg_normalize_project_path "$session_project")" || return 0
+  normalized_registration_project="$(agmsg_normalize_project_path "$registration_project")" || return 0
+  [ "$normalized_session_project" = "$normalized_registration_project" ] || return 0
+
+  if ! selected_type="$(sqlite3 -batch -noheader :memory: \
+    "WITH input(json) AS (SELECT '$json_sql')
+     SELECT CASE
+       WHEN json_type(json, '\$.schemaVersion') = 'integer'
+        AND json_extract(json, '\$.schemaVersion') = 1
+        AND json_type(json, '\$.runtime') = 'text'
+        AND json_extract(json, '\$.runtime') IN ('claude-code', 'codex')
+        AND json_type(json, '\$.session.project') = 'text'
+        AND length(json_extract(json, '\$.session.project')) > 0
+        AND json_type(json, '\$.registrations') = 'array'
+        AND json_array_length(json, '\$.registrations') = 1
+        AND json_type(json, '\$.registrations[0].registration.type') = 'text'
+        AND length(json_extract(json, '\$.registrations[0].registration.type')) > 0
+        AND json_type(json, '\$.registrations[0].registration.project') = 'text'
+        AND length(json_extract(json, '\$.registrations[0].registration.project')) > 0
+        AND json_extract(json, '\$.runtime') = json_extract(json, '\$.registrations[0].registration.type')
+       THEN json_extract(json, '\$.runtime')
+       ELSE ''
+     END
+     FROM input;" 2>/dev/null)"; then
+    return 0
+  fi
+  [ -n "$selected_type" ] || return 0
+
+  case "$selected_type" in
     claude-code) expected=kappaseijin4claude ;;
     codex) expected=kappaseijin4codex ;;
-    *) return 1 ;;
+    *) return 0 ;;
   esac
-  token="$("$REAL_GH" auth token --user "$expected" 2>/dev/null)" || return 1
-  [ -n "$token" ] || return 1
+  if ! token="$("$REAL_GH" auth token --user "$expected" 2>/dev/null)"; then
+    return 0
+  fi
+  [ -n "$token" ] || return 0
   export GH_TOKEN="$token"
+  ACCOUNT_SELECTION_OUTCOME=selected
   return 0
 }
 
-if proactively_select_account; then
-  :
-else
-  enforce_optional_pr_account_guard
-fi
+ACCOUNT_SELECTION_OUTCOME=unresolved
+proactively_select_account
+case "$ACCOUNT_SELECTION_OUTCOME" in
+  selected) ;;
+  not_applicable) enforce_optional_pr_account_guard ;;
+  unresolved) die 'cannot resolve an unambiguous agmsg account for pull-request write' ;;
+  *) die 'invalid account-selection outcome' ;;
+esac
 exec "$REAL_GH" "$@"
