@@ -213,6 +213,49 @@ fs.writeFileSync(process.env.G4_PACK_PATH, JSON.stringify(pack));
 NODE
 }
 
+write_all_blocked_predicate_pack() {
+  local path="$1"
+  write_g4_pack "$path" two
+  G4_PACK_PATH="$path" node <<'NODE'
+const crypto = require("crypto");
+const fs = require("fs");
+const pack = JSON.parse(fs.readFileSync(process.env.G4_PACK_PATH, "utf8"));
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    const result = {};
+    for (const key of Object.keys(value).sort()) result[key] = canonicalize(value[key]);
+    return result;
+  }
+  return value;
+}
+function digest(value) {
+  return "sha256:" + crypto.createHash("sha256")
+    .update(JSON.stringify(canonicalize(value)), "utf8").digest("hex");
+}
+function refreshEntry(entry) {
+  const basisInput = Object.assign({}, entry);
+  delete basisInput.basis;
+  delete basisInput.entryDigest;
+  entry.basis.contentDigest = digest(basisInput);
+  const entryInput = Object.assign({}, entry);
+  delete entryInput.entryDigest;
+  entry.entryDigest = digest(entryInput);
+}
+
+for (const entry of pack.entries) {
+  entry.state = "blocked";
+  entry.blocker = {
+    reasonCode: "not_before_gate",
+    releasePredicate: {kind: "not_before", at: "2099-01-01T00:00:00+09:00"},
+  };
+  refreshEntry(entry);
+}
+fs.writeFileSync(process.env.G4_PACK_PATH, JSON.stringify(pack));
+NODE
+}
+
 mutate_g4_pack() {
   local path="$1"
   local mutation="$2"

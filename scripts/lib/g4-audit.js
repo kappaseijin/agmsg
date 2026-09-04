@@ -437,7 +437,8 @@ function runAudit(command, team, pack, roster) {
   const now = parseNow();
   const scopeAudits = [];
   const coverageMap = new Map();
-  const reasons = [];
+  const fatalReasons = [];
+  const stateSignals = [];
 
   for (const scope of contract.scopes) {
     try {
@@ -449,7 +450,7 @@ function runAudit(command, team, pack, roster) {
       for (const source of audit.coverage) coverageMap.set(referenceKey(source.repository, source.number), source);
     } catch (error) {
       if (error instanceof LiveSourceError) {
-        reasons.push(Object.assign({code: error.code, scopeId: scope.id}, error.details));
+        fatalReasons.push(Object.assign({code: error.code, scopeId: scope.id}, error.details));
       } else {
         throw error;
       }
@@ -472,7 +473,7 @@ function runAudit(command, team, pack, roster) {
     .filter((info) => !coverageKeys.has(info.sourceKey))
     .map((info) => ({repository: info.entry.source.repository, number: info.entry.source.number}));
   if (missing.length > 0 || extra.length > 0) {
-    reasons.push({code: "coverage_mismatch", missing, extra});
+    fatalReasons.push({code: "coverage_mismatch", missing, extra});
   }
 
   const entries = [];
@@ -487,16 +488,18 @@ function runAudit(command, team, pack, roster) {
     if (output.state === "ready") readyCount += 1;
     if (output.state === "blocked") blockedCount += 1;
     if (output.state === "unknown") unknownCount += 1;
-    if (info.entry.state === "unknown") reasons.push({code: "unknown_entry", source: info.sourceKey});
-    if (observation && observation.status === "false") reasons.push({code: "blocked_predicate_false", source: info.sourceKey});
-    if (observation && observation.status === "unknown") reasons.push({code: "blocked_predicate_unknown", source: info.sourceKey, reason: observation.reason || "predicate_source_unavailable"});
+    if (info.entry.state === "unknown") fatalReasons.push({code: "unknown_entry", source: info.sourceKey});
+    if (observation && observation.status === "false") stateSignals.push({code: "blocked_predicate_false", source: info.sourceKey});
+    if (observation && observation.status === "true") stateSignals.push({code: "transition_required", source: info.sourceKey});
+    if (observation && observation.status === "unknown") fatalReasons.push({code: "blocked_predicate_unknown", source: info.sourceKey, reason: observation.reason || "predicate_source_unavailable"});
   }
 
   const coverageDigest = sourceListDigest(coverage);
-  const sortedReasons = sortReasons(reasons);
+  const sortedReasons = sortReasons(fatalReasons.concat(stateSignals));
   let status = "complete";
-  if (sortedReasons.length > 0) status = "unknown";
-  if (sortedReasons.length === 0 && coverage.length === 0 && entries.length === 0) status = "quiescent";
+  if (fatalReasons.length > 0) status = "unknown";
+  else if (stateSignals.some((reason) => reason.code === "transition_required")) status = "transition_required";
+  else if (readyCount === 0) status = "quiescent";
   const ready = status === "unknown" ? [] : entries.filter((entry) => entry.state === "ready").map((entry) => ({
     source: entry.source,
     ownerSeat: entry.ownerSeat,

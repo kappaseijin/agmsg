@@ -861,15 +861,19 @@ resulting sorted `(repository, number)` set with `entries`. The result includes
 
 | Status | Meaning | `ready` |
 | --- | --- | --- |
-| `complete` | Live scope reads completed and entry coverage matches exactly. | Valid `ready` entries only. |
-| `quiescent` | All declared scopes returned no matching open Issues and `entries` is empty. | Empty. |
-| `unknown` | A source/pagination error, duplicate, coverage mismatch, unknown entry, or unresolved blocker predicate prevents a safe result. | Empty; do not claim or dispatch. |
+| `complete` | Live scope reads completed, entry coverage matches exactly, no blocker predicate is true, and at least one declared entry is `ready`. A false blocker predicate may remain as a state signal. | Declared `ready` entries only. |
+| `transition_required` | Live scope reads and entry coverage are complete, and one or more declared `blocked` entries have a true release predicate. The entry remains `blocked`; an exact manager must submit the next pack revision through `g4-transition`. | Declared `ready` entries only; never the blocked transition targets. |
+| `quiescent` | Evidence coverage is complete, no blocker predicate is true, and no declared entry is `ready`. This includes an empty scope/entry set and a fully covered set of blocked entries whose predicates are all false. | Empty. |
+| `unknown` | Fatal evidence is unavailable or contradictory: source/pagination failure, duplicate, coverage mismatch, unknown entry, or unresolved blocker predicate. | Empty; do not claim or dispatch. |
 
 `classificationBasis` also reports `scopeCount`, `coverageCount`,
 `entryCount`, `readyCount`, `blockedCount`, `unknownCount`, `coverageDigest`,
-and a stable `reasons` array. A false blocker predicate remains a blocked
-entry but makes the aggregate audit `unknown`; a true predicate is recorded as
-a fresh observation and does not itself change the entry.
+and a stable `reasons` array. `blocked_predicate_false` and
+`transition_required` are state signals, not fatal evidence: a false predicate
+does not by itself make the aggregate `unknown`, while a true predicate makes
+the aggregate `transition_required`. A true predicate is recorded as a fresh
+observation and does not itself change the entry. Only fatal evidence failures
+make the aggregate `unknown` and clear `ready`.
 
 Malformed packs return exit code `2` with `schema error:`. GitHub transport,
 GraphQL, pagination, or coverage failures return a valid `unknown` JSON result
@@ -966,16 +970,22 @@ The command accepts exactly the team, G4 state pack, source repository, Issue
 number, expected current revision, manager seat, and non-empty evidence. The
 submitted entry must be `revision: expected-revision + 1`. A release changes
 `blocked` to `ready` only when the current blocker predicate is freshly true,
-the audit is complete, and basis references are unchanged. A re-block changes
-`ready` to `blocked` only when the target blocker predicate is freshly false,
-the audit is re-block safe, and the current basis references are a strict
-prefix of the target references. The source, owner seat, and work kinds are
-immutable in both directions. Stale, skipped, unsupported, true or unknown
-re-block predicates, and immutable-field changes are rejected without mutation.
+the audit has status `complete`, and basis references are unchanged. A re-block
+changes `ready` to `blocked` only when the target blocker predicate is freshly
+false, the audit is re-block safe, and the current basis references are a strict
+prefix of the target references. Re-block safety accepts the existing
+`complete`/no-reason path and the narrow single-target
+`blocked_predicate_false` signal in `complete` or `quiescent`; it rejects
+`transition_required`, `unknown`, a different source, or multiple signals. The
+source, owner seat, and work kinds are immutable in both directions. Stale,
+skipped, unsupported, true or unknown re-block predicates, and immutable-field
+changes are rejected without mutation.
 
 Each transition performs a fresh scope audit and directly re-evaluates the
-relevant predicate. A false, true, unknown, unavailable, or incomplete
-observation is fail-closed for the direction where it is not permitted. A
+relevant predicate. A release requires audit status `complete` and a true
+predicate. A re-block requires a fresh false predicate plus the narrow
+re-block-safe audit described above; a `transition_required`, unknown,
+unavailable, or incomplete observation is rejected without mutation. A
 successful transition updates exactly one `team_work_g4_current` row in a
 local `BEGIN IMMEDIATE` transaction; the append-only trigger records the next
 revision. Successful JSON contains `transitionKind: "release"` or
