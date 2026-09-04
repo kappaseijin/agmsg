@@ -64,6 +64,14 @@ if [ -z "$TEAMS" ]; then
   exit 2
 fi
 
+if agmsg_storage_ensure_initialized; then
+  :
+else
+  _runtime_init_status=$?
+  printf 'status=unavailable reason=runtime_store_initialization_failed\n'
+  exit 3
+fi
+
 # Attempt claim for each matching team. First failure aborts and reports the
 # offending team — callers should resolve that before retrying. Releases
 # already-claimed pairs in this same attempt so partial state doesn't leak.

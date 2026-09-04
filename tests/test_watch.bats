@@ -148,6 +148,40 @@ _team_store() {
   [ "$output" = "$TEST_SKILL_DIR/db/messages.db" ]
 }
 
+@test "watch: initializes a fresh runtime store once before subscription claim" {
+  skip_on_windows "watcher process management under Git Bash (#223)"
+  local fresh_store="$BATS_TEST_TMPDIR/fresh-runtime-store"
+  local init_count="$BATS_TEST_TMPDIR/init-db-count"
+  local real_init="$SKILL_DIR/scripts/internal/init-db.real.sh"
+  local ready="$TEST_SKILL_DIR/run/ready.team__alice"
+  local out="$BATS_TEST_TMPDIR/fresh-watch.out"
+  printf '0\n' > "$init_count"
+  mv "$SKILL_DIR/scripts/internal/init-db.sh" "$real_init"
+  cat > "$SKILL_DIR/scripts/internal/init-db.sh" <<SH
+#!/usr/bin/env bash
+count=0
+[ -s "$init_count" ] && count="\$(cat "$init_count")"
+printf '%s\n' \$((count + 1)) > "$init_count"
+exec bash "$real_init" "\$@"
+SH
+  chmod +x "$SKILL_DIR/scripts/internal/init-db.sh"
+  export AGMSG_STORAGE_PATH="$fresh_store"
+
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" watch-fresh "$PROJ" claude-code alice \
+    >"$out" 2>"$out.err" 3>&- 4>&- &
+  local watcher=$!
+  if ! wait_for_file "$ready"; then
+    _stop_watcher "$watcher"
+    cat "$out.err" >&2
+    false
+  fi
+  sleep 1
+  _stop_watcher "$watcher"
+
+  [ "$(cat "$init_count")" -eq 1 ]
+  [ "$(sqlite3 "$fresh_store/messages.db" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='locks';")" -eq 1 ]
+}
+
 _wait_for_file() {
   local file="$1" i
   for i in $(seq 1 100); do

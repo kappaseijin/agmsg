@@ -29,6 +29,16 @@ use_utf8_locale() {
   export LANG="$locale_name" LC_ALL="$locale_name"
 }
 
+# The storeless watch diagnostics belong to the per-team partition: the shared
+# partition intentionally points at the runtime DB, which the watcher now
+# bootstraps before resolving subscriptions. Keep these byte-cap fixtures on a
+# genuinely independent team store so the no-store observation remains real.
+use_per_team_partition() {
+  local team="$1" cfg="$TEST_SKILL_DIR/teams/$1/config.json" updated
+  updated="$(sqlite_mem "SELECT json_set(CAST(readfile('$(rf "$cfg")') AS TEXT), '\$.drivers.partition', 'per-team');")"
+  printf '%s' "$updated" > "$cfg"
+}
+
 # Count agmsg-owned entries in a hooks-event array.
 agmsg_entries() {
   local file="$1"
@@ -3548,6 +3558,7 @@ JSON
   local log db record chars bytes pad cap live
   use_utf8_locale
   bash "$SCRIPTS/join.sh" "境界検査のためのとても長い日本語チーム名" alice claude-code "$TEST_PROJECT" >/dev/null
+  use_per_team_partition "境界検査のためのとても長い日本語チーム名"
   db="$(cd "$TEST_SKILL_DIR" && bash -c '. scripts/lib/storage.sh; agmsg_db_path 境界検査のためのとても長い日本語チーム名')"
   rm -f "$db"
   log="$TEST_SKILL_DIR/run/watch.mb-session.log"
@@ -3600,6 +3611,7 @@ JSON
   local log db record chars bytes cap pad live shim wpid waited
   use_utf8_locale
   bash "$SCRIPTS/join.sh" "境界検査のためのとても長い日本語チーム名" alice claude-code "$TEST_PROJECT" >/dev/null
+  use_per_team_partition "境界検査のためのとても長い日本語チーム名"
   db="$(cd "$TEST_SKILL_DIR" && bash -c '. scripts/lib/storage.sh; agmsg_db_path 境界検査のためのとても長い日本語チーム名')"
   rm -f "$db"
   log="$TEST_SKILL_DIR/run/watch.nowc-session.log"
