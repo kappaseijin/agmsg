@@ -502,6 +502,20 @@ assert_pr_write_rejected_without_static_fallback() {
   assert_pr_write_rejected_without_static_fallback pr create --repo kappaseijin/fixture --title blocked
 }
 
+@test "GHG-P10: MSYS session and drive-letter registration spellings select" {
+  local session_project registration_project registration json
+  session_project=/c/Users/alice/agmsg
+  registration_project=C:/Users/alice/agmsg
+  registration="$(whoami_registration codex "$registration_project" alice myteam)"
+  json="$(whoami_json codex "$session_project" "[$registration]")"
+  fake_whoami "agent=alice teams=myteam type=codex project=$session_project" "$json"
+  export FAKE_AUTH_TOKEN_MODE=known
+
+  run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
+  [ "$status" -eq 0 ]
+  grep -q '^GH_TOKEN=tok-codex argv=pr create' "$FAKE_ENV_LOG"
+}
+
 @test "GHG-09: parses the equals form of --repo" {
   assert_rejected issue create --repo=thirdparty/fixture --title "blocked"
 }

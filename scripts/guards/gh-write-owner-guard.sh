@@ -780,8 +780,23 @@ proactively_select_account() {
   local whoami_script="${AGMSG_WHOAMI_SCRIPT:-$HOME/.agents/skills/agmsg/scripts/whoami.sh}"
   [ -x "$whoami_script" ] || return 0
 
-  local out json_sql json_valid selected_type expected token
+  local guard_dir skill_dir
+  local out json_sql json_valid session_project registration_project
+  local normalized_session_project normalized_registration_project
+  local selected_type expected token
   if ! out="$(bash "$whoami_script" "$CURRENT_CWD" --format json 2>/dev/null)"; then
+    return 0
+  fi
+
+  guard_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || return 0
+  skill_dir="$(cd "$guard_dir/../.." && pwd)" || return 0
+  export SKILL_DIR="$skill_dir"
+  # Use the same path spelling rule as roster matching. On Git Bash, whoami
+  # may report the session in MSYS form while join.sh stores the registration
+  # in drive-letter form. The guard keeps the exact project check, but compares
+  # the two logical paths in their canonical spelling.
+  # shellcheck disable=SC1091
+  if ! . "$skill_dir/scripts/lib/resolve-project.sh"; then
     return 0
   fi
 
@@ -794,6 +809,18 @@ proactively_select_account() {
     return 0
   fi
   [ "$json_valid" = 1 ] || return 0
+
+  if ! session_project="$(sqlite3 -batch -noheader :memory: \
+    "SELECT json_extract('$json_sql', '\$.session.project');" 2>/dev/null)"; then
+    return 0
+  fi
+  if ! registration_project="$(sqlite3 -batch -noheader :memory: \
+    "SELECT json_extract('$json_sql', '\$.registrations[0].registration.project');" 2>/dev/null)"; then
+    return 0
+  fi
+  normalized_session_project="$(agmsg_normalize_project_path "$session_project")" || return 0
+  normalized_registration_project="$(agmsg_normalize_project_path "$registration_project")" || return 0
+  [ "$normalized_session_project" = "$normalized_registration_project" ] || return 0
 
   if ! selected_type="$(sqlite3 -batch -noheader :memory: \
     "WITH input(json) AS (SELECT '$json_sql')
@@ -811,7 +838,6 @@ proactively_select_account() {
         AND json_type(json, '\$.registrations[0].registration.project') = 'text'
         AND length(json_extract(json, '\$.registrations[0].registration.project')) > 0
         AND json_extract(json, '\$.runtime') = json_extract(json, '\$.registrations[0].registration.type')
-        AND json_extract(json, '\$.session.project') = json_extract(json, '\$.registrations[0].registration.project')
        THEN json_extract(json, '\$.runtime')
        ELSE ''
      END
