@@ -189,7 +189,7 @@ SH
 
   run bash "$SKILL_DIR/scripts/actas-claim.sh" /tmp/p1 claude-code alice "sid-me"
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "status=ok" ]]
+  printf '%s\n' "$output" | grep -Fq 'status=ok'
   [ "$(cat "$init_count")" -eq 1 ]
   [ -f "$fresh_store/messages.db" ]
   [ "$(sqlite3 "$fresh_store/messages.db" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='locks';")" -eq 1 ]

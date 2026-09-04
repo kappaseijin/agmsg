@@ -531,3 +531,30 @@ assert_output_contains() {
   run actas_lock_state "T" "alice" "sid-me"
   [ "$output" = "free" ]
 }
+
+@test "state: free when the lock disappears during an owner read" {
+  local lock_path
+  lock_path="$(actas_lock_path "T" "alice")"
+  printf '%s\n' sid-owner > "$lock_path"
+
+  # Model the watcher dropping the role between the state probe and owner read.
+  # The file is gone, so there is no unknown lock state left to protect.
+  actas_lock_owner() {
+    rm -f "$lock_path"
+    return 1
+  }
+
+  run actas_lock_state "T" "alice" "sid-me"
+  [ "$status" -eq 0 ]
+  [ "$output" = "free" ]
+}
+
+@test "state: unknown when a present lock has no readable owner" {
+  local lock_path
+  lock_path="$(actas_lock_path "T" "alice")"
+  : > "$lock_path"
+
+  run actas_lock_state "T" "alice" "sid-me"
+  [ "$status" -ne 0 ]
+  [ "$output" = "unknown" ]
+}

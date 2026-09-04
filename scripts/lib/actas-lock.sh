@@ -538,18 +538,25 @@ actas_lock_state() {
   local team="$1" agent="$2" sid="$3"
   local lock owner
   lock="$(actas_lock_path "$team" "$agent")"
-  if [ -f "$lock" ]; then
-    if ! owner="$(actas_lock_owner "$team" "$agent")"; then
-      printf 'unknown\n'
-      return 1
-    fi
-    # An existing lock with no readable owner is not permission to clean up.
-    if [ -z "$owner" ]; then
-      printf 'unknown\n'
-      return 1
-    fi
+  if owner="$(actas_lock_owner "$team" "$agent")"; then
+    :
+  elif [ -f "$lock" ]; then
+    # An unreadable lock that is still present is not permission to clean up.
+    printf 'unknown\n'
+    return 1
   else
+    # The watcher can remove the lock after actas_lock_owner's initial
+    # existence check but before its read. A lock that is gone now is a real
+    # free state, not an unreadable owner; treating that narrow race as unknown
+    # makes graceful despawn fail exactly while its target is tearing down.
     owner=""
+  fi
+  # An empty owner in a lock that still exists is likewise unreadable. The
+  # second existence check preserves fail-closed behavior for that case while
+  # accepting a lock removed during the read above.
+  if [ -z "$owner" ] && [ -f "$lock" ]; then
+    printf 'unknown\n'
+    return 1
   fi
   if [ -z "$owner" ]; then
     echo "free"; return 0
