@@ -27,13 +27,13 @@ watcher の `actas_lock_gate_try_acquire()` は observed owner PID が confirmed
 
 これは touched `actas-delivery:` row の lazy GC であり、全 locks table の走査、dead PID の発生経路追跡、filesystem の `actas_lock_gc_stale()` の変更は行わない。
 
-`cannot commit - no transaction is active` は再現されていないため、原因特定・再現・受入条件に含めない。
+`cannot commit - no transaction is active` は Issue #223 のスコープ外である。一部条件下では再現するが、原因特定・再現・受入条件は別途扱う。
 
 ## 問題と一次資料
 
 Issue #223 の GitHub breaker comment は、delivery gate が各取得で storage schema migration と `init-db.sh` を実行し、shared `messages.db` に二つの `BEGIN IMMEDIATE` を追加していると記録する。
 
-current source はこの記録と一致する。
+current source では、`agmsg_storage_ensure_initialized()` が両スクリプトを毎回起動する一方、通常運用では migration 側が両 legacy table 不在の `table_state=0|0` で `BEGIN IMMEDIATE` より前に終了する。したがって通常時に実行されるのは `init-db.sh` 側の `BEGIN IMMEDIATE` のみであり、migration 側の transaction は legacy table が実在する移行期だけ実行される。
 
 | value | cutoff | source | command |
 | --- | --- | --- | --- |
@@ -57,8 +57,10 @@ flowchart TD
   W[watch poll or startup claim] --> G[actas_lock_gate_try_acquire or acquire]
   G --> R[agmsg_runtime_lock_acquire]
   R --> I[agmsg_storage_ensure_initialized]
-  I --> M[migrate: BEGIN IMMEDIATE]
-  M --> D[init-db: BEGIN IMMEDIATE]
+  I --> Q{legacy tables exist?}
+  Q -->|yes| M[migrate: BEGIN IMMEDIATE]
+  Q -->|no| D[init-db: BEGIN IMMEDIATE]
+  M --> D
   D --> L[gate lock transaction]
   L --> X[40ms or 100ms budget is already lost]
 
