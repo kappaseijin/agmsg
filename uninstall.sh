@@ -9,7 +9,11 @@ set -euo pipefail
 #   ./uninstall.sh --yes              # Remove all without confirmation
 #   ./uninstall.sh --keep-data        # Remove skill but keep DB and teams
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AGENTS_DIR="$HOME/.agents"
+
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/scripts/lib/startup-path-resolver.sh"
 
 AUTO_YES=false
 KEEP_DATA=false
@@ -77,46 +81,69 @@ agmsg_gh_owner_guard_path_prepare_remove() {
 }
 
 remove_gh_owner_guard_path_activation() {
-  local file state tmp i
+  local file state tmp i j target target_index
   local -a rc_files=("$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile")
-  local -a rc_temps=()
+  local -a rc_targets=() unique_targets=() unique_temps=()
 
-  # Inspect every candidate before changing any of them. A malformed marker is
-  # an ambiguous ownership boundary; stop before removing the helper or the
-  # launcher, and leave all startup files byte-for-byte unchanged.
+  # Resolve every existing configured path before changing any of them. A
+  # malformed marker or an unsafe symlink target is an ambiguous ownership
+  # boundary; stop before removing the helper or the launcher.
   for file in "${rc_files[@]}"; do
     if [ -e "$file" ] || [ -L "$file" ]; then
-      if [ -L "$file" ] || [ ! -f "$file" ]; then
-        echo "  ! Refusing to modify non-regular startup file $file" >&2
+      if ! target="$(agmsg_resolve_startup_path "$file")"; then
+        echo "  ! Refusing to modify unresolved startup file $file" >&2
         return 1
       fi
-      state="$(agmsg_gh_owner_guard_path_marker_state "$file")"
-      case "$state" in
-        none) rc_temps+=("") ;;
-        valid)
-          if ! tmp="$(agmsg_gh_owner_guard_path_prepare_remove "$file")"; then
-            for tmp in "${rc_temps[@]}"; do [ -n "$tmp" ] && rm -f "$tmp"; done
-            echo "  ! Could not prepare startup file $file" >&2
-            return 1
-          fi
-          rc_temps+=("$tmp")
-          ;;
-        *)
-          for tmp in "${rc_temps[@]}"; do [ -n "$tmp" ] && rm -f "$tmp"; done
-          echo "  ! Refusing to modify startup file with malformed agmsg marker: $file" >&2
-          return 1
-          ;;
-      esac
+      rc_targets+=("$target")
     else
-      rc_temps+=("")
+      rc_targets+=("")
     fi
   done
 
-  for i in "${!rc_files[@]}"; do
-    tmp="${rc_temps[i]}"
+  # Several configured startup paths may resolve to one physical target. Read
+  # and prepare that target once so uninstall preserves every symlink and does
+  # not perform a second rename through another configured path.
+  for target in "${rc_targets[@]}"; do
+    [ -n "$target" ] || continue
+    target_index=-1
+    for j in "${!unique_targets[@]}"; do
+      if [ "${unique_targets[j]}" = "$target" ]; then
+        target_index="$j"
+        break
+      fi
+    done
+    [ "$target_index" -lt 0 ] || continue
+
+    state="$(agmsg_gh_owner_guard_path_marker_state "$target")"
+    case "$state" in
+      none)
+        unique_targets+=("$target")
+        unique_temps+=("")
+        ;;
+      valid)
+        if ! tmp="$(agmsg_gh_owner_guard_path_prepare_remove "$target")"; then
+          for tmp in "${unique_temps[@]}"; do [ -n "$tmp" ] && rm -f "$tmp"; done
+          echo "  ! Could not prepare startup target $target" >&2
+          return 1
+        fi
+        unique_targets+=("$target")
+        unique_temps+=("$tmp")
+        ;;
+      *)
+        for tmp in "${unique_temps[@]}"; do [ -n "$tmp" ] && rm -f "$tmp"; done
+        echo "  ! Refusing to modify startup target with malformed agmsg marker: $target" >&2
+        return 1
+        ;;
+    esac
+  done
+
+  for i in "${!unique_targets[@]}"; do
+    tmp="${unique_temps[i]}"
     [ -n "$tmp" ] || continue
-    if ! mv -f "$tmp" "${rc_files[i]}"; then
-      echo "  ! Could not remove startup integration from ${rc_files[i]}" >&2
+    target="${unique_targets[i]}"
+    if ! mv -f "$tmp" "$target"; then
+      echo "  ! Could not remove startup integration from $target" >&2
+      for tmp in "${unique_temps[@]}"; do [ -n "$tmp" ] && rm -f "$tmp"; done
       return 1
     fi
   done

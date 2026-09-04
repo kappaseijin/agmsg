@@ -28,6 +28,8 @@ AGENTS_DIR="$HOME/.agents"
 . "$SCRIPT_DIR/scripts/lib/type-registry.sh"
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/scripts/lib/safe-dir-sync.sh"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/scripts/lib/startup-path-resolver.sh"
 
 # Resolve a provenance version for the source being installed, so an installed
 # copy is uniquely identifiable even between tagged releases (the canonical
@@ -394,8 +396,9 @@ agmsg_gh_owner_guard_path_prepare_rc_temp() {
 install_gh_owner_guard_path_activation() {
   local helper_source="$SKILL_DIR/scripts/guards/gh-owner-guard-path.sh"
   local helper_target="$AGENTS_DIR/bin/gh-owner-guard-path.sh"
-  local helper_tmp file state tmp i
-  local -a rc_files=() rc_states=() rc_temps=()
+  local helper_tmp file state tmp i j target target_index
+  local -a rc_files=() rc_targets=()
+  local -a unique_targets=() unique_states=() unique_temps=()
 
   if ! is_agmsg_gh_owner_guard; then
     echo "  ! gh owner guard launcher was not verified; refusing PATH activation" >&2
@@ -413,19 +416,41 @@ install_gh_owner_guard_path_activation() {
 
   rc_files=("$HOME/.zshrc" "$HOME/.bashrc" "$(agmsg_gh_owner_guard_path_login_file)")
   for file in "${rc_files[@]}"; do
+    if ! target="$(agmsg_resolve_startup_path "$file")"; then
+      echo "  ! Refusing to modify unresolved startup file $file" >&2
+      return 1
+    fi
+    rc_targets+=("$target")
+  done
+
+  # Resolve and validate every distinct physical target before creating the
+  # helper or any startup-file temp. Multiple configured paths may name one
+  # target; it must receive one block and one rename only.
+  for target in "${rc_targets[@]}"; do
+    target_index=-1
+    for j in "${!unique_targets[@]}"; do
+      if [ "${unique_targets[j]}" = "$target" ]; then
+        target_index="$j"
+        break
+      fi
+    done
+    [ "$target_index" -lt 0 ] || continue
+
     state=none
-    if [ -e "$file" ] || [ -L "$file" ]; then
-      if [ -L "$file" ] || [ ! -f "$file" ]; then
-        echo "  ! Refusing to modify non-regular startup file $file" >&2
+    if [ -e "$target" ] || [ -L "$target" ]; then
+      if [ -L "$target" ] || [ ! -f "$target" ]; then
+        echo "  ! Refusing to modify non-regular startup target $target" >&2
         return 1
       fi
-      state="$(agmsg_gh_owner_guard_path_marker_state "$file")"
+      state="$(agmsg_gh_owner_guard_path_marker_state "$target")"
       if [ "$state" = malformed ]; then
-        echo "  ! Refusing to modify startup file with malformed agmsg marker: $file" >&2
+        echo "  ! Refusing to modify startup target with malformed agmsg marker: $target" >&2
         return 1
       fi
     fi
-    rc_states+=("$state")
+    unique_targets+=("$target")
+    unique_states+=("$state")
+    unique_temps+=("")
   done
 
   mkdir -p "$AGENTS_DIR/bin"
@@ -435,33 +460,35 @@ install_gh_owner_guard_path_activation() {
     return 1
   fi
 
-  for i in "${!rc_files[@]}"; do
-    file="${rc_files[i]}"
-    state="${rc_states[i]}"
-    if ! tmp="$(agmsg_gh_owner_guard_path_prepare_rc_temp "$file" "$state")"; then
+  for i in "${!unique_targets[@]}"; do
+    target="${unique_targets[i]}"
+    state="${unique_states[i]}"
+    if ! tmp="$(agmsg_gh_owner_guard_path_prepare_rc_temp "$target" "$state")"; then
       rm -f "$helper_tmp"
-      for tmp in "${rc_temps[@]}"; do [ -n "$tmp" ] && rm -f "$tmp"; done
-      echo "  ! Could not prepare startup file $file" >&2
+      for tmp in "${unique_temps[@]}"; do [ -n "$tmp" ] && rm -f "$tmp"; done
+      echo "  ! Could not prepare startup target $target" >&2
       return 1
     fi
-    if [ -f "$file" ] && cmp -s "$tmp" "$file"; then
+    if [ -f "$target" ] && cmp -s "$tmp" "$target"; then
       rm -f "$tmp"
-      rc_temps+=("")
+      unique_temps[i]=""
     else
-      rc_temps+=("$tmp")
+      unique_temps[i]="$tmp"
     fi
   done
 
   if ! mv -f "$helper_tmp" "$helper_target"; then
     rm -f "$helper_tmp"
-    for tmp in "${rc_temps[@]}"; do [ -n "$tmp" ] && rm -f "$tmp"; done
+    for tmp in "${unique_temps[@]}"; do [ -n "$tmp" ] && rm -f "$tmp"; done
     return 1
   fi
-  for i in "${!rc_files[@]}"; do
-    tmp="${rc_temps[i]}"
+  for i in "${!unique_targets[@]}"; do
+    tmp="${unique_temps[i]}"
     [ -n "$tmp" ] || continue
-    if ! mv -f "$tmp" "${rc_files[i]}"; then
-      echo "  ! Could not install startup integration in ${rc_files[i]}" >&2
+    target="${unique_targets[i]}"
+    if ! mv -f "$tmp" "$target"; then
+      echo "  ! Could not install startup integration in $target" >&2
+      for tmp in "${unique_temps[@]}"; do [ -n "$tmp" ] && rm -f "$tmp"; done
       return 1
     fi
   done

@@ -24,6 +24,7 @@ teardown() {
 @test "install: fresh install ships scripts/lib and the commands actually run" {
   HOME="$FAKE_HOME" bash "$REPO_ROOT/install.sh" --cmd agmsg
   [ -f "$SK/scripts/lib/storage.sh" ]
+  [ -f "$SK/scripts/lib/startup-path-resolver.sh" ]
 
   # End-to-end through the installed scripts — a missing sourced helper would
   # surface here, not just as a stat on a file.
@@ -126,6 +127,220 @@ teardown() {
     PATH="$real_bin:$FAKE_HOME/.agents/bin::/usr/bin:/bin:$FAKE_HOME/.agents/bin" \
     sh -c '. "$HOME/.agents/bin/gh-owner-guard-path.sh"; printf "%s" "$PATH"')"
   [ "$normalized" = "$FAKE_HOME/.agents/bin:$real_bin::/usr/bin:/bin" ]
+}
+
+@test "install --update: follows a relative symlinked Bash startup file" {
+  local real_bin="$FAKE_HOME/real-bin"
+  local target="$FAKE_HOME/startup/bashrc-target"
+  local rc="$FAKE_HOME/.bashrc"
+  mkdir -p "$real_bin" "${target%/*}"
+  printf '#!/bin/sh\nexit 0\n' > "$real_bin/gh"
+  chmod +x "$real_bin/gh"
+
+  HOME="$FAKE_HOME" PATH="$real_bin:$PATH" \
+    bash "$REPO_ROOT/install.sh" --cmd agmsg >/dev/null
+  mv "$rc" "$target"
+  printf 'user startup\n' > "$target"
+  ln -s "startup/bashrc-target" "$rc"
+  local link_text
+  link_text="$(readlink "$rc")"
+  local expected_version
+  expected_version="$(git -C "$REPO_ROOT" describe --tags --always --dirty --abbrev=7 --match 'v[0-9]*')"
+
+  run env HOME="$FAKE_HOME" PATH="$real_bin:$PATH" \
+    bash "$REPO_ROOT/install.sh" --update
+  [ "$status" -eq 0 ]
+  [ -L "$rc" ]
+  [ "$(readlink "$rc")" = "$link_text" ]
+  [ "$(grep -Fc '# >>> agmsg gh owner guard PATH >>>' "$target")" -eq 1 ]
+  [ "$(grep -Fc '# <<< agmsg gh owner guard PATH <<<' "$target")" -eq 1 ]
+  grep -Fq 'user startup' "$target"
+  [ "$(tr -d '[:space:]' < "$SK/VERSION")" = "$expected_version" ]
+  grep -Fq 'Update complete' <<< "$output"
+}
+
+@test "install: follows a relative symlinked Bash startup file" {
+  local real_bin="$FAKE_HOME/real-bin"
+  local target="$FAKE_HOME/startup/bashrc-target"
+  local rc="$FAKE_HOME/.bashrc"
+  mkdir -p "$real_bin" "${target%/*}"
+  printf '#!/bin/sh\nexit 0\n' > "$real_bin/gh"
+  chmod +x "$real_bin/gh"
+  printf 'user startup\n' > "$target"
+  ln -s "startup/bashrc-target" "$rc"
+
+  run env HOME="$FAKE_HOME" PATH="$real_bin:$PATH" \
+    bash "$REPO_ROOT/install.sh" --cmd agmsg
+  [ "$status" -eq 0 ]
+  [ -L "$rc" ]
+  [ "$(readlink "$rc")" = "startup/bashrc-target" ]
+  [ "$(grep -Fc '# >>> agmsg gh owner guard PATH >>>' "$target")" -eq 1 ]
+  [ "$(grep -Fc '# <<< agmsg gh owner guard PATH <<<' "$target")" -eq 1 ]
+  grep -Fq 'Installed to' <<< "$output"
+}
+
+@test "install --update: follows the same symlink target only once" {
+  local real_bin="$FAKE_HOME/real-bin"
+  local target="$FAKE_HOME/startup/common"
+  local rc
+  mkdir -p "$real_bin" "${target%/*}"
+  printf '#!/bin/sh\nexit 0\n' > "$real_bin/gh"
+  chmod +x "$real_bin/gh"
+
+  HOME="$FAKE_HOME" PATH="$real_bin:$PATH" \
+    bash "$REPO_ROOT/install.sh" --cmd agmsg >/dev/null
+  mv "$FAKE_HOME/.bashrc" "$target"
+  for rc in "$FAKE_HOME/.zshrc" "$FAKE_HOME/.bashrc" "$FAKE_HOME/.bash_profile"; do
+    rm -f "$rc"
+    ln -s "startup/common" "$rc"
+  done
+
+  local helper="$FAKE_HOME/.agents/bin/gh-owner-guard-path.sh"
+  run env HOME="$FAKE_HOME" PATH="$real_bin:$PATH" \
+    bash "$REPO_ROOT/install.sh" --update
+  [ "$status" -eq 0 ]
+  local helper_hash
+  helper_hash="$(shasum "$helper" | awk '{print $1}')"
+  run env HOME="$FAKE_HOME" PATH="$real_bin:$PATH" \
+    bash "$REPO_ROOT/install.sh" --update
+  [ "$status" -eq 0 ]
+  [ "$(shasum "$helper" | awk '{print $1}')" = "$helper_hash" ]
+  for rc in "$FAKE_HOME/.zshrc" "$FAKE_HOME/.bashrc" "$FAKE_HOME/.bash_profile"; do
+    [ -L "$rc" ]
+    [ "$(readlink "$rc")" = "startup/common" ]
+  done
+  [ "$(grep -Fc '# >>> agmsg gh owner guard PATH >>>' "$target")" -eq 1 ]
+  [ "$(grep -Fc '# <<< agmsg gh owner guard PATH <<<' "$target")" -eq 1 ]
+}
+
+@test "install --update: refuses a dangling startup symlink without mutation" {
+  local real_bin="$FAKE_HOME/real-bin"
+  local rc="$FAKE_HOME/.bashrc"
+  local link_text version_before
+  mkdir -p "$real_bin"
+  printf '#!/bin/sh\nexit 0\n' > "$real_bin/gh"
+  chmod +x "$real_bin/gh"
+
+  HOME="$FAKE_HOME" PATH="$real_bin:$PATH" \
+    bash "$REPO_ROOT/install.sh" --cmd agmsg >/dev/null
+  rm -f "$rc"
+  ln -s "startup/missing" "$rc"
+  link_text="$(readlink "$rc")"
+  version_before="$(cat "$FAKE_HOME/.agents/skills/agmsg/VERSION")"
+
+  run env HOME="$FAKE_HOME" PATH="$real_bin:$PATH" \
+    bash "$REPO_ROOT/install.sh" --update
+  [ "$status" -ne 0 ]
+  [ -L "$rc" ]
+  [ "$(readlink "$rc")" = "$link_text" ]
+  [ "$(cat "$FAKE_HOME/.agents/skills/agmsg/VERSION")" = "$version_before" ]
+}
+
+@test "install --update: refuses a directory startup target without mutation" {
+  local real_bin="$FAKE_HOME/real-bin"
+  local rc="$FAKE_HOME/.bashrc"
+  local link_text version_before
+  mkdir -p "$real_bin"
+  printf '#!/bin/sh\nexit 0\n' > "$real_bin/gh"
+  chmod +x "$real_bin/gh"
+
+  HOME="$FAKE_HOME" PATH="$real_bin:$PATH" \
+    bash "$REPO_ROOT/install.sh" --cmd agmsg >/dev/null
+  mkdir -p "$FAKE_HOME/startup/directory"
+  rm -f "$rc"
+  ln -s "startup/directory" "$rc"
+  link_text="$(readlink "$rc")"
+  version_before="$(cat "$FAKE_HOME/.agents/skills/agmsg/VERSION")"
+
+  run env HOME="$FAKE_HOME" PATH="$real_bin:$PATH" \
+    bash "$REPO_ROOT/install.sh" --update
+  [ "$status" -ne 0 ]
+  [ -L "$rc" ]
+  [ "$(readlink "$rc")" = "$link_text" ]
+  [ -d "$FAKE_HOME/startup/directory" ]
+  [ "$(cat "$FAKE_HOME/.agents/skills/agmsg/VERSION")" = "$version_before" ]
+}
+
+@test "install --update: refuses a startup symlink chain over 40 hops" {
+  local real_bin="$FAKE_HOME/real-bin"
+  local rc="$FAKE_HOME/.bashrc"
+  local chain_dir="$FAKE_HOME/startup"
+  local link_text version_before i next
+  mkdir -p "$real_bin" "$chain_dir"
+  printf '#!/bin/sh\nexit 0\n' > "$real_bin/gh"
+  chmod +x "$real_bin/gh"
+
+  HOME="$FAKE_HOME" PATH="$real_bin:$PATH" \
+    bash "$REPO_ROOT/install.sh" --cmd agmsg >/dev/null
+  rm -f "$rc"
+  for i in $(seq 0 40); do
+    next=$((i + 1))
+    ln -s "link-$next" "$chain_dir/link-$i"
+  done
+  printf 'user startup\n' > "$chain_dir/link-41"
+  ln -s "startup/link-0" "$rc"
+  link_text="$(readlink "$rc")"
+  version_before="$(cat "$FAKE_HOME/.agents/skills/agmsg/VERSION")"
+
+  run env HOME="$FAKE_HOME" PATH="$real_bin:$PATH" \
+    bash "$REPO_ROOT/install.sh" --update
+  [ "$status" -ne 0 ]
+  [ -L "$rc" ]
+  [ "$(readlink "$rc")" = "$link_text" ]
+  [ -L "$chain_dir/link-0" ]
+  [ "$(cat "$FAKE_HOME/.agents/skills/agmsg/VERSION")" = "$version_before" ]
+}
+
+@test "install --update: refuses a malformed marker in a symlink target" {
+  local real_bin="$FAKE_HOME/real-bin"
+  local target="$FAKE_HOME/startup/bashrc-target"
+  local rc="$FAKE_HOME/.bashrc"
+  local link_text target_hash version_before
+  mkdir -p "$real_bin" "${target%/*}"
+  printf '#!/bin/sh\nexit 0\n' > "$real_bin/gh"
+  chmod +x "$real_bin/gh"
+
+  HOME="$FAKE_HOME" PATH="$real_bin:$PATH" \
+    bash "$REPO_ROOT/install.sh" --cmd agmsg >/dev/null
+  mv "$rc" "$target"
+  printf 'user setting\n# >>> agmsg gh owner guard PATH >>>\n' > "$target"
+  ln -s "startup/bashrc-target" "$rc"
+  link_text="$(readlink "$rc")"
+  target_hash="$(shasum "$target" | awk '{print $1}')"
+  version_before="$(cat "$FAKE_HOME/.agents/skills/agmsg/VERSION")"
+
+  run env HOME="$FAKE_HOME" PATH="$real_bin:$PATH" \
+    bash "$REPO_ROOT/install.sh" --update
+  [ "$status" -ne 0 ]
+  [ -L "$rc" ]
+  [ "$(readlink "$rc")" = "$link_text" ]
+  [ "$(shasum "$target" | awk '{print $1}')" = "$target_hash" ]
+  [ "$(cat "$FAKE_HOME/.agents/skills/agmsg/VERSION")" = "$version_before" ]
+}
+
+@test "uninstall: removes the owner guard from a symlink target and preserves the link" {
+  local real_bin="$FAKE_HOME/real-bin"
+  local target="$FAKE_HOME/startup/bashrc-target"
+  local rc="$FAKE_HOME/.bashrc"
+  local link_text
+  mkdir -p "$real_bin" "${target%/*}"
+  printf '#!/bin/sh\nexit 0\n' > "$real_bin/gh"
+  chmod +x "$real_bin/gh"
+  printf 'user startup\n' > "$target"
+  ln -s "startup/bashrc-target" "$rc"
+
+  HOME="$FAKE_HOME" PATH="$real_bin:$PATH" \
+    bash "$REPO_ROOT/install.sh" --cmd agmsg >/dev/null
+  link_text="$(readlink "$rc")"
+
+  run env HOME="$FAKE_HOME" bash "$REPO_ROOT/uninstall.sh" --yes
+  [ "$status" -eq 0 ]
+  [ -L "$rc" ]
+  [ "$(readlink "$rc")" = "$link_text" ]
+  [ "$(grep -Fc '# >>> agmsg gh owner guard PATH >>>' "$target" || true)" -eq 0 ]
+  [ "$(grep -Fc '# <<< agmsg gh owner guard PATH <<<' "$target" || true)" -eq 0 ]
+  [ ! -e "$FAKE_HOME/.agents/bin/gh" ]
+  [ ! -e "$FAKE_HOME/.agents/bin/gh-owner-guard-path.sh" ]
 }
 
 @test "install: malformed gh owner guard marker refuses without changing rc files" {
