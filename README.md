@@ -1275,6 +1275,15 @@ git pull
 
 DB and team configs are preserved. Only scripts and assets are updated.
 
+The managed Bash and Zsh startup blocks also support a startup file that is a
+symbolic link, as long as its final target is a regular file. The update writes
+the resolved target and preserves the link itself and its link text. This
+applies to `~/.zshrc`, `~/.bashrc`, and the selected Bash login startup file.
+Dangling links, directory or other non-regular targets, symlink chains longer
+than 40 hops, and malformed agmsg markers fail closed with a nonzero status;
+the update is not reported as complete and `VERSION` is not advanced. There is
+no manual skip option for an unsafe startup-file boundary.
+
 The script tree is staged and moved into place by rename, so an already-running
 watcher keeps reading the old file it has open instead of reading a partially
 overwritten file. Restart running agent sessions after the update to use the new
