@@ -435,11 +435,10 @@ assert_pr_write_rejected_without_static_fallback() {
   registration="$(whoami_registration claude-code "$project" alice myteam)"
   accepting_personal_policy
 
-  for fixture in schema empty session runtime unsupported; do
+  for fixture in schema empty runtime unsupported; do
     case "$fixture" in
       schema) json="$(whoami_json claude-code "$project" "[$registration]" 2)" ;;
       empty) json="$(whoami_json claude-code "$project" '[]')" ;;
-      session) json="$(whoami_json claude-code "$TEST_SKILL_DIR/other" "[$registration]")" ;;
       runtime)
         json="$(whoami_json claude-code "$project" "[$(whoami_registration codex "$project" alice myteam)]")"
         ;;
@@ -462,6 +461,18 @@ assert_pr_write_rejected_without_static_fallback() {
     export FAKE_AUTH_TOKEN_MODE="$mode"
     assert_pr_write_rejected_without_static_fallback pr create --repo kappaseijin/fixture --title blocked
   done
+}
+
+@test "GHG-P6b: project mismatch rejects before token lookup" {
+  local project registration json
+  project="$(pwd -P)"
+  registration="$(whoami_registration claude-code "$project" alice myteam)"
+  json="$(whoami_json claude-code "$TEST_SKILL_DIR/other" "[$registration]")"
+  fake_whoami 'agent=alice teams=myteam type=claude-code project=/elsewhere' "$json"
+  accepting_personal_policy
+  export FAKE_AUTH_TOKEN_MODE=known
+
+  assert_pr_write_rejected_without_static_fallback pr create --repo kappaseijin/fixture --title blocked
 }
 
 @test "GHG-P7: non-PR writes remain not_applicable to account selection" {
