@@ -492,6 +492,14 @@ watch_check_existing_db() {
 # have their own contracts and must remain visible to their callers.
 watch_check_existing_db "$RUNTIME_DB" || exit $?
 
+if agmsg_storage_ensure_initialized; then
+  :
+else
+  _runtime_init_status=$?
+  watch_log "ERROR: runtime store initialization failed (status $_runtime_init_status)"
+  exit "$_runtime_init_status"
+fi
+
 PAIRS="$(agmsg_subscription_pairs "$PROJECT_PATH" "$AGENT_TYPE" "$SESSION_ID" "$ACTIVE_NAME" claim)"
 _subscription_status=$?
 if [ "$_subscription_status" -ne 0 ]; then

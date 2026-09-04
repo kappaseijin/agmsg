@@ -708,6 +708,29 @@ _windows_native_wait_bridge_pid() {
   ! grep -q -- "--thread loaded" "$CAPTURE"
 }
 
+@test "launcher: dispatcher initializes a fresh runtime store once before its lock" {
+  local fresh_store="$BATS_TEST_TMPDIR/fresh-runtime-store"
+  local init_count="$BATS_TEST_TMPDIR/init-db-count"
+  local real_init="$SKILL_DIR/scripts/internal/init-db.real.sh"
+  printf '0\n' > "$init_count"
+  mv "$SKILL_DIR/scripts/internal/init-db.sh" "$real_init"
+  cat > "$SKILL_DIR/scripts/internal/init-db.sh" <<SH
+#!/usr/bin/env bash
+count=0
+[ -s "$init_count" ] && count="\$(cat "$init_count")"
+printf '%s\n' \$((count + 1)) > "$init_count"
+exec bash "$real_init" "\$@"
+SH
+  chmod +x "$SKILL_DIR/scripts/internal/init-db.sh"
+  export AGMSG_STORAGE_PATH="$fresh_store"
+  put_record team alice fresh-thread "$PROJ" codex
+
+  run_launcher
+
+  [ "$(cat "$init_count")" -eq 1 ]
+  [ "$(sqlite3 "$fresh_store/messages.db" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='locks';")" -eq 1 ]
+}
+
 @test "launcher: waits for a delayed bridge start beyond the legacy poll window" {
   export MOCK_BRIDGE_CAPTURE_DELAY=10
   put_record team alice delayed-thread "$PROJ" codex
@@ -812,7 +835,7 @@ _windows_native_wait_bridge_pid() {
   local hash lock_db
   hash=$(printf '%s' "$PROJ" | bash -c 'source "$1"; agmsg_sha1' _ "$SCRIPTS/lib/hash.sh")
   lock_db="$TEST_SKILL_DIR/db/messages.db"
-  sqlite3 "$lock_db" "CREATE TABLE locks(resource TEXT PRIMARY KEY, owner_pid INTEGER NOT NULL, acquired_at TEXT NOT NULL); INSERT INTO locks VALUES('codex-dispatcher:$hash', 99999999, datetime('now'));"
+  sqlite3 "$lock_db" "INSERT OR REPLACE INTO locks VALUES('codex-dispatcher:$hash', 99999999, datetime('now'));"
   # A crash from the former two-directory implementation can leave this behind.
   # The transactional lock protocol must not depend on that legacy reaper.
   mkdir "$RUN_DIR/codex-bridge-dispatcher.$hash.reap"

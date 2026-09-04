@@ -32,8 +32,11 @@ agmsg_sqlite "$DB" "PRAGMA journal_mode=WAL;" >/dev/null 2>&1 || true
 
 # Schema. IF NOT EXISTS + the busy_timeout from agmsg_sqlite make a concurrent
 # first-time creation a no-op for the losers rather than an "already exists"
-# abort.
+# abort. Keep the base schema atomic as well, so a failed bootstrap never leaves
+# a partially-created runtime store behind.
 agmsg_sqlite "$DB" <<'SQL'
+.bail on
+BEGIN IMMEDIATE;
 CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   team TEXT NOT NULL,
@@ -60,6 +63,12 @@ CREATE TABLE IF NOT EXISTS message_receipts (
   owner TEXT NOT NULL,
   handed_off_at TEXT NOT NULL,
   evidence TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS locks (
+  resource TEXT PRIMARY KEY,
+  owner_pid INTEGER NOT NULL,
+  acquired_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS team_work_current (
@@ -309,6 +318,7 @@ BEGIN
   SELECT RAISE(ABORT, 'team_work_g4_revisions is append-only');
 END;
 
+COMMIT;
 SQL
 
 # Dispatch has its own schema lifecycle because deployed stores may still have
@@ -320,7 +330,6 @@ dispatch_schema_sql="$(<"$SCRIPT_DIR/team-work-dispatch-schema.sql")"
 dispatch_trigger_sql="$(<"$SCRIPT_DIR/team-work-dispatch-triggers.sql")"
 agmsg_sqlite "$DB" <<SQL
 .bail on
-.timeout 5000
 BEGIN IMMEDIATE;
 $dispatch_schema_sql
 $dispatch_trigger_sql

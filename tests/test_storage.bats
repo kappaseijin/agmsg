@@ -204,13 +204,123 @@ SH
   [ -z "$(agmsg_runtime_lock_owner "$resource")" ]
 }
 
-@test "storage: runtime lock initializes a fresh store before send" {
+@test "storage: runtime lock refuses an uninitialized store without creating it" {
   export AGMSG_STORAGE_PATH="$BATS_TEST_TMPDIR/lock-first-store"
   source "$SCRIPTS/lib/storage.sh"
 
+  run agmsg_runtime_lock_acquire codex-dispatcher:test 111
+  [ "$status" -ne 0 ]
+  [ ! -e "$AGMSG_STORAGE_PATH/messages.db" ]
+}
+
+@test "storage: every runtime lock entrypoint refuses an absent store" {
+  export AGMSG_STORAGE_PATH="$BATS_TEST_TMPDIR/absent-lock-store"
+  source "$SCRIPTS/lib/storage.sh"
+
+  run agmsg_runtime_lock_owner codex-dispatcher:test
+  [ "$status" -ne 0 ]
+  run agmsg_runtime_lock_verify codex-dispatcher:test 111
+  [ "$status" -ne 0 ]
+  run agmsg_runtime_lock_release codex-dispatcher:test 111
+  [ "$status" -ne 0 ]
+  run agmsg_runtime_lock_release_owned codex-dispatcher:test 111
+  [ "$status" -ne 0 ]
+  [ ! -e "$AGMSG_STORAGE_PATH/messages.db" ]
+}
+
+@test "storage: explicit initialization creates the runtime locks schema" {
+  export AGMSG_STORAGE_PATH="$BATS_TEST_TMPDIR/explicit-lock-store"
+  source "$SCRIPTS/lib/storage.sh"
+
+  agmsg_storage_ensure_initialized
+  local db="$AGMSG_STORAGE_PATH/messages.db"
+  [ -f "$db" ]
+  [ "$(sqlite3 "$db" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='locks';")" -eq 1 ]
   [ "$(agmsg_runtime_lock_acquire codex-dispatcher:test 111)" = 111 ]
-  bash "$SCRIPTS/send.sh" team alice bob "after lock init" --force
-  [ "$(agmsg_sqlite "$(agmsg_db_path team)" "SELECT COUNT(*) FROM events WHERE type='message_sent' AND body = 'after lock init';")" = 1 ]
+  agmsg_runtime_lock_release_owned codex-dispatcher:test 111
+  [ -z "$(agmsg_runtime_lock_owner codex-dispatcher:test)" ]
+}
+
+@test "storage: initialization stops before init when migration fails" {
+  local real_init="$SCRIPTS/internal/init-db.real.sh"
+  local real_migration="$SCRIPTS/internal/migrate-team-work-dispatch.real.sh"
+  local init_marker="$BATS_TEST_TMPDIR/init-db-called"
+  local migration_marker="$BATS_TEST_TMPDIR/migration-called"
+  local fresh_store="$BATS_TEST_TMPDIR/migration-failure-store"
+
+  mv "$SCRIPTS/internal/init-db.sh" "$real_init"
+  cat > "$SCRIPTS/internal/init-db.sh" <<SH
+#!/usr/bin/env bash
+: > "$init_marker"
+exec bash "$real_init" "\$@"
+SH
+  chmod +x "$SCRIPTS/internal/init-db.sh"
+  mv "$SCRIPTS/internal/migrate-team-work-dispatch.sh" "$real_migration"
+  cat > "$SCRIPTS/internal/migrate-team-work-dispatch.sh" <<SH
+#!/usr/bin/env bash
+: > "$migration_marker"
+exit 73
+SH
+  chmod +x "$SCRIPTS/internal/migrate-team-work-dispatch.sh"
+
+  export AGMSG_STORAGE_PATH="$fresh_store"
+  source "$SCRIPTS/lib/storage.sh"
+  run agmsg_storage_ensure_initialized
+
+  [ "$status" -ne 0 ]
+  [ -f "$migration_marker" ]
+  [ ! -e "$init_marker" ]
+  [ ! -e "$fresh_store/messages.db" ]
+}
+
+@test "storage: runtime lock does not initialize a prepared store on the hot path" {
+  export AGMSG_STORAGE_PATH="$BATS_TEST_TMPDIR/prepared-lock-store"
+  source "$SCRIPTS/lib/storage.sh"
+  agmsg_storage_ensure_initialized
+  local marker="$BATS_TEST_TMPDIR/runtime-lock-initializer-called"
+  agmsg_storage_ensure_initialized() {
+    : > "$marker"
+    return 1
+  }
+
+  run agmsg_runtime_lock_acquire codex-dispatcher:test 111
+  [ "$status" -eq 0 ]
+  [ "$output" = 111 ]
+  [ ! -e "$marker" ]
+}
+
+@test "storage: runtime lock multi-statement SQL uses a stdin bail barrier" {
+  local bindir="$BATS_TEST_TMPDIR/sqlite-bin"
+  local argv_file="$BATS_TEST_TMPDIR/sqlite-argv"
+  local stdin_file="$BATS_TEST_TMPDIR/sqlite-stdin"
+  mkdir -p "$bindir"
+  cat > "$bindir/sqlite3" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '---' >> "$AGMSG_TEST_SQLITE_ARGV"
+printf '<%s>\n' "$@" >> "$AGMSG_TEST_SQLITE_ARGV"
+stdin="$(cat)"
+printf '%s\n' '---' >> "$AGMSG_TEST_SQLITE_STDIN"
+printf '%s\n' "$stdin" >> "$AGMSG_TEST_SQLITE_STDIN"
+case "$stdin" in
+  *changes*) printf '1\n' ;;
+  *) printf '111\n' ;;
+esac
+SH
+  chmod +x "$bindir/sqlite3"
+  export AGMSG_TEST_SQLITE_ARGV="$argv_file"
+  export AGMSG_TEST_SQLITE_STDIN="$stdin_file"
+  export PATH="$bindir:$PATH"
+  source "$SCRIPTS/lib/storage.sh"
+  agmsg_storage_ensure_initialized() { return 0; }
+
+  run agmsg_runtime_lock_acquire "codex-dispatcher:quoted'resource" 111
+  [ "$status" -eq 0 ]
+  [ "$output" = 111 ]
+  run agmsg_runtime_lock_release_owned "codex-dispatcher:quoted'resource" 111
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^\.bail on$' "$stdin_file")" -eq 2 ]
+  grep -Fq "resource = 'codex-dispatcher:quoted''resource'" "$stdin_file"
+  ! grep -Fq 'BEGIN IMMEDIATE;' "$argv_file"
 }
 
 @test "storage_send: suppresses probe stderr but exposes final retry stderr" {

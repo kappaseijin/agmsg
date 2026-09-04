@@ -223,7 +223,7 @@ _AGMSG_ESCAPE_PROBED=
 _agmsg_escape_flag() {
   if [ -z "$_AGMSG_ESCAPE_PROBED" ]; then
     _AGMSG_ESCAPE_PROBED=1
-    if sqlite3 -escape off :memory: "SELECT 1;" >/dev/null 2>&1; then
+    if sqlite3 -escape off :memory: "SELECT 1;" </dev/null >/dev/null 2>&1; then
       _AGMSG_ESCAPE_FLAG="-escape off"
     fi
   fi
@@ -297,20 +297,37 @@ _agmsg_runtime_lock_resource_sql() {
 }
 
 agmsg_storage_ensure_initialized() {
-  local lib_dir init_script migration_script
+  local lib_dir init_script migration_script storage_path
   lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   init_script="$lib_dir/../internal/init-db.sh"
   migration_script="$lib_dir/../internal/migrate-team-work-dispatch.sh"
-  AGMSG_STORAGE_PATH="$(agmsg_storage_dir)" bash "$migration_script"
-  AGMSG_STORAGE_PATH="$(agmsg_storage_dir)" AGMSG_DISPATCH_MIGRATION_DONE=1 bash "$init_script" >/dev/null
+  storage_path="$(agmsg_storage_dir)" || return 1
+  AGMSG_BUSY_TIMEOUT=5000 AGMSG_STORAGE_PATH="$storage_path" \
+    bash "$migration_script" || return 1
+  AGMSG_BUSY_TIMEOUT=5000 AGMSG_STORAGE_PATH="$storage_path" \
+    AGMSG_DISPATCH_MIGRATION_DONE=1 bash "$init_script" >/dev/null || return 1
 }
 
 _agmsg_runtime_sql_result() {
-  local db="$1" sql="$2" result rc
-  if result="$(agmsg_sqlite "$db" "$sql")"; then
-    rc=0
+  local db="$1" sql='' result rc output_file
+  if [ "$#" -ge 2 ]; then
+    sql="$2"
+  fi
+  if [ "$#" -ge 2 ]; then
+    if result="$(agmsg_sqlite "$db" "$sql")"; then
+      rc=0
+    else
+      rc=$?
+    fi
   else
-    rc=$?
+    output_file="$(mktemp "${TMPDIR:-/tmp}/agmsg-runtime-sql.XXXXXX")" || return 1
+    if agmsg_sqlite "$db" >"$output_file"; then
+      rc=0
+    else
+      rc=$?
+    fi
+    result="$(cat "$output_file")" || result=''
+    rm -f "$output_file" 2>/dev/null || :
   fi
 
   # Strip Windows CR bytes from stdout only after the sqlite exit status has
@@ -320,25 +337,25 @@ _agmsg_runtime_sql_result() {
   return "$rc"
 }
 
+_agmsg_runtime_db_exists() {
+  [ -f "$1" ]
+}
+
 agmsg_runtime_lock_acquire() {
   local resource owner_pid expected_owner db resource_sql sql result rc
   resource="$1"; owner_pid="$2"; expected_owner="${3:-}"
   case "$owner_pid:$expected_owner" in *[!0-9:]*) return 1 ;; esac
-  agmsg_storage_ensure_initialized || return 1
   db="$(_agmsg_runtime_db_path)"
+  _agmsg_runtime_db_exists "$db" || return 1
   resource_sql="$(_agmsg_runtime_lock_resource_sql "$resource")"
-  sql="CREATE TABLE IF NOT EXISTS locks (
-  resource TEXT PRIMARY KEY,
-  owner_pid INTEGER NOT NULL,
-  acquired_at TEXT NOT NULL
-);
+  sql=".bail on
 BEGIN IMMEDIATE;
 $(if [ -n "$expected_owner" ]; then printf "DELETE FROM locks WHERE resource = '%s' AND owner_pid = %s;" "$resource_sql" "$expected_owner"; fi)
 INSERT OR IGNORE INTO locks(resource, owner_pid, acquired_at)
 VALUES('$resource_sql', $owner_pid, strftime('%Y-%m-%dT%H:%M:%SZ','now'));
 SELECT owner_pid FROM locks WHERE resource = '$resource_sql';
 COMMIT;"
-  if result="$(_agmsg_runtime_sql_result "$db" "$sql")"; then
+  if result="$(_agmsg_runtime_sql_result "$db" <<< "$sql")"; then
     rc=0
   else
     rc=$?
@@ -351,6 +368,7 @@ agmsg_runtime_lock_owner() {
   local resource_sql db result rc
   resource_sql="$(_agmsg_runtime_lock_resource_sql "$1")"
   db="$(_agmsg_runtime_db_path)"
+  _agmsg_runtime_db_exists "$db" || return 1
   if result="$(_agmsg_runtime_sql_result "$db" \
     "SELECT owner_pid FROM locks WHERE resource = '$resource_sql';")"; then
     rc=0
@@ -372,10 +390,12 @@ agmsg_runtime_lock_verify() {
 }
 
 agmsg_runtime_lock_release() {
-  local resource_sql
+  local resource_sql db
   case "$2" in *[!0-9]*|'') return 1 ;; esac
   resource_sql="$(_agmsg_runtime_lock_resource_sql "$1")"
-  agmsg_sqlite "$(_agmsg_runtime_db_path)" \
+  db="$(_agmsg_runtime_db_path)"
+  _agmsg_runtime_db_exists "$db" || return 1
+  agmsg_sqlite "$db" \
     "DELETE FROM locks WHERE resource = '$resource_sql' AND owner_pid = $2;"
 }
 
@@ -384,12 +404,15 @@ agmsg_runtime_lock_release() {
 # release does not have a verify-then-delete window and a database error cannot
 # be mistaken for a successful cleanup.
 agmsg_runtime_lock_release_owned() {
-  local resource_sql db result rc
+  local resource_sql db sql result rc
   case "$2" in *[!0-9]*|'') return 1 ;; esac
   resource_sql="$(_agmsg_runtime_lock_resource_sql "$1")"
   db="$(_agmsg_runtime_db_path)"
-  if result="$(_agmsg_runtime_sql_result "$db" \
-    "DELETE FROM locks WHERE resource = '$resource_sql' AND owner_pid = $2; SELECT changes();")"; then
+  _agmsg_runtime_db_exists "$db" || return 1
+  sql=".bail on
+DELETE FROM locks WHERE resource = '$resource_sql' AND owner_pid = $2;
+SELECT changes();"
+  if result="$(_agmsg_runtime_sql_result "$db" <<< "$sql")"; then
     rc=0
   else
     rc=$?

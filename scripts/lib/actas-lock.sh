@@ -194,7 +194,7 @@ _actas_lock_gate_attempt() {
 # holder. SQLite BUSY/LOCKED is retried within four 40 ms attempts (<=200 ms);
 # all other errors and every non-owned result fail closed for this poll.
 actas_lock_gate_try_acquire() {
-  local lock_path="$1" resource owner classification attempts=0 rc
+  local lock_path="$1" resource owner next_owner classification attempts=0 rc
   resource="$(actas_lock_gate_resource "$lock_path")"
   while [ "$attempts" -lt 4 ]; do
     _actas_lock_gate_attempt try-acquire "$resource" "$$" '' 40
@@ -208,9 +208,47 @@ actas_lock_gate_try_acquire() {
         fi
         return 0
       fi
+      case "$owner" in
+        ''|0|*[!0-9]*)
+          _actas_lock_gate_diagnostic try-acquire "$resource" "$owner" \
+            live-holder '<not-invoked>' 'gate-held-by-another-owner'
+          return 1
+          ;;
+      esac
+      if _agmsg_pid_alive_local "$owner"; then
+        _actas_lock_gate_diagnostic try-acquire "$resource" "$owner" \
+          live-holder '<not-invoked>' 'gate-held-by-another-owner'
+        return 1
+      fi
+
+      # A confirmed-dead owner may be replaced only by one expected-owner CAS
+      # inside the existing four-attempt watcher budget. Never delete a row
+      # without naming the exact generation observed above.
+      attempts=$((attempts + 1))
+      if [ "$attempts" -ge 4 ]; then
+        return 1
+      fi
+      _actas_lock_gate_attempt try-acquire "$resource" "$$" "$owner" 40
+      rc=$?
+      if [ "$rc" -eq 0 ]; then
+        next_owner="$ACTAS_LOCK_GATE_LAST_OWNER"
+        if [ "$next_owner" = "$$" ]; then
+          if ! _actas_lock_gate_test_barrier; then
+            actas_lock_gate_release "$lock_path" || return 1
+            return 1
+          fi
+          return 0
+        fi
+        _actas_lock_gate_diagnostic try-acquire "$resource" "$next_owner" \
+          live-holder '<not-invoked>' 'gate-held-by-another-owner'
+        return 1
+      fi
+      classification="$(_actas_lock_gate_classify_error "$ACTAS_LOCK_GATE_LAST_SQLITE_ERROR")"
       _actas_lock_gate_diagnostic try-acquire "$resource" "$owner" \
-        live-holder '<not-invoked>' 'gate-held-by-another-owner'
-      return 1
+        "$classification" "$ACTAS_LOCK_GATE_LAST_SQLITE_ERROR" \
+        'sqlite-cas-attempt-failed'
+      [ "$classification" = transient ] || return 1
+      continue
     fi
 
     classification="$(_actas_lock_gate_classify_error "$ACTAS_LOCK_GATE_LAST_SQLITE_ERROR")"

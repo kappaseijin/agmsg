@@ -34,7 +34,6 @@ fi
 
 agmsg_sqlite "$DB" <<SQL
 .bail on
-.timeout 5000
 BEGIN IMMEDIATE;
 
 CREATE TEMP TABLE agmsg_dispatch_migration_guard(value INTEGER NOT NULL CHECK(value = 1));

@@ -296,6 +296,43 @@ assert_output_contains() {
   [ ! -f "$lock_path" ]
 }
 
+@test "delivery gate: watcher reclaims a confirmed-dead runtime owner with CAS" {
+  skip_on_windows "watcher PID liveness under Git Bash (#223)"
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+  local resource dead
+  resource="$(actas_lock_gate_resource "$lock_path")"
+  bash -c 'exit 0' &
+  dead=$!
+  wait "$dead"
+  agmsg_runtime_lock_acquire "$resource" "$dead" >/dev/null
+
+  actas_lock_gate_try_acquire "$lock_path"
+  [ "$(agmsg_runtime_lock_owner "$resource")" = "$$" ]
+  actas_lock_gate_release "$lock_path"
+  [ -z "$(agmsg_runtime_lock_owner "$resource")" ]
+}
+
+@test "delivery gate: watcher leaves a live runtime owner untouched" {
+  skip_on_windows "watcher PID liveness under Git Bash (#223)"
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+  local resource holder gate_status
+  resource="$(actas_lock_gate_resource "$lock_path")"
+  sleep 60 &
+  holder=$!
+  agmsg_runtime_lock_acquire "$resource" "$holder" >/dev/null
+
+  if actas_lock_gate_try_acquire "$lock_path"; then
+    gate_status=0
+  else
+    gate_status=$?
+  fi
+  [ "$gate_status" -ne 0 ]
+  [ "$(agmsg_runtime_lock_owner "$resource")" = "$holder" ]
+  agmsg_runtime_lock_release "$resource" "$holder"
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+}
+
 @test "delivery gate: writer waits for a live holder instead of reclaiming it" {
   local lock_path="$RUN_DIR/actas.T__alice.session"
   local resource

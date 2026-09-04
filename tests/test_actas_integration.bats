@@ -169,6 +169,32 @@ fake_session() {
   [[ "$output" =~ "status=not_registered" ]]
 }
 
+@test "actas-claim: initializes a fresh runtime store before its first claim" {
+  fake_register T alice
+  fake_session "sid-me" >/dev/null
+  local fresh_store="$BATS_TEST_TMPDIR/fresh-runtime-store"
+  local init_count="$BATS_TEST_TMPDIR/init-db-count"
+  local real_init="$SKILL_DIR/scripts/internal/init-db.real.sh"
+  printf '0\n' > "$init_count"
+  mv "$SKILL_DIR/scripts/internal/init-db.sh" "$real_init"
+  cat > "$SKILL_DIR/scripts/internal/init-db.sh" <<SH
+#!/usr/bin/env bash
+count=0
+[ -s "$init_count" ] && count="\$(cat "$init_count")"
+printf '%s\n' \$((count + 1)) > "$init_count"
+exec bash "$real_init" "\$@"
+SH
+  chmod +x "$SKILL_DIR/scripts/internal/init-db.sh"
+  export AGMSG_STORAGE_PATH="$fresh_store"
+
+  run bash "$SKILL_DIR/scripts/actas-claim.sh" /tmp/p1 claude-code alice "sid-me"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "status=ok" ]]
+  [ "$(cat "$init_count")" -eq 1 ]
+  [ -f "$fresh_store/messages.db" ]
+  [ "$(sqlite3 "$fresh_store/messages.db" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='locks';")" -eq 1 ]
+}
+
 @test "actas-claim: claims every matching team and rolls back partial claims" {
   fake_register team-a alice /tmp/p1
   fake_register team-b alice /tmp/p2
