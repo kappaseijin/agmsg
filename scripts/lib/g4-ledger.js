@@ -342,7 +342,12 @@ function bootstrapG4(team, pack, roster, managerSeat, evidence) {
     coverageDigest: audit.coverageDigest,
     auditDigest: audit.auditDigest,
   };
-  if (!audit.classificationBasis || audit.classificationBasis.status !== "complete") {
+  const hasDeclaredBlockedEntry = contract.entries.some(
+    (info) => info.entry.state === "blocked",
+  );
+  if (!audit.classificationBasis ||
+      audit.classificationBasis.status !== "complete" ||
+      hasDeclaredBlockedEntry) {
     return bootstrapRejected(team, managerSeat, evidence, "audit_incomplete", auditDetails);
   }
 

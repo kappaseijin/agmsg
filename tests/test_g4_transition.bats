@@ -27,6 +27,40 @@ run_g4_transition() {
     bash "$SCRIPTS/team-work.sh" g4-transition demo "$pack" "$repository" "$number" "$expected_revision" "$manager" "$evidence"
 }
 
+seed_blocked_current() {
+  local pack="$1" entry_digest trigger_sql
+  entry_digest="$(G4_PACK_PATH="$pack" node <<'NODE'
+const fs = require("fs");
+const pack = JSON.parse(fs.readFileSync(process.env.G4_PACK_PATH, "utf8"));
+process.stdout.write(pack.entries[0].entryDigest);
+NODE
+)"
+  trigger_sql="$(sqlite3 "$DBPATH" "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'team_work_g4_current_history_update';")"
+  [ -n "$entry_digest" ]
+  [ -n "$trigger_sql" ]
+  sqlite3 "$DBPATH" <<SQL
+DROP TRIGGER team_work_g4_current_history_update;
+UPDATE team_work_g4_current
+SET state = 'blocked',
+    blocker_json = json('{"reasonCode":"issue_closed_gate","releasePredicate":{"kind":"issue_closed","number":42,"repository":"kappaseijin/example"}}'),
+    entry_digest = '$entry_digest',
+    last_action = 'test-seed',
+    last_actor = 'manager',
+    evidence = 'https://example.test/test-seed'
+WHERE team = 'demo' AND source_repository = 'kappaseijin/example' AND source_number = 42;
+$trigger_sql
+SQL
+}
+
+prepare_blocked_current() {
+  local bootstrap_pack="$1" transition_pack="$2"
+  write_g4_pack "$bootstrap_pack" two
+  run_g4_bootstrap "$G4_FIXTURES/two-open.json" "$bootstrap_pack"
+  [ "$status" -eq 0 ]
+  write_predicate_pack "$transition_pack" issue_closed
+  seed_blocked_current "$transition_pack"
+}
+
 write_transition_pack() {
   local path="$1" state="${2:-ready}" revision="${3:-2}"
   G4_PACK_PATH="$path" G4_TRANSITION_STATE="$state" G4_TRANSITION_REVISION="$revision" node <<'NODE'
@@ -265,10 +299,7 @@ SQL
 
 @test "g4-transition: exact manager records true blocked-to-ready revision" {
   local bootstrap_pack="$BATS_TEST_TMPDIR/bootstrap.json" transition_pack="$BATS_TEST_TMPDIR/transition.json"
-  write_predicate_pack "$bootstrap_pack" issue_closed
-  run_g4_bootstrap "$G4_FIXTURES/predicate-negative.json" "$bootstrap_pack"
-  [ "$status" -eq 0 ]
-  cp "$bootstrap_pack" "$transition_pack"
+  prepare_blocked_current "$bootstrap_pack" "$transition_pack"
   write_transition_pack "$transition_pack" ready 2
 
   run_g4_transition "$G4_FIXTURES/predicate-positive.json" "$transition_pack"
@@ -296,11 +327,8 @@ SQL
 
 @test "g4-transition: pm seat is accepted as the manager role alias" {
   local bootstrap_pack="$BATS_TEST_TMPDIR/bootstrap.json" transition_pack="$BATS_TEST_TMPDIR/transition.json"
-  write_predicate_pack "$bootstrap_pack" issue_closed
-  run_g4_bootstrap "$G4_FIXTURES/predicate-negative.json" "$bootstrap_pack"
-  [ "$status" -eq 0 ]
+  prepare_blocked_current "$bootstrap_pack" "$transition_pack"
   bash "$SCRIPTS/join.sh" demo pm codex /tmp/demo-pm --role pm --kind seat >/dev/null
-  cp "$bootstrap_pack" "$transition_pack"
   write_transition_pack "$transition_pack" ready 2
 
   run_g4_transition "$G4_FIXTURES/predicate-positive.json" "$transition_pack" kappaseijin/example 42 1 pm
@@ -313,10 +341,7 @@ SQL
 
 @test "g4-transition: false and unavailable predicates reject without mutation" {
   local bootstrap_pack="$BATS_TEST_TMPDIR/bootstrap.json" transition_pack="$BATS_TEST_TMPDIR/transition.json" fixture before
-  write_predicate_pack "$bootstrap_pack" issue_closed
-  run_g4_bootstrap "$G4_FIXTURES/predicate-negative.json" "$bootstrap_pack"
-  [ "$status" -eq 0 ]
-  cp "$bootstrap_pack" "$transition_pack"
+  prepare_blocked_current "$bootstrap_pack" "$transition_pack"
   write_transition_pack "$transition_pack" ready 2
 
   for fixture in predicate-negative.json predicate-gh-failure.json; do
@@ -333,10 +358,7 @@ SQL
 
 @test "g4-transition: stale and skipped revisions reject without mutation" {
   local bootstrap_pack="$BATS_TEST_TMPDIR/bootstrap.json" transition_pack="$BATS_TEST_TMPDIR/transition.json" before
-  write_predicate_pack "$bootstrap_pack" issue_closed
-  run_g4_bootstrap "$G4_FIXTURES/predicate-negative.json" "$bootstrap_pack"
-  [ "$status" -eq 0 ]
-  cp "$bootstrap_pack" "$transition_pack"
+  prepare_blocked_current "$bootstrap_pack" "$transition_pack"
   write_transition_pack "$transition_pack" ready 2
   before="$(shasum -a 256 "$DBPATH" | awk '{print $1}')"
 
@@ -356,10 +378,7 @@ SQL
 
 @test "g4-transition: only an exact manager with evidence and target source can act" {
   local bootstrap_pack="$BATS_TEST_TMPDIR/bootstrap.json" transition_pack="$BATS_TEST_TMPDIR/transition.json" seat before
-  write_predicate_pack "$bootstrap_pack" issue_closed
-  run_g4_bootstrap "$G4_FIXTURES/predicate-negative.json" "$bootstrap_pack"
-  [ "$status" -eq 0 ]
-  cp "$bootstrap_pack" "$transition_pack"
+  prepare_blocked_current "$bootstrap_pack" "$transition_pack"
   write_transition_pack "$transition_pack" ready 2
   bash "$SCRIPTS/join.sh" demo human codex /tmp/demo-human --role manager --kind human >/dev/null
 
@@ -393,11 +412,8 @@ SQL
 
 @test "g4-transition: owner, workKinds, basis, and source changes reject" {
   local bootstrap_pack="$BATS_TEST_TMPDIR/bootstrap.json" transition_pack="$BATS_TEST_TMPDIR/transition.json" mutation before
-  write_predicate_pack "$bootstrap_pack" issue_closed
-  run_g4_bootstrap "$G4_FIXTURES/predicate-negative.json" "$bootstrap_pack"
-  [ "$status" -eq 0 ]
+  prepare_blocked_current "$bootstrap_pack" "$transition_pack"
   for mutation in owner work-kinds basis source; do
-    cp "$bootstrap_pack" "$transition_pack"
     write_transition_pack "$transition_pack" ready 2
     mutate_transition_pack "$transition_pack" "$mutation"
     before="$(shasum -a 256 "$DBPATH" | awk '{print $1}')"
@@ -606,10 +622,7 @@ EOF
 @test "g4-transition: blocked-to-unknown is rejected" {
   local bootstrap_pack="$BATS_TEST_TMPDIR/bootstrap.json" transition_pack="$BATS_TEST_TMPDIR/transition.json" before
 
-  write_predicate_pack "$bootstrap_pack" issue_closed
-  run_g4_bootstrap "$G4_FIXTURES/predicate-negative.json" "$bootstrap_pack"
-  [ "$status" -eq 0 ]
-  cp "$bootstrap_pack" "$transition_pack"
+  prepare_blocked_current "$bootstrap_pack" "$transition_pack"
   write_transition_pack "$transition_pack" unknown 2
   before="$(shasum -a 256 "$DBPATH" | awk '{print $1}')"
   run_g4_transition "$G4_FIXTURES/predicate-positive.json" "$transition_pack"
@@ -633,10 +646,7 @@ EOF
 
 @test "g4-transition: fake GitHub records reads only" {
   local bootstrap_pack="$BATS_TEST_TMPDIR/bootstrap.json" transition_pack="$BATS_TEST_TMPDIR/transition.json"
-  write_predicate_pack "$bootstrap_pack" issue_closed
-  run_g4_bootstrap "$G4_FIXTURES/predicate-negative.json" "$bootstrap_pack"
-  [ "$status" -eq 0 ]
-  cp "$bootstrap_pack" "$transition_pack"
+  prepare_blocked_current "$bootstrap_pack" "$transition_pack"
   write_transition_pack "$transition_pack" ready 2
 
   run_g4_transition "$G4_FIXTURES/predicate-positive.json" "$transition_pack"
