@@ -342,7 +342,12 @@ function bootstrapG4(team, pack, roster, managerSeat, evidence) {
     coverageDigest: audit.coverageDigest,
     auditDigest: audit.auditDigest,
   };
-  if (!audit.classificationBasis || audit.classificationBasis.status !== "complete") {
+  const hasDeclaredBlockedEntry = contract.entries.some(
+    (info) => info.entry.state === "blocked",
+  );
+  if (!audit.classificationBasis ||
+      audit.classificationBasis.status !== "complete" ||
+      hasDeclaredBlockedEntry) {
     return bootstrapRejected(team, managerSeat, evidence, "audit_incomplete", auditDetails);
   }
 
@@ -446,8 +451,9 @@ function auditSupportsReblock(audit, contract, target) {
   }
 
   const basis = audit.classificationBasis;
-  if (basis.status === "complete") return basis.reasons.length === 0;
-  if (basis.status !== "unknown" || basis.reasons.length !== 1) return false;
+  if (basis.status === "complete" && basis.reasons.length === 0) return true;
+  if (basis.status !== "complete" && basis.status !== "quiescent") return false;
+  if (basis.reasons.length !== 1) return false;
   const reason = basis.reasons[0];
   return reason.code === "blocked_predicate_false" && reason.source === target.sourceKey;
 }

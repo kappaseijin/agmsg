@@ -337,10 +337,10 @@ load helpers/g4-fixtures
   run env G4_AUDIT_NOW="2026-08-21T00:00:00+09:00" PATH="$G4_FAKE_GH_BIN:$PATH" G4_GH_FIXTURE="$G4_FIXTURES/two-open.json" G4_GH_LOG="$G4_GH_LOG" \
     bash "$SCRIPTS/team-work.sh" g4-audit demo "$pack"
   [ "$status" -eq 0 ]
-  [ "$(json_value "$output" classificationBasis.status)" = "unknown" ]
+  [ "$(json_value "$output" classificationBasis.status)" = "complete" ]
   [ "$(json_value "$output" entries[0].state)" = "blocked" ]
   [ "$(json_value "$output" entries[0].releasePredicate.status)" = "false" ]
-  [ "$(json_value "$output" ready)" = "[]" ]
+  [ "$(json_value "$output" ready[0].source.number)" = "43" ]
   grep -Fq '"code":"blocked_predicate_false"' <<<"$output"
 
   write_g4_pack "$pack"
@@ -348,10 +348,25 @@ load helpers/g4-fixtures
   run env G4_AUDIT_NOW="2026-08-21T00:00:00+09:00" PATH="$G4_FAKE_GH_BIN:$PATH" G4_GH_FIXTURE="$G4_FIXTURES/two-open.json" G4_GH_LOG="$G4_GH_LOG" \
     bash "$SCRIPTS/team-work.sh" g4-audit demo "$pack"
   [ "$status" -eq 0 ]
-  [ "$(json_value "$output" classificationBasis.status)" = "complete" ]
+  [ "$(json_value "$output" classificationBasis.status)" = "transition_required" ]
   [ "$(json_value "$output" entries[0].state)" = "blocked" ]
   [ "$(json_value "$output" entries[0].releasePredicate.status)" = "true" ]
   [ "$(json_value "$output" ready[0].source.number)" = "43" ]
+  grep -Fq '"code":"transition_required"' <<<"$output"
+}
+
+@test "g4-audit: true predicate requires explicit transition and keeps the entry blocked" {
+  local pack="$BATS_TEST_TMPDIR/g4-predicate-pack.json"
+  write_predicate_pack "$pack" issue_closed
+
+  run_g4_audit "$G4_FIXTURES/predicate-positive.json" "$pack"
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" classificationBasis.status)" = "transition_required" ]
+  [ "$(json_value "$output" entries[0].state)" = "blocked" ]
+  [ "$(json_value "$output" entries[0].releasePredicate.status)" = "true" ]
+  [ "$(json_value "$output" ready[0].source.number)" = "43" ]
+  [ "$(json_value "$output" classificationBasis.reasons)" = '[{"code":"transition_required","source":"kappaseijin/example#42"}]' ]
 }
 
 @test "g4-audit: read-only predicate fixtures cover positive paths" {
@@ -360,7 +375,7 @@ load helpers/g4-fixtures
     write_predicate_pack "$pack" "$kind"
     run_g4_audit "$G4_FIXTURES/predicate-positive.json" "$pack"
     [ "$status" -eq 0 ]
-    [ "$(json_value "$output" classificationBasis.status)" = "complete" ]
+    [ "$(json_value "$output" classificationBasis.status)" = "transition_required" ]
     [ "$(json_value "$output" entries[0].state)" = "blocked" ]
     [ "$(json_value "$output" entries[0].releasePredicate.status)" = "true" ]
     [ "$(json_value "$output" ready[0].source.number)" = "43" ]
@@ -378,12 +393,45 @@ load helpers/g4-fixtures
     write_predicate_pack "$pack" "$kind"
     run_g4_audit "$G4_FIXTURES/predicate-negative.json" "$pack"
     [ "$status" -eq 0 ]
-    [ "$(json_value "$output" classificationBasis.status)" = "unknown" ]
+    [ "$(json_value "$output" classificationBasis.status)" = "complete" ]
     [ "$(json_value "$output" entries[0].state)" = "blocked" ]
     [ "$(json_value "$output" entries[0].releasePredicate.status)" = "false" ]
-    [ "$(json_value "$output" ready)" = "[]" ]
+    [ "$(json_value "$output" ready[0].source.number)" = "43" ]
     grep -Fq '"code":"blocked_predicate_false"' <<<"$output"
   done
+}
+
+@test "g4-audit: all blocked false predicates are quiescent with complete coverage" {
+  local pack="$BATS_TEST_TMPDIR/g4-all-blocked-pack.json"
+  write_all_blocked_predicate_pack "$pack"
+
+  run_g4_audit "$G4_FIXTURES/two-open.json" "$pack"
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" classificationBasis.status)" = "quiescent" ]
+  [ "$(json_value "$output" classificationBasis.coverageCount)" = "2" ]
+  [ "$(json_value "$output" classificationBasis.entryCount)" = "2" ]
+  [ "$(json_value "$output" classificationBasis.readyCount)" = "0" ]
+  [ "$(json_value "$output" ready)" = "[]" ]
+  [ "$(json_value "$output" entries[0].state)" = "blocked" ]
+  [ "$(json_value "$output" entries[0].releasePredicate.status)" = "false" ]
+  [ "$(json_value "$output" entries[1].releasePredicate.status)" = "false" ]
+  [ "$(json_value "$output" classificationBasis.reasons)" = '[{"code":"blocked_predicate_false","source":"kappaseijin/example#42"},{"code":"blocked_predicate_false","source":"kappaseijin/example#43"}]' ]
+  ! grep -Fq '"code":"coverage_mismatch"' <<<"$output"
+}
+
+@test "g4-audit: fatal coverage mismatch outranks a false predicate signal" {
+  local pack="$BATS_TEST_TMPDIR/g4-mismatch-pack.json"
+  write_g4_pack "$pack" one
+  G4_PREDICATE_AT="2099-01-01T00:00:00+09:00" mutate_g4_pack "$pack" blocked-predicate
+
+  run_g4_audit "$G4_FIXTURES/two-open.json" "$pack"
+
+  [ "$status" -eq 0 ]
+  [ "$(json_value "$output" classificationBasis.status)" = "unknown" ]
+  [ "$(json_value "$output" ready)" = "[]" ]
+  grep -Fq '"code":"coverage_mismatch"' <<<"$output"
+  grep -Fq '"code":"blocked_predicate_false"' <<<"$output"
 }
 
 @test "g4-audit: predicate gh failure is unknown and never ready" {
@@ -500,7 +548,7 @@ load helpers/g4-fixtures
   run_g4_reconcile "$G4_FIXTURES/two-open.json" "$pack"
 
   [ "$status" -eq 0 ]
-  [ "$(json_value "$output" classificationBasis.status)" = "unknown" ]
+  [ "$(json_value "$output" classificationBasis.status)" = "complete" ]
   refute grep -Fq '"seat":"worker-b"' <<<"$output"
   grep -Fq '"seat":"worker-a"' <<<"$output"
 }
