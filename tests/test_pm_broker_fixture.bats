@@ -345,6 +345,53 @@ marker_lines() {
   [ "$status" -eq 0 ]
 }
 
+@test "git maintenance rejects non-fast-forward divergence for both sync paths" {
+  repo="$ROOT/repo"
+
+  launch_pm
+
+  run git -C "$repo" checkout -b origin-divergent
+  [ "$status" -eq 0 ]
+  printf 'origin-only\n' > "$repo/origin-only.txt"
+  run git -C "$repo" add origin-only.txt
+  [ "$status" -eq 0 ]
+  run git -C "$repo" -c user.email=fixture@example.invalid -c user.name=fixture commit -m origin-divergent
+  [ "$status" -eq 0 ]
+  remote_head="$(git -C "$repo" rev-parse HEAD)"
+
+  run git -C "$repo" checkout main
+  [ "$status" -eq 0 ]
+  printf 'local-only\n' > "$repo/local-only.txt"
+  run git -C "$repo" add local-only.txt
+  [ "$status" -eq 0 ]
+  run git -C "$repo" -c user.email=fixture@example.invalid -c user.name=fixture commit -m local-divergent
+  [ "$status" -eq 0 ]
+  local_head="$(git -C "$repo" rev-parse HEAD)"
+
+  # Move only the isolated bare origin. This creates two sibling commits from
+  # the same base without invoking the shared push-owner guard.
+  run git --git-dir="$ROOT/origin.git" fetch "$repo" origin-divergent:refs/heads/origin-divergent
+  [ "$status" -eq 0 ]
+  run git --git-dir="$ROOT/origin.git" update-ref refs/heads/main "$remote_head"
+  [ "$status" -eq 0 ]
+  [ "$local_head" != "$remote_head" ]
+  run git -C "$repo" merge-base --is-ancestor "$local_head" "$remote_head"
+  [ "$status" -ne 0 ]
+  run git -C "$repo" merge-base --is-ancestor "$remote_head" "$local_head"
+  [ "$status" -ne 0 ]
+
+  markers_before="$(marker_lines "$ROOT/markers/operations.jsonl")"
+  invoke_pm git_maintenance '{"repoId":"fixture-origin-clone","operation":"sync_main"}'
+  [ "$status" -ne 0 ]
+  [ "$(git -C "$repo" rev-parse HEAD)" = "$local_head" ]
+  [ "$(marker_lines "$ROOT/markers/operations.jsonl")" -eq "$markers_before" ]
+
+  invoke_pm sync_origin_clone '{"repoId":"fixture-origin-clone"}'
+  [ "$status" -ne 0 ]
+  [ "$(git -C "$repo" rev-parse HEAD)" = "$local_head" ]
+  [ "$(marker_lines "$ROOT/markers/operations.jsonl")" -eq "$markers_before" ]
+}
+
 @test "proxy git writes require confirmed sandbox, digest, HEAD, and producer account" {
   launch_pm
   expected_head="$(git -C "$ROOT/repo" rev-parse HEAD)"
