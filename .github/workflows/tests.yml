@@ -611,8 +611,8 @@ jobs:
           # Reaching the handoff is not delivering a message -- they are
           # separate failure points and each has its own test.
           - leg: windows runtime (#567)
-            filter: "windows-native"
-            target: tests/test_codex_monitor.bats tests/test_codex_bridge_launcher.bats tests/test_fixture_helpers.bats
+            filter: "windows-native|windows collector"
+            target: tests/test_codex_monitor.bats tests/test_codex_bridge_launcher.bats tests/test_fixture_helpers.bats tests/test_windows_process_lifetime_collector.bats
             sqlite: true
           # The roster driver's staged input (#817). Same reasoning as the leg
           # above, one layer down: the fix is for Windows, and two of the things

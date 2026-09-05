@@ -1,0 +1,57 @@
+#!/usr/bin/env bats
+
+# The collector is deliberately isolated from the production reaper and from
+# test_helper's teardown.  This suite is the Windows preflight for the
+# diagnostic packet only.
+
+load test_helper
+
+setup() {
+  :
+}
+
+@test "windows collector records a lifecycle and rejects a packet missing stop" {
+  skip_unless_windows "the collector requires Windows WMI process trace events"
+
+  local collector="$BATS_TEST_DIRNAME/windows/process-lifetime-collector.ps1"
+  local root="$BATS_TEST_TMPDIR/lifetime-fixture"
+  local packet="$BATS_TEST_TMPDIR/lifetime-packet.jsonl"
+
+  run powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+    -File "$collector" -Mode preflight -Root "$root" -PacketPath "$packet"
+  if [ "$status" -ne 0 ]; then
+    printf 'collector preflight failed (status=%s):\n%s\n' "$status" "$output" >&2
+    if [ -f "$packet" ]; then
+      printf 'collector packet:\n' >&2
+      cat "$packet" >&2
+    fi
+    if [ -f "$packet.summary.json" ]; then
+      printf 'collector summary:\n' >&2
+      cat "$packet.summary.json" >&2
+    fi
+  fi
+  [ "$status" -eq 0 ]
+  [ -s "$packet" ]
+  grep -Fq '"record_type":"subscription-ready"' "$packet"
+  grep -Fq '"record_type":"subscription-ended"' "$packet"
+  grep -Fq '"record_type":"taskkill"' "$packet"
+  grep -Fq '"event_generated_time_utc"' "$packet"
+  grep -Fq '"event_received_time_utc"' "$packet"
+  grep -Fq '"actor_time_utc"' "$packet"
+  refute grep -Fq 'CommandLine' "$packet"
+
+  run powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+    -File "$collector" -Mode evaluate -PacketPath "$packet"
+  [ "$status" -eq 0 ]
+  printf 'collector known summary: %s\n' "$output" >&3
+  printf '%s\n' "$output" | grep -Fq '"comparison":"known"'
+  printf '%s\n' "$output" | grep -Fq '"reaper_judgment":"stop-observed-after-taskkill"'
+  printf '%s\n' "$output" | grep -Fq '"termination_actor":"not-determined"'
+
+  run powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+    -File "$collector" -Mode evaluate -PacketPath "$packet" -DropStopEvent
+  [ "$status" -eq 0 ]
+  printf 'collector missing-stop summary: %s\n' "$output" >&3
+  printf '%s\n' "$output" | grep -Fq '"comparison":"unknown"'
+  printf '%s\n' "$output" | grep -Fq '"reason":"missing-stop-event"'
+}
