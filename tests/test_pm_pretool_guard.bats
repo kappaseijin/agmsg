@@ -116,6 +116,55 @@ run_hook() {
   run "$SCRIPTS/pm-pretool-guard" <<<"$input"
 }
 
+write_read_barrier_preload() {
+  local file="$1"
+  node - "$file" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const file = process.argv[2];
+fs.writeFileSync(file, `
+const fs = require('fs');
+const path = require('path');
+const target = process.env.AGMSG_TEST_READ_TARGET || '';
+const signal = process.env.AGMSG_TEST_READ_SIGNAL || '';
+const originalReadFileSync = fs.readFileSync;
+let signalled = false;
+fs.readFileSync = function readFileSyncWithBarrier(filePath, ...args) {
+  const result = Reflect.apply(originalReadFileSync, this, [filePath, ...args]);
+  if (!signalled && target && signal && typeof filePath === 'string' &&
+      path.resolve(filePath) === path.resolve(target)) {
+    signalled = true;
+    fs.writeFileSync(signal, 'first-read-complete\\n');
+  }
+  return result;
+};
+`);
+NODE
+}
+
+run_identity_with_barrier() {
+  local preload="$1" target="$2" signal="$3" input="$4" output_file="$5"
+  local identity_pid watchdog_pid
+  set +e
+  env AGMSG_TEST_READ_TARGET="$target" AGMSG_TEST_READ_SIGNAL="$signal" \
+    NODE_OPTIONS="--require=$preload" \
+    node "$SCRIPTS/session-identity.js" <<<"$input" >"$output_file" 2>&1 &
+  identity_pid=$!
+  node - "$identity_pid" <<'NODE' &
+const child = Number(process.argv[2]);
+setTimeout(() => {
+  try { process.kill(child, 'SIGTERM'); } catch (_) {}
+  setTimeout(() => { try { process.kill(child, 'SIGKILL'); } catch (_) {} }, 1000);
+}, 10000);
+NODE
+  watchdog_pid=$!
+  wait "$identity_pid"
+  IDENTITY_STATUS=$?
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+  set -e
+}
+
 @test "normal direct Bash work is denied before execution" {
   run_hook "$(hook_input Bash 'git fetch origin')"
   [ "$status" -eq 2 ]
@@ -351,26 +400,33 @@ NODE
 
 @test "identity rejects a claim exchanged between its two reads" {
   owner="$PM_SESSION.$PM_PID"
+  preload="$PM_ROOT/read-barrier.cjs"
+  signal="$PM_ROOT/claim-first-read.fifo"
+  write_read_barrier_preload "$preload"
   rm -f "$PM_CLAIM_FILE"
   mkfifo "$PM_CLAIM_FILE"
+  mkfifo "$signal"
   (
     printf '%s\n' "$owner" > "$PM_CLAIM_FILE"
+    IFS= read -r _ < "$signal"
     printf '%s\n' "$owner-replaced" > "$PM_CLAIM_FILE"
   ) &
   feeder_pid=$!
-  set +e
-  node "$SCRIPTS/session-identity.js" <<<"$(hook_input Bash placeholder)" \
-    >"$PM_ROOT/claim-exchange.out" 2>&1
-  identity_status=$?
-  set -e
-  wait "$feeder_pid"
+  run_identity_with_barrier "$preload" "$PM_CLAIM_FILE" "$signal" \
+    "$(hook_input Bash placeholder)" "$PM_ROOT/claim-exchange.out"
+  kill "$feeder_pid" 2>/dev/null || true
+  wait "$feeder_pid" 2>/dev/null || true
   rm -f "$PM_CLAIM_FILE"
+  rm -f "$signal" "$preload"
   printf '%s\n' "$owner" > "$PM_CLAIM_FILE"
-  [ "$identity_status" -eq 1 ]
+  [ "$IDENTITY_STATUS" -eq 1 ]
   grep -Fq 'claim_mismatch' "$PM_ROOT/claim-exchange.out"
 }
 
 @test "identity rejects a binding exchanged before the final read" {
+  preload="$PM_ROOT/read-barrier.cjs"
+  signal="$PM_ROOT/binding-first-read.fifo"
+  write_read_barrier_preload "$preload"
   first_binding="$PM_ROOT/binding-first.json"
   second_binding="$PM_ROOT/binding-second.json"
   cp "$PM_BINDING" "$first_binding"
@@ -383,20 +439,21 @@ fs.writeFileSync(out, JSON.stringify(value) + '\n');
 NODE
   rm -f "$PM_BINDING"
   mkfifo "$PM_BINDING"
+  mkfifo "$signal"
   (
     cat "$first_binding" > "$PM_BINDING"
+    IFS= read -r _ < "$signal"
     cat "$second_binding" > "$PM_BINDING"
   ) &
   feeder_pid=$!
-  set +e
-  node "$SCRIPTS/session-identity.js" <<<"$(hook_input Bash placeholder)" \
-    >"$PM_ROOT/binding-exchange.out" 2>&1
-  identity_status=$?
-  set -e
-  wait "$feeder_pid"
+  run_identity_with_barrier "$preload" "$PM_BINDING" "$signal" \
+    "$(hook_input Bash placeholder)" "$PM_ROOT/binding-exchange.out"
+  kill "$feeder_pid" 2>/dev/null || true
+  wait "$feeder_pid" 2>/dev/null || true
   rm -f "$PM_BINDING"
+  rm -f "$signal" "$preload"
   cp "$first_binding" "$PM_BINDING"
-  [ "$identity_status" -eq 1 ]
+  [ "$IDENTITY_STATUS" -eq 1 ]
   grep -Fq 'binding_changed' "$PM_ROOT/binding-exchange.out"
 }
 
