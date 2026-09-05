@@ -66,10 +66,10 @@ function Convert-TimeCreated {
 }
 
 function Get-Generation {
-  param([string]$Pid)
-  if ([string]::IsNullOrEmpty($Pid)) { return $null }
+  param([string]$ProcessId)
+  if ([string]::IsNullOrEmpty($ProcessId)) { return $null }
   $matches = @($script:StartRecords | Where-Object {
-      [string]$_.process_id -eq $Pid -and
+      [string]$_.process_id -eq $ProcessId -and
       [string]$_.generation_quality -eq 'known'
     })
   if ($matches.Count -eq 0) { return $null }
@@ -245,17 +245,17 @@ function Wait-ForTargetStop {
 
 function Invoke-RecordedTaskkill {
   param(
-    [Parameter(Mandatory = $true)] [int]$Pid,
+    [Parameter(Mandatory = $true)] [int]$TargetProcessId,
     [Parameter(Mandatory = $true)] [string]$OperationId
   )
   $actorTime = [DateTime]::UtcNow
-  $start = Get-Generation ([string]$Pid)
+  $start = Get-Generation ([string]$TargetProcessId)
   $generation = if ($null -eq $start) { 'unknown' } else { [string]$start.generation }
   $generationQuality = if ($null -eq $start) { 'unknown' } else { [string]$start.generation_quality }
   $output = ''
   $rc = $null
   try {
-    $output = (& taskkill.exe /PID $Pid /T /F 2>&1 | Out-String).Trim()
+    $output = (& taskkill.exe /PID $TargetProcessId /T /F 2>&1 | Out-String).Trim()
     $rc = [int]$LASTEXITCODE
   } catch {
     $output = ''
@@ -268,7 +268,7 @@ function Invoke-RecordedTaskkill {
     operation_id = $OperationId
     actor = 'isolated-preflight'
     actor_time_utc = $actorTime.ToString('o')
-    process_id = [string]$Pid
+    process_id = [string]$TargetProcessId
     generation = $generation
     generation_quality = $generationQuality
     rc = if ($null -eq $rc) { 'unknown' } else { [string]$rc }
@@ -278,7 +278,7 @@ function Invoke-RecordedTaskkill {
   return [pscustomobject]@{
     operation_id = $OperationId
     actor_time_utc = $actorTime.ToString('o')
-    process_id = [string]$Pid
+    process_id = [string]$TargetProcessId
     generation = $generation
     generation_quality = $generationQuality
     rc = $rc
@@ -491,7 +491,7 @@ try {
       }
     } else {
       $operationId = "op-$($script:RunId)-taskkill"
-      $taskkillResult = Invoke-RecordedTaskkill -Pid $script:TargetPid -OperationId $operationId
+      $taskkillResult = Invoke-RecordedTaskkill -TargetProcessId $script:TargetPid -OperationId $operationId
       if (-not (Wait-ForTargetStop)) {
         $script:CollectorReason = 'stop-event-not-observed'
         Write-PacketRecord @{
