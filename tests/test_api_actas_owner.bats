@@ -124,9 +124,9 @@ start_live_owner() {
   [ "$(json_field "$output" liveness)" = dead ]
 }
 
-@test "api actas-owner rejects malformed or nonregular claims" {
+@test "api actas-owner rejects malformed, whitespace/control, or nonregular claims" {
   lock="$(claim_path)"
-  for kind in empty extra extra-blank invalid-byte nul directory symlink; do
+  for kind in empty extra extra-blank invalid-byte nul space control directory symlink; do
     if [ -d "$lock" ] && [ ! -L "$lock" ]; then
       rmdir "$lock"
     else
@@ -138,6 +138,8 @@ start_live_owner() {
       extra-blank) printf 'sid\n\n' > "$lock" ;;
       invalid-byte) printf '\377' > "$lock" ;;
       nul) printf 'sid\0' > "$lock" ;;
+      space) printf 'sid with space\n' > "$lock" ;;
+      control) printf 'sid\001token\n' > "$lock" ;;
       directory) mkdir "$lock" ;;
       symlink) ln -s "$RUN_DIR/other-claim" "$lock" ;;
     esac
