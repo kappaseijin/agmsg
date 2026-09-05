@@ -1,0 +1,247 @@
+#!/usr/bin/env node
+
+/* Native Claude PreToolUse policy boundary for the isolated PM probe. */
+
+'use strict';
+
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const {spawnSync} = require('child_process');
+
+const POLICY_VERSION = 'pm-pretool-v1';
+const MAX_INPUT_BYTES = 1024 * 1024;
+const NATIVE_TOOLS = new Set(['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode']);
+const BROKER_OPERATIONS = new Set([
+  'agmsg_send', 'agmsg_receive', 'agmsg_delegate', 'monitor', 'actas', 'drop',
+  'rule_load', 'rule_record', 'git_maintenance', 'sync_origin_clone',
+  'proxy_git_write', 'team_provision', 'bot_collaborator', 'apply_decision',
+  'stale_runtime_cleanup', 'issue_view', 'issue_comment', 'pr_view',
+  'pr_comment', 'seat_start', 'seat_stop',
+]);
+
+const digest = (value) => `sha256:${crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex')}`;
+
+const denyOutput = (reason) => {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: reason,
+    },
+  }) + '\n');
+  process.exitCode = 2;
+};
+
+const parseInput = () => {
+  let raw = '';
+  try {
+    raw = fs.readFileSync(0, 'utf8');
+  } catch (_) {
+    throw new Error('hook_input_unreadable');
+  }
+  if (Buffer.byteLength(raw, 'utf8') > MAX_INPUT_BYTES) throw new Error('hook_input_too_large');
+  let input;
+  try {
+    input = JSON.parse(raw);
+  } catch (_) {
+    throw new Error('hook_input_invalid');
+  }
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('hook_input_invalid');
+  for (const field of ['session_id', 'cwd', 'tool_name', 'tool_use_id']) {
+    if (typeof input[field] !== 'string' || input[field].length === 0) throw new Error(`${field}_invalid`);
+  }
+  if (!input.tool_input || typeof input.tool_input !== 'object' || Array.isArray(input.tool_input)) {
+    throw new Error('tool_input_invalid');
+  }
+  return input;
+};
+
+const appendDecision = (input, decision, reason) => {
+  const file = process.env.AGMSG_PM_DECISIONS_FILE;
+  if (typeof file !== 'string' || file.length === 0) throw new Error('decision_log_unconfigured');
+  const record = {
+    schemaVersion: 1,
+    observedAt: new Date().toISOString(),
+    sessionId: input.session_id,
+    generation: process.env.AGMSG_PM_PROCESS_GENERATION || '',
+    toolUseId: input.tool_use_id,
+    tool: input.tool_name,
+    inputDigest: digest(input.tool_input),
+    decision,
+    reason: reason || null,
+    policyVersion: POLICY_VERSION,
+  };
+  fs.mkdirSync(path.dirname(file), {recursive: true});
+  fs.appendFileSync(file, JSON.stringify(record) + '\n', {encoding: 'utf8', flag: 'a'});
+};
+
+const identity = (input) => {
+  const scriptDir = __dirname;
+  const result = spawnSync(path.join(scriptDir, 'session-identity.sh'), [], {
+    input: JSON.stringify(input),
+    encoding: 'utf8',
+    timeout: 2000,
+    env: process.env,
+  });
+  if (result.error || result.status !== 0) {
+    const detail = String(result.stderr || '').trim().replace(/[^A-Za-z0-9_.-]/gu, '_').slice(0, 80);
+    throw new Error(detail ? `session_identity_unavailable_${detail}` : 'session_identity_unavailable');
+  }
+  try {
+    const value = JSON.parse(result.stdout || '');
+    if (!value || value.status !== 'ok') throw new Error('session_identity_invalid');
+    return value;
+  } catch (_) {
+    throw new Error('session_identity_invalid');
+  }
+};
+
+const brokerCommand = (input, identityValue) => {
+  if (input.tool_name !== 'Bash' || typeof input.tool_input.command !== 'string') return null;
+  const command = input.tool_input.command;
+  if (command.length === 0 || command !== command.trim()) return null;
+  // Only space-separated literal argv is accepted. All shell syntax and all
+  // wrappers are rejected before any permission decision is returned.
+  if (/[|;&<>$`()\\*?\n\r"']/u.test(command)) return null;
+  const parts = command.split(' ');
+  if (parts.some((part) => part.length === 0) || parts.length !== 3) return null;
+  let expectedHelper;
+  try {
+    expectedHelper = fs.realpathSync.native(path.join(__dirname, 'pm-broker.sh'));
+  } catch (_) {
+    return null;
+  }
+  const helper = process.env.AGMSG_PM_BROKER_PATH;
+  if (typeof helper !== 'string' || !path.isAbsolute(helper) || !path.isAbsolute(parts[0])) return null;
+  let stat;
+  let helperDigest;
+  try {
+    const helperPathStat = fs.lstatSync(helper);
+    const commandPathStat = fs.lstatSync(parts[0]);
+    if (helperPathStat.isSymbolicLink() || commandPathStat.isSymbolicLink() ||
+        !helperPathStat.isFile() || !commandPathStat.isFile()) return null;
+    if (fs.realpathSync.native(helper) !== expectedHelper || fs.realpathSync.native(parts[0]) !== expectedHelper) {
+      return null;
+    }
+    stat = fs.statSync(expectedHelper);
+    helperDigest = `sha256:${crypto.createHash('sha256').update(fs.readFileSync(expectedHelper)).digest('hex')}`;
+  } catch (_) {
+    return null;
+  }
+  if (!stat.isFile() || (process.platform !== 'win32' && !(stat.mode & 0o111)) || helperDigest !== identityValue.brokerDigest) {
+    return null;
+  }
+  if (!BROKER_OPERATIONS.has(parts[1]) || !/^[A-Za-z0-9_-]+$/u.test(parts[2])) return null;
+  return {helper, operation: parts[1]};
+};
+
+const parseLiteralCommand = (command) => {
+  if (typeof command !== 'string' || command.length === 0 || command !== command.trim()) return null;
+  const words = [];
+  let current = '';
+  let quoted = false;
+  let quote = '';
+  let escaped = false;
+  for (const character of command) {
+    if (escaped) {
+      current += character;
+      escaped = false;
+      quoted = true;
+      continue;
+    }
+    if (quote === "'") {
+      if (character === "'") quote = '';
+      else current += character;
+      quoted = true;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '"') quote = '';
+      else if (character === '\\') escaped = true;
+      else current += character;
+      quoted = true;
+      continue;
+    }
+    if (character === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      quoted = true;
+      continue;
+    }
+    if (/\s/u.test(character)) {
+      if (quoted) {
+        words.push(current);
+        current = '';
+        quoted = false;
+      }
+      continue;
+    }
+    if (/[|;&<>$`(){}*?!\n\r]/u.test(character)) return null;
+    current += character;
+    quoted = true;
+  }
+  if (escaped || quote) return null;
+  if (quoted) words.push(current);
+  return words;
+};
+
+const monitorCommand = (input, identityValue) => {
+  if (input.tool_name !== 'Monitor' || !input.tool_input || input.tool_input.persistent !== true ||
+      input.tool_input.description !== `agmsg inbox stream (acting as ${identityValue.agent})`) return false;
+  const words = parseLiteralCommand(input.tool_input.command);
+  if (!words || words.length !== 5) return false;
+  let expectedWatch;
+  let project;
+  try {
+    expectedWatch = fs.realpathSync.native(path.join(__dirname, 'watch.sh'));
+    const watchPathStat = fs.lstatSync(words[0]);
+    if (watchPathStat.isSymbolicLink() || !watchPathStat.isFile() ||
+        fs.realpathSync.native(words[0]) !== expectedWatch) return false;
+    if (process.platform !== 'win32' && !(fs.statSync(expectedWatch).mode & 0o111)) return false;
+    project = fs.realpathSync.native(words[2]);
+  } catch (_) {
+    return false;
+  }
+  const expectedInstance = `${identityValue.sessionId}.${identityValue.pid}`;
+  return words[1] === expectedInstance &&
+    project === identityValue.project &&
+    words[3] === identityValue.type &&
+    words[4] === identityValue.agent;
+};
+
+let input;
+try {
+  input = parseInput();
+} catch (error) {
+  try { appendDecision({session_id: 'unknown', tool_name: 'unknown', tool_use_id: 'unknown', tool_input: {}}, 'deny', error.message); } catch (_) {}
+  denyOutput(error.message);
+  process.exit();
+}
+
+if (NATIVE_TOOLS.has(input.tool_name)) {
+  try { appendDecision(input, 'native', 'native_conversation_tool'); } catch (_) {}
+  process.exit(0);
+}
+
+let reason = 'tool_not_allowed';
+try {
+  const identityValue = identity(input);
+  if (input.tool_name === 'Monitor' && monitorCommand(input, identityValue)) reason = '';
+  else if (brokerCommand(input, identityValue)) reason = '';
+  else if (input.tool_name === 'Bash') reason = 'command_not_in_fixed_broker_contract';
+  else if (input.tool_name === 'Monitor') reason = 'monitor_not_in_fixed_contract';
+  appendDecision(input, reason ? 'deny' : 'allow', reason || null);
+} catch (error) {
+  reason = error.message || 'guard_internal_error';
+  try { appendDecision(input, 'deny', reason); } catch (_) {}
+}
+
+if (reason) {
+  denyOutput(`${reason}; delegate this operation through the fixed PM broker`);
+  process.exit();
+}
+process.exit(0);
