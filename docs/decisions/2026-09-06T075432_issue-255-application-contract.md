@@ -2,7 +2,7 @@
 type: Design
 title: "Issue #255: 3固定条件へのcollector最小適用契約"
 timestamp: "2026-09-06T07:54:32+09:00"
-status: implementation-handoff
+status: superseded-in-part
 issue: "https://github.com/kappaseijin/agmsg/issues/255"
 collector_baseline: "732938a8ccf4d1227359a52c4ebf52c997bf5720"
 designer: agmsg_architect_codex
@@ -12,6 +12,11 @@ reviewer: agmsg_reviewer_claude
 ---
 
 # 最小適用契約
+
+本書の通知生成時刻による実寿命・実世代・親子所属・kill前後の確定と比較開始ゲートは撤回した。
+[評価器意味論訂正](2026-09-06T082200_issue-255-evaluator-semantics.md)を正本とする。
+旧preflightは通知捕捉と欠測対照の範囲に限定され、実時刻・実世代の受入を示さない。
+v3の訂正試験が成功しても比較はblockedのままである。以下の旧記述は経緯として保持する。
 
 ## 主張・権限・固定条件
 

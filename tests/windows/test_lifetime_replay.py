@@ -19,12 +19,16 @@ class ReplayTests(unittest.TestCase):
                 negative=[r for r in rows if not (r['record_type']=='process-stop' and r['process_id']=='30')]
                 for name,data in [('packet',rows),('missing-child-stop',negative)]:
                     (out/(name+'.jsonl')).write_text(''.join(json.dumps(r)+'\n' for r in data))
-                    (out/(name+'.summary.json')).write_text(json.dumps(evaluate(data)))
+                    (out/(name+'.summary.json')).write_text(json.dumps(dict(collector_quality='known',lifetime_ms=1)))
                 (out/'gate.json').write_text(json.dumps(dict(subject_exit_code=rc)))
                 (out/'control').mkdir(); (out/'control'/'example.json').write_text('{}')
                 hashes={str(p.relative_to(out)).replace('/','\\'):hashlib.sha256(p.read_bytes()).hexdigest() for p in out.rglob('*') if p.is_file()}
                 (out/'hashes.json').write_text(json.dumps(hashes))
-            self.assertEqual(replay(root)['subject_exit_codes'],[0,7])
+            before={p:p.read_bytes() for p in root.rglob('*') if p.is_file()}
+            value=replay(root)
+            self.assertEqual(value['subject_exit_codes'],[0,7])
+            self.assertEqual(value['comparison_gate'],'blocked')
+            self.assertTrue(all(p.read_bytes()==data for p,data in before.items()))
             (root/'preflight-0/control/example.json').write_text('changed')
             with self.assertRaisesRegex(ValueError,'hash mismatch'): replay(root)
 

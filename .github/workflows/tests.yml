@@ -1070,44 +1070,14 @@ jobs:
       - name: Check the shapes we publish (unshaped names are checked before push)
         run: AGMSG_PRIVATE_NAMES=none node scripts/check-private-names.mjs
 
-  lifetime-v2:
-    name: Windows lifetime application preflight
+  lifetime-semantics:
+    name: Windows offline lifetime semantics
     runs-on: windows-latest
-    timeout-minutes: 12
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install Bats for version provenance
-        shell: bash
-        run: npm install -g bats
-      - name: Offline generation and adapter controls
-        run: python -m unittest discover -s tests/windows -p 'test_lifetime_*.py' -v
-      - name: Short child and missing stop controls (no condition comparison)
-        run: python tests/windows/lifetime_run.py preflight --out "${{ runner.temp }}/lifetime-v2-${{ github.run_id }}-${{ github.run_attempt }}"
-      - name: Preserve complete packets on success and failure
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: lifetime-v2-preflight-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/lifetime-v2-${{ github.run_id }}-${{ github.run_attempt }}/
-          if-no-files-found: error
-
-  lifetime-v2-replay:
-    name: Downloaded lifetime packet replay
-    needs: lifetime-v2
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - uses: actions/download-artifact@v4
-        with:
-          name: lifetime-v2-preflight-${{ github.run_id }}-${{ github.run_attempt }}
-          path: downloaded-lifetime
-      - name: Verify every hash and re-evaluate the downloaded full packets
-        run: python tests/windows/lifetime_replay.py downloaded-lifetime
+      - name: Legacy and v2 evaluator controls (no WMI collection)
+        run: python -m unittest discover -s tests/windows -p 'test_lifetime_*.py' -v

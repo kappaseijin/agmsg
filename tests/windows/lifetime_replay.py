@@ -3,29 +3,31 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-from lifetime_packet import evaluate, read_packet
+from lifetime_packet import evaluate_file
 
 
 def replay(root):
     root=Path(root)
-    runs=list(root.glob('preflight-*'))
-    if len(runs)!=2: raise ValueError('expected both preflight subject outcomes')
+    runs=sorted(root.glob('preflight-*'))
+    if not runs: raise ValueError('no saved preflight packets')
     outcomes=[]
+    evaluations=[]
     for run in runs:
         hashes=json.loads((run/'hashes.json').read_text())
         for name,digest in hashes.items():
             path=(run/name.replace('\\','/')).resolve()
             if not path.is_relative_to(run.resolve()): raise ValueError('artifact path escape')
             if hashlib.sha256(path.read_bytes()).hexdigest()!=digest: raise ValueError('artifact hash mismatch: '+name)
-        for name,quality in [('packet','known'),('missing-child-stop','unknown')]:
-            value=evaluate(read_packet(run/(name+'.jsonl')))
-            saved=json.loads((run/(name+'.summary.json')).read_text())
-            if value!=saved or value['collector_quality']!=quality:
-                raise ValueError('independent packet replay mismatch: '+name)
-        gate=json.loads((run/'gate.json').read_text())
-        outcomes.append(gate['subject_exit_code'])
-    if sorted(outcomes)!=[0,7]: raise ValueError('subject rc was not preserved')
-    return dict(artifact_persistence='verified',runs=2,subject_exit_codes=sorted(outcomes),packet_replay='identical')
+        packets=sorted(run.glob('*.jsonl'))
+        if not packets or any(p.name not in {n.replace('\\','/') for n in hashes} for p in packets):
+            raise ValueError('packet missing from saved hash manifest')
+        for packet in packets:
+            value=evaluate_file(packet)
+            if value['comparison_gate']!='blocked': raise ValueError('WMI comparison unexpectedly accepted')
+            evaluations.append(dict(packet=str(packet.relative_to(root)),source_packet_sha256=value['source_packet_sha256']))
+            if packet.name=='packet.jsonl': outcomes.append(value['subject_exit_code'])
+    return dict(artifact_persistence='verified',runs=len(runs),subject_exit_codes=outcomes,
+                packet_replay='v3-derived',comparison_gate='blocked',evaluations=evaluations)
 
 if __name__=='__main__':
     p=argparse.ArgumentParser(); p.add_argument('root'); a=p.parse_args()
