@@ -1,0 +1,17 @@
+{
+  "formatVersion": 1,
+  "issue": 254,
+  "forkCutoff": "7ea795e93683b0e7ede0fabf017fe503fcfe6aea",
+  "officialComparisonCutoff": "e58dbafad5a84be625f070385bb0c076c3daa4db",
+  "b1": {"status": "fork-prototype", "officialAvailable": false},
+  "b2": {"status": "fork-prototype", "officialAvailable": false},
+  "b3": {"status": "undecided", "evidence": null},
+  "consumerTestPlanAccepted": false,
+  "providerIndependentControlsAccepted": false,
+  "gates": {
+    "connectionImplementation": {"status": "blocked", "requires": ["accepted-design", "official-b1-b2", "b3-public-contract", "provider-independent-controls", "accepted-consumer-test-plan"]},
+    "pilotStart": {"status": "blocked", "requires": ["fixed-head-full-review", "all-required-tests-pass", "isolated-consumer-integration"]},
+    "p2Acceptance": {"status": "not-started", "requires": ["native-tui-fresh-resume", "id-linked-workflow", "fault-recovery", "current-pm-unchanged"]}
+  },
+  "physicalMigrationAuthorized": false
+}
