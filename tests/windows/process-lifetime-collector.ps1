@@ -1,10 +1,12 @@
 [CmdletBinding()]
 param(
-  [ValidateSet('preflight', 'evaluate')]
+  [ValidateSet('preflight', 'evaluate', 'collect')]
   [string]$Mode = 'preflight',
   [Parameter(Mandatory = $true)]
   [string]$PacketPath,
   [string]$Root,
+  [string]$ControlDirectory,
+  [string]$RunManifestPath,
   [switch]$DropStopEvent
 )
 
@@ -83,6 +85,22 @@ function Write-ProcessTraceRecord {
   )
 
   $pidText = [string]$EventObject.ProcessID
+  if ($Mode -eq 'collect') {
+    $time = Convert-TimeCreated $EventObject.TIME_CREATED
+    Write-PacketRecord @{
+      record_type = "process-$TraceType"
+      process_id = $pidText
+      parent_process_id = [string]$EventObject.ParentProcessID
+      process_name = [string]$EventObject.ProcessName
+      event_time_created_raw = $time.raw
+      event_generated_time_utc = $time.utc
+      event_received_time_utc = [DateTime]::UtcNow.ToString('o')
+      event_clock_quality = $time.quality
+      generation_quality = 'pending-offline-evaluation'
+      scope = 'pending-root-registration'
+    }
+    return
+  }
   if ($pidText -ne [string]$script:TargetPid) { return }
 
   $time = Convert-TimeCreated $EventObject.TIME_CREATED
@@ -438,6 +456,12 @@ function Write-Summary {
   Write-Output $json
 }
 
+if ($Mode -eq 'collect') {
+  . (Join-Path $PSScriptRoot 'lifetime-collect.ps1')
+  $collectExit = Invoke-LifetimeCollection -ControlDirectory $ControlDirectory -RunManifestPath $RunManifestPath
+  exit $collectExit
+}
+
 if ($Mode -eq 'evaluate') {
   if (-not (Test-Path -LiteralPath $PacketPath -PathType Leaf)) {
     $summary = New-UnknownSummary 'packet-unavailable'
@@ -445,6 +469,12 @@ if ($Mode -eq 'evaluate') {
     exit 0
   }
   $records = Read-Packet $PacketPath
+  $manifests = @($records | Where-Object { (Get-Field $_ 'record_type') -eq 'run-manifest' })
+  if ($manifests.Count -gt 0) {
+    if ($DropStopEvent) { throw 'v2 negative control requires an explicitly modified packet' }
+    & python (Join-Path $PSScriptRoot 'lifetime_packet.py') $PacketPath
+    exit $LASTEXITCODE
+  }
   $summary = Evaluate-Records -Records $records -DropOneStop:$DropStopEvent
   Write-Output ($summary | ConvertTo-Json -Compress -Depth 10)
   exit 0
