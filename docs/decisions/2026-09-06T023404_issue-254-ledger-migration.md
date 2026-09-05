@@ -59,6 +59,10 @@ mixed hunkは論理単位へ分解して子項目を持たせ、原hunkへのcov
 この表はfile/機能群の先行分類であり、全hunk意味分類完了の宣言ではない。
 定型抽出はworker、各hunkの意味分類はarchitect、根拠実測はverifier、受入はreviewerとする。
 実際のhunk台帳の未分類を原一覧として保持し、全分類は後続精査で進める。
+同prefixのfull-hunks.jsonに734 hunk、increment-hunks.jsonに27 hunkを保存した。
+全行は意味分類未完了としてunclassifiedで保持する。上表の機能群候補を各hunkの確定判断へ自動適用しない。
+増分は正しい旧fork objectで再収集した13 files/27 hunksを採用し、workerの初回SHA誤記を含む一覧は破棄せず不採用とした。
+増分13 filesは全てhunkありというworker確認。全体734 hunkのfile-level特殊変更のcoverageは未確認であり、完全分類台帳の受入はまだ求めない。
 
 ## 互換性manifest
 

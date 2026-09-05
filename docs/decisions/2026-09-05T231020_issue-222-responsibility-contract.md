@@ -13,6 +13,10 @@ reviewer: agmsg_reviewer_claude
 
 # 三分割の責務配置と互換契約
 
+> ゲート訂正: [Issue #254の段階区分](2026-09-06T023404_issue-254-ledger-migration.md)を本書の旧ゲート記述より優先する。
+> 実接続実装着手には公式提供版・B3採用経路・提供側独立対照・consumer試験計画の受入を要求し、実装後のconsumer統合結果はpilot起動前に要求する。
+> 実TUIの運用受入はP2合格条件であり、前段へ循環させない。
+
 ## 決定と本書の主張
 
 [breaker断定](https://github.com/kappaseijin/agmsg/issues/222#issuecomment-5552339806)に従い、agmsg・agguild・agguild_poolへの三分割を目標とする。

@@ -11,6 +11,10 @@ reviewer: agmsg_reviewer_claude
 
 # 非集約registrationの最小公開照会契約
 
+> ゲート訂正: [Issue #254の段階区分](2026-09-06T023404_issue-254-ledger-migration.md)を本書の旧ゲート記述より優先する。
+> 実接続実装着手には公式提供版・B3採用経路・提供側独立対照・consumer試験計画の受入を要求し、実装後のconsumer統合結果はpilot起動前に要求する。
+> 実TUIの運用受入はP2合格条件であり、前段へ循環させない。
+
 ## 主張と既存機能
 
 agmsg提供側に、team内の全registration tupleと結果の完全性を返す最小のread-only公開入口を追加する案とする。
