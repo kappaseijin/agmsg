@@ -1,0 +1,63 @@
+name: Issue 261 failure attribution
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - tests/test_codex_bridge_launcher.bats
+      - tests/reap_phase_helper.bash
+      - tests/reap_phase_controls.py
+      - .github/workflows/issue261-diagnostic.yml
+
+permissions:
+  contents: read
+
+jobs:
+  attribution:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/checkout@v4
+        with:
+          repository: bats-core/bats-core
+          ref: v1.13.0
+          path: .ci-bats
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install fixture dependencies
+        run: sudo apt-get update && sudo apt-get install -y sqlite3 jq
+      - name: Require the original Bash and Bats versions
+        run: |
+          mkdir -p "$RUNNER_TEMP/issue261"
+          {
+            git rev-parse HEAD
+            bash --version | head -1
+            .ci-bats/bin/bats --version
+            git -C .ci-bats rev-parse HEAD
+          } > "$RUNNER_TEMP/issue261/versions.txt"
+          cat "$RUNNER_TEMP/issue261/versions.txt"
+          case "$BASH_VERSION" in 5.2.21\(*) ;; *) exit 1 ;; esac
+          test "$(.ci-bats/bin/bats --version)" = 'Bats 1.13.0'
+      - name: Establish failure attribution controls first
+        run: python3 tests/reap_phase_controls.py --bats "$GITHUB_WORKSPACE/.ci-bats/bin/bats" --out "$RUNNER_TEMP/issue261/controls"
+      - name: One target and neighbour observation after controls pass
+        run: |
+          set +e
+          .ci-bats/bin/bats --tap --filter '^launcher: (test-owned reaper is a no-op in MSYS pid space|reaps owned launcher and bridge but leaves foreign controls|test-owned reaper waits for every signaled pid before returning)$' tests/test_codex_bridge_launcher.bats > "$RUNNER_TEMP/issue261/target.tap" 2>&1
+          rc=$?
+          cat "$RUNNER_TEMP/issue261/target.tap"
+          printf 'event=bats-end rc=%s\n' "$rc" > "$RUNNER_TEMP/issue261/terminal.txt"
+          exit "$rc"
+      - name: Preserve complete diagnostic packets
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue261-attribution-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/issue261/
+            ${{ runner.temp }}/agmsg-reap-phase.*
+          if-no-files-found: error

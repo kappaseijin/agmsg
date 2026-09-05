@@ -20,6 +20,7 @@
 # codex-bridge.js below mutates only that disposable copy.
 
 load test_helper
+load reap_phase_helper
 
 setup() {
   setup_test_env
@@ -237,27 +238,41 @@ EOF
 }
 
 @test "launcher: reaps owned launcher and bridge but leaves foreign controls" {
-  skip_on_windows "requires POSIX process argv and kill semantics"
+  _reap_diag_init
+  _reap_diag_phase helper-before
+  skip_on_windows "requires POSIX process argv and kill semantics" || {
+    _reap_diag_helper_failed "$?"
+    return "$?"
+  }
+  _reap_diag_phase helper-after
 
   (
     set -e
     parent=''; dispatcher=''; foreign=''; foreign_launcher=''
     cleanup() {
-      local pid
+      local pid rc
       for pid in "$dispatcher" "$parent" "$foreign" "$foreign_launcher"; do
         case "$pid" in
           ''|*[!0-9]*|0) ;;
-          *) kill "$pid" 2>/dev/null || true ;;
+          *)
+            if kill "$pid" 2>/dev/null; then rc=0; else rc=$?; fi
+            _reap_diag_log cleanup-signal "$rc" "target_pid=$pid"
+            ;;
         esac
       done
       for pid in "$dispatcher" "$parent" "$foreign" "$foreign_launcher"; do
         case "$pid" in
           ''|*[!0-9]*|0) ;;
-          *) wait "$pid" 2>/dev/null || true ;;
+          *)
+            _reap_diag_log cleanup-wait-enter 0 "target_pid=$pid"
+            if wait "$pid" 2>/dev/null; then rc=0; else rc=$?; fi
+            _reap_diag_log cleanup-wait-exit "$rc" "target_pid=$pid"
+            ;;
         esac
       done
     }
-    trap cleanup EXIT
+    trap '_reap_diag_exit "$?"' EXIT
+    _reap_diag_phase fixture-start
 
     export MOCK_BRIDGE_SLEEP=25
     put_record team alice test-thread "$PROJ" codex
@@ -275,6 +290,7 @@ sys.stdout.flush()
 while True:
     c, _ = s.accept(); c.close()
 ' "$foreign_ready" "$PROJ" 3>&- & foreign=$!
+    _reap_diag_phase foreign-ready
     wait_for_file "$foreign_ready"
     kill -0 "$foreign"
 
@@ -289,6 +305,7 @@ EOF
     bash "$foreign_launcher_script" "$LAUNCHER" "$other_project" 3>&- &
     foreign_launcher=$!
 
+    _reap_diag_phase snapshot
     snapshot=''; bridge_pid=''; i=0
     for i in {1..100}; do
       snapshot="$(_launcher_snapshot_owned_pids)"
@@ -300,23 +317,46 @@ EOF
       fi
       sleep 0.1
     done
+    _reap_diag_pid_set
     [ -n "$snapshot" ]
+    _reap_diag_phase bridge-ready
     bridge_pid="$(cat "$RUN_DIR/codex-bridge.team.alice.pid")"
     [ -n "$bridge_pid" ]
+    _reap_diag_pid_set
+    _reap_diag_phase owned-live
     kill -0 "$dispatcher"
     kill -0 "$bridge_pid"
+    _reap_diag_phase owned-inclusion
     printf '%s\n' "$snapshot" | grep -Fxq "$dispatcher"
     printf '%s\n' "$snapshot" | grep -Fxq "$bridge_pid"
-    ! printf '%s\n' "$snapshot" | grep -Fxq "$foreign"
-    ! printf '%s\n' "$snapshot" | grep -Fxq "$foreign_launcher"
+    _reap_diag_phase foreign-exclusion
+    if printf '%s\n' "$snapshot" | grep -Fxq "$foreign"; then
+      _reap_diag_log assertion-failed 1 'predicate=foreign-excluded'
+      exit 1
+    fi
+    if printf '%s\n' "$snapshot" | grep -Fxq "$foreign_launcher"; then
+      _reap_diag_log assertion-failed 1 'predicate=foreign_launcher-excluded'
+      exit 1
+    fi
 
+    _reap_diag_phase reap
     _reap_test_owned_codex_processes
+    _reap_diag_log reaper-return 0
+    _reap_diag_phase exit-wait
     for i in $snapshot; do
       wait_for_pid_exit "$i"
     done
+    _reap_diag_phase foreign-alive
     kill -0 "$foreign"
     kill -0 "$foreign_launcher"
-  )
+    _reap_diag_phase body-complete
+  ) &
+  local body_pid=$! body_rc
+  _reap_diag_log parent-wait-enter 0 "body_pid=$body_pid"
+  if wait "$body_pid"; then body_rc=0; else body_rc=$?; fi
+  if _reap_diag_parent_result "$body_pid" "$body_rc"; then body_rc=0; else body_rc=$?; fi
+  if [ "$body_rc" -ne 0 ]; then cat "$_REAP_PACKET" >&2; fi
+  return "$body_rc"
 }
 
 @test "launcher: test-owned reaper waits for every signaled pid before returning" {
