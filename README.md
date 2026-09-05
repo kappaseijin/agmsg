@@ -1242,6 +1242,44 @@ transaction across multiple files. The existing `members` resource remains
 unchanged for compatibility; it is an agent-level aggregate and may return
 only one project.
 
+#### Observe an actas owner
+
+To inspect one registered agent's actas claim without changing it, use the
+versioned owner resource:
+
+```bash
+~/.agents/skills/<cmd>/scripts/api.sh get teams <team> actas-owner <agent> --schema-version 1
+```
+
+It emits one JSON object containing the opaque claim token, when it was read
+and validated successfully:
+
+```json
+{"schemaVersion":1,"resource":"actas-owner","team":"agsuite","agent":"alice","status":"owned","reason":null,"owner":"session-id.1234","ownerKind":"composite","liveness":"alive","consistency":"observed"}
+```
+
+`status` and `reason` are deliberately distinct from authorization:
+
+| Observation | `status` / `reason` | Exit |
+| --- | --- | --- |
+| Claim is readable and its instance is alive | `owned` / `null` | 0 |
+| Claim is readable and its instance is dead | `stale` / `owner_dead` | 0 |
+| Registered target has no claim | `absent` / `claim_absent` | 0 |
+| Team or agent is not registered | `not_found` / `target_not_found` | 1 |
+| Claim is empty, malformed, a symlink, or nonregular | `unknown` / `claim_invalid` | 1 |
+| Registration or claim cannot be read | `unknown` / `read_failed` | 1 |
+| A source changes during the observation | `unknown` / `concurrent_change` | 1 |
+| Liveness cannot be established | `unknown` / `liveness_unavailable` | 1 |
+| Version or arguments are invalid | `error` / `unsupported_schema_version` or `invalid_argument` | 2 |
+
+The query snapshots and validates the requested registration and claim, then
+rechecks both before returning. It does not claim, release, reclaim, garbage
+collect, join, reset, initialize a database, start a process, or start a
+watcher. A successful observation is not an authorization grant: consumers
+must compare the complete opaque `owner` token with their own binding and
+handle the race window after the response. Unsupported schema versions fail
+closed; they are never treated as an empty result.
+
 ## FAQ / Design notes
 
 **Is this MCP? Do I need an MCP server?**
