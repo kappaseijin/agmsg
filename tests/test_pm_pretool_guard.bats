@@ -48,14 +48,13 @@ fs.writeFileSync(file, JSON.stringify({
   agents: {pm: {registrations: [{type: 'claude-code', project}]}}
 }) + '\n');
 NODE
-  node - "$PM_CLAIM_FILE" "$PM_PROJECT" "$PM_TEAM" "$PM_AGENT" "$PM_SESSION" "$PM_GENERATION" "$PM_PID" "$PM_PROCESS_START" <<'NODE'
-const fs = require('fs');
-const [file, project, team, agent, sessionId, generation, pid, pidStart] = process.argv.slice(2);
-fs.writeFileSync(file, JSON.stringify({
-  schemaVersion: 1, team, agent, project: fs.realpathSync.native(project), sessionId, generation, pid, pidStart,
-}) + '\n');
-NODE
-  node - "$PM_BINDING" "$PM_PROJECT" "$PM_TEAM" "$PM_AGENT" "$PM_TYPE" "$PM_SESSION" "$PM_GENERATION" "$PM_PID" "$PM_PROCESS_START" <<'NODE'
+(
+  export SKILL_DIR="$TEST_SKILL_DIR"
+  . "$TEST_SKILL_DIR/scripts/lib/actas-lock.sh"
+  actas_lock_claim "$PM_TEAM" "$PM_AGENT" "$PM_SESSION.$PM_PID" >/dev/null
+)
+grep -Fqx "$PM_SESSION.$PM_PID" "$PM_CLAIM_FILE"
+node - "$PM_BINDING" "$PM_PROJECT" "$PM_TEAM" "$PM_AGENT" "$PM_TYPE" "$PM_SESSION" "$PM_GENERATION" "$PM_PID" "$PM_PROCESS_START" <<'NODE'
 const fs = require('fs');
 const [file, project, team, agent, type, sessionId, generation, pid, pidStart] = process.argv.slice(2);
 fs.writeFileSync(file, JSON.stringify({
@@ -115,6 +114,55 @@ NODE
 run_hook() {
   local input="$1"
   run "$SCRIPTS/pm-pretool-guard" <<<"$input"
+}
+
+write_read_barrier_preload() {
+  local file="$1"
+  node - "$file" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const file = process.argv[2];
+fs.writeFileSync(file, `
+const fs = require('fs');
+const path = require('path');
+const target = process.env.AGMSG_TEST_READ_TARGET || '';
+const signal = process.env.AGMSG_TEST_READ_SIGNAL || '';
+const originalReadFileSync = fs.readFileSync;
+let signalled = false;
+fs.readFileSync = function readFileSyncWithBarrier(filePath, ...args) {
+  const result = Reflect.apply(originalReadFileSync, this, [filePath, ...args]);
+  if (!signalled && target && signal && typeof filePath === 'string' &&
+      path.resolve(filePath) === path.resolve(target)) {
+    signalled = true;
+    fs.writeFileSync(signal, 'first-read-complete\\n');
+  }
+  return result;
+};
+`);
+NODE
+}
+
+run_identity_with_barrier() {
+  local preload="$1" target="$2" signal="$3" input="$4" output_file="$5"
+  local identity_pid watchdog_pid
+  set +e
+  env AGMSG_TEST_READ_TARGET="$target" AGMSG_TEST_READ_SIGNAL="$signal" \
+    NODE_OPTIONS="--require=$preload" \
+    node "$SCRIPTS/session-identity.js" <<<"$input" >"$output_file" 2>&1 &
+  identity_pid=$!
+  node - "$identity_pid" <<'NODE' &
+const child = Number(process.argv[2]);
+setTimeout(() => {
+  try { process.kill(child, 'SIGTERM'); } catch (_) {}
+  setTimeout(() => { try { process.kill(child, 'SIGKILL'); } catch (_) {} }, 1000);
+}, 10000);
+NODE
+  watchdog_pid=$!
+  wait "$identity_pid"
+  IDENTITY_STATUS=$?
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+  set -e
 }
 
 @test "normal direct Bash work is denied before execution" {
@@ -232,15 +280,7 @@ NODE
   run_hook "$(hook_input Bash "$broker_command")"
   [ "$status" -eq 2 ]
 
-  node - "$PM_CLAIM_FILE" "$PM_PROJECT" <<'NODE'
-const fs = require('fs');
-const [file, project] = process.argv.slice(2);
-fs.writeFileSync(file, JSON.stringify({
-  schemaVersion: 1, team: 'isolated-team', agent: 'pm', project: fs.realpathSync.native(project),
-  sessionId: process.env.PM_SESSION, generation: process.env.PM_GENERATION, pid: '999999',
-  pidStart: process.env.PM_PROCESS_START,
-}) + '\n');
-NODE
+  printf '%s\n' "$PM_SESSION.999999" > "$PM_CLAIM_FILE"
   run_hook "$(hook_input Bash "$broker_command")"
   [ "$status" -eq 2 ]
 }
@@ -248,14 +288,12 @@ NODE
 @test "identity rejects a forged process start token" {
   payload="eyJvcGVyYXRpb24iOiJhZ21zZ19zZW5kIiwicmVjaXBpZW50IjoicG0ifQ"
   forged_start=forged-process-start
-  node - "$PM_BINDING" "$PM_CLAIM_FILE" "$forged_start" <<'NODE'
+  node - "$PM_BINDING" "$forged_start" <<'NODE'
 const fs = require('fs');
-const [bindingFile, claimFile, forgedStart] = process.argv.slice(2);
-for (const file of [bindingFile, claimFile]) {
-  const value = JSON.parse(fs.readFileSync(file));
-  value.pidStart = forgedStart;
-  fs.writeFileSync(file, JSON.stringify(value) + '\n');
-}
+const [bindingFile, forgedStart] = process.argv.slice(2);
+const value = JSON.parse(fs.readFileSync(bindingFile));
+value.pidStart = forgedStart;
+fs.writeFileSync(bindingFile, JSON.stringify(value) + '\n');
 NODE
   export AGMSG_PM_PROCESS_START="$forged_start"
   run_hook "$(hook_input Bash "$PM_BROKER_PATH agmsg_send $payload")"
@@ -268,15 +306,13 @@ NODE
   sleep 60 &
   other_pid=$!
   other_start="$(node "$SCRIPTS/session-identity.js" --process-start "$other_pid")"
-  node - "$PM_BINDING" "$PM_CLAIM_FILE" "$other_pid" "$other_start" <<'NODE'
+  node - "$PM_BINDING" "$other_pid" "$other_start" <<'NODE'
 const fs = require('fs');
-const [bindingFile, claimFile, pid, pidStart] = process.argv.slice(2);
-for (const file of [bindingFile, claimFile]) {
-  const value = JSON.parse(fs.readFileSync(file));
-  value.pid = pid;
-  value.pidStart = pidStart;
-  fs.writeFileSync(file, JSON.stringify(value) + '\n');
-}
+const [bindingFile, pid, pidStart] = process.argv.slice(2);
+const value = JSON.parse(fs.readFileSync(bindingFile));
+value.pid = pid;
+value.pidStart = pidStart;
+fs.writeFileSync(bindingFile, JSON.stringify(value) + '\n');
 NODE
   export AGMSG_PM_PROCESS_PID="$other_pid"
   export AGMSG_PM_PROCESS_START="$other_start"
@@ -287,6 +323,138 @@ NODE
   wait "$other_pid" 2>/dev/null || true
   [ "$hook_status" -eq 2 ]
   grep -Fq 'process_parent_mismatch' <<<"$hook_output"
+}
+
+@test "formal claim is consumed by existing owner and state readers" {
+  owner="$PM_SESSION.$PM_PID"
+  run bash -c '. "$1/scripts/lib/actas-lock.sh"; actas_lock_owner "$2" "$3"' \
+    _ "$TEST_SKILL_DIR" "$PM_TEAM" "$PM_AGENT"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$owner" ]
+
+  run bash -c '. "$1/scripts/lib/actas-lock.sh"; actas_lock_state "$2" "$3" "$4"' \
+    _ "$TEST_SKILL_DIR" "$PM_TEAM" "$PM_AGENT" "$owner"
+  [ "$status" -eq 0 ]
+  [ "$output" = 'mine' ]
+}
+
+@test "identity and audit reject every non-canonical claim form" {
+  payload="eyJvcGVyYXRpb24iOiJhZ21zZ19zZW5kIiwicmVjaXBpZW50IjoicG0ifQ"
+  broker_command="$PM_BROKER_PATH agmsg_send $payload"
+  owner="$PM_SESSION.$PM_PID"
+  for form in empty json extra-line extra-space no-final-lf carriage; do
+    case "$form" in
+      empty) : > "$PM_CLAIM_FILE" ;;
+      json) printf '%s\n' '{"schemaVersion":1}' > "$PM_CLAIM_FILE" ;;
+      extra-line) printf '%s\nextra\n' "$owner" > "$PM_CLAIM_FILE" ;;
+      extra-space) printf '%s \n' "$owner" > "$PM_CLAIM_FILE" ;;
+      no-final-lf) printf '%s' "$owner" > "$PM_CLAIM_FILE" ;;
+      carriage) printf '%s\r\n' "$owner" > "$PM_CLAIM_FILE" ;;
+    esac
+    run_hook "$(hook_input Bash "$broker_command")"
+    [ "$status" -eq 2 ]
+    grep -Fq 'claim_' <<<"$output"
+    run env AGMSG_PM_GUARD_PATH="$SCRIPTS/pm-pretool-guard" \
+      bash "$SCRIPTS/pm-audit.sh" --once
+    [ "$status" -eq 1 ]
+    grep -Fq 'claim_' <<<"$output"
+  done
+
+  printf '%s\n' "$owner" > "$PM_CLAIM_FILE"
+  chmod 000 "$PM_CLAIM_FILE"
+  run_hook "$(hook_input Bash "$broker_command")"
+  unreadable_status="$status"
+  unreadable_output="$output"
+  chmod 600 "$PM_CLAIM_FILE"
+  [ "$unreadable_status" -eq 2 ]
+  grep -Fq 'claim_unreadable' <<<"$unreadable_output"
+
+  AGMSG_PM_CLAIM_FILE="$PM_ROOT/not-derived.session" \
+    run_hook "$(hook_input Bash "$broker_command")"
+  [ "$status" -eq 2 ]
+  grep -Fq 'claim_path_mismatch' <<<"$output"
+  run env AGMSG_PM_CLAIM_FILE="$PM_ROOT/not-derived.session" \
+    AGMSG_PM_GUARD_PATH="$SCRIPTS/pm-pretool-guard" bash "$SCRIPTS/pm-audit.sh" --once
+  [ "$status" -eq 1 ]
+  grep -Fq 'claim_path_mismatch' <<<"$output"
+}
+
+@test "claim path encoding matches actas for non-ASCII and punctuation" {
+  team='日本 team_%'
+  agent='alice%_pm'
+  node_path="$(node - "$SCRIPTS/lib/pm-claim.js" "$TEST_SKILL_DIR" "$team" "$agent" <<'NODE'
+const {claimPath} = require(process.argv[2]);
+process.stdout.write(claimPath(process.argv[3], process.argv[4], process.argv[5]));
+NODE
+)"
+  shell_path="$(bash -c '. "$1/scripts/lib/actas-lock.sh"; actas_lock_path "$2" "$3"' \
+    _ "$TEST_SKILL_DIR" "$team" "$agent")"
+  [ "$node_path" = "$shell_path" ]
+
+  space_path="$(bash -c '. "$1/scripts/lib/actas-lock.sh"; actas_lock_path "$2" "$3"' \
+    _ "$TEST_SKILL_DIR" 'foo bar' pm)"
+  underscore_path="$(bash -c '. "$1/scripts/lib/actas-lock.sh"; actas_lock_path "$2" "$3"' \
+    _ "$TEST_SKILL_DIR" foo_bar pm)"
+  [ "$space_path" != "$underscore_path" ]
+}
+
+@test "identity rejects a claim exchanged between its two reads" {
+  owner="$PM_SESSION.$PM_PID"
+  preload="$PM_ROOT/read-barrier.cjs"
+  signal="$PM_ROOT/claim-first-read.fifo"
+  write_read_barrier_preload "$preload"
+  rm -f "$PM_CLAIM_FILE"
+  mkfifo "$PM_CLAIM_FILE"
+  mkfifo "$signal"
+  (
+    printf '%s\n' "$owner" > "$PM_CLAIM_FILE"
+    IFS= read -r _ < "$signal"
+    printf '%s\n' "$owner-replaced" > "$PM_CLAIM_FILE"
+  ) &
+  feeder_pid=$!
+  run_identity_with_barrier "$preload" "$PM_CLAIM_FILE" "$signal" \
+    "$(hook_input Bash placeholder)" "$PM_ROOT/claim-exchange.out"
+  kill "$feeder_pid" 2>/dev/null || true
+  wait "$feeder_pid" 2>/dev/null || true
+  rm -f "$PM_CLAIM_FILE"
+  rm -f "$signal" "$preload"
+  printf '%s\n' "$owner" > "$PM_CLAIM_FILE"
+  [ "$IDENTITY_STATUS" -eq 1 ]
+  grep -Fq 'claim_mismatch' "$PM_ROOT/claim-exchange.out"
+}
+
+@test "identity rejects a binding exchanged before the final read" {
+  preload="$PM_ROOT/read-barrier.cjs"
+  signal="$PM_ROOT/binding-first-read.fifo"
+  write_read_barrier_preload "$preload"
+  first_binding="$PM_ROOT/binding-first.json"
+  second_binding="$PM_ROOT/binding-second.json"
+  cp "$PM_BINDING" "$first_binding"
+  node - "$second_binding" "$first_binding" <<'NODE'
+const fs = require('fs');
+const [out, input] = process.argv.slice(2);
+const value = JSON.parse(fs.readFileSync(input));
+value.generation = 'exchanged-generation';
+fs.writeFileSync(out, JSON.stringify(value) + '\n');
+NODE
+  rm -f "$PM_BINDING"
+  mkfifo "$PM_BINDING"
+  mkfifo "$signal"
+  (
+    cat "$first_binding" > "$PM_BINDING"
+    IFS= read -r _ < "$signal"
+    cat "$second_binding" > "$PM_BINDING"
+  ) &
+  feeder_pid=$!
+  run_identity_with_barrier "$preload" "$PM_BINDING" "$signal" \
+    "$(hook_input Bash placeholder)" "$PM_ROOT/binding-exchange.out"
+  kill "$feeder_pid" 2>/dev/null || true
+  wait "$feeder_pid" 2>/dev/null || true
+  rm -f "$PM_BINDING"
+  rm -f "$signal" "$preload"
+  cp "$first_binding" "$PM_BINDING"
+  [ "$IDENTITY_STATUS" -eq 1 ]
+  grep -Fq 'binding_changed' "$PM_ROOT/binding-exchange.out"
 }
 
 @test "malformed hook input is a blocking internal error" {

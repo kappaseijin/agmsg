@@ -47,6 +47,11 @@ chmod +x "$SKILL/scripts/"*.sh "$SKILL/scripts/"*.js "$SKILL/scripts/pm-pretool-
   "$SKILL/scripts/pm-posttool-record" 2>/dev/null || true
 
 export SKILL_DIR="$SKILL"
+export AGMSG_STORAGE_PATH="$TMP_ROOT/db"
+export AGMSG_STORAGE_DRIVER=sqlite
+export AGMSG_AGENT_PID=''
+mkdir -p "$AGMSG_STORAGE_PATH"
+bash "$SKILL/scripts/internal/init-db.sh" >/dev/null
 export AGMSG_PM_BROKER_ROOT="$TMP_ROOT/broker"
 export AGMSG_PM_BINDING_FILE="$TMP_ROOT/binding.json"
 export AGMSG_PM_DECISIONS_FILE="$TMP_ROOT/decisions.jsonl"
@@ -150,15 +155,17 @@ NODE
 export AGMSG_PM_GUARD_DIGEST="$guard_digest"
 export AGMSG_PM_BROKER_DIGEST="$broker_digest"
 mkdir -p "$(dirname "$claim")"
-node - "$claim" "$project" "$session" "$generation" "$pid" "$pid_start" <<'NODE'
-const fs = require('fs');
-const [file, project, sessionId, generation, pid, pidStart] = process.argv.slice(2);
-fs.writeFileSync(file, JSON.stringify({
-  schemaVersion: 1, team: 'isolated-cli-team', agent: 'pm',
-  project: fs.realpathSync.native(project), sessionId, generation,
-  pid: String(pid), pidStart,
-}) + '\n');
-NODE
+. "$skill/scripts/lib/actas-lock.sh"
+expected_claim="$(actas_lock_path isolated-cli-team pm)"
+[ "$claim" = "$expected_claim" ] || {
+  printf '%s\n' 'launcher: claim path is not the formal actas path' >&2
+  exit 2
+}
+old_owner="$(actas_lock_owner isolated-cli-team pm || true)"
+if [ -n "$old_owner" ]; then
+  actas_lock_release isolated-cli-team pm "$old_owner" >/dev/null 2>&1 || true
+fi
+actas_lock_claim isolated-cli-team pm "$session.$pid" >/dev/null
 node - "$binding" "$project" "$session" "$generation" "$pid" "$pid_start" "$guard_digest" "$broker_digest" "$profile_digest" <<'NODE'
 const fs = require('fs');
 const [file, project, sessionId, generation, pid, pidStart, guardDigest, brokerDigest, profileDigest] = process.argv.slice(2);

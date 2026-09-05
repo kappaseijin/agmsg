@@ -5,6 +5,12 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const {
+  claimPath,
+  expectedOwner,
+  readClaim,
+  sameClaimPath,
+} = require('./lib/pm-claim');
 
 const POLICY_VERSION = 'pm-pretool-v1';
 const HASH = /^sha256:[0-9a-f]{64}$/u;
@@ -97,22 +103,17 @@ if (!isObject(binding) || binding.schemaVersion !== 1) {
   }
 }
 
-const claimFile = fileFrom('AGMSG_PM_CLAIM_FILE');
-const claim = readJson(claimFile, 'claim_unavailable', alerts);
 if (bindingValid) {
-  if (!isObject(claim) || claim.schemaVersion !== 1) {
-    addAlert(alerts, 'claim_schema_invalid');
+  const skillDir = process.env.SKILL_DIR || path.join(__dirname, '..');
+  const derivedClaimFile = claimPath(skillDir, binding.team, binding.agent);
+  const configuredClaimFile = fileFrom('AGMSG_PM_CLAIM_FILE');
+  if (!configuredClaimFile) {
+    addAlert(alerts, 'claim_path_unavailable');
+  } else if (!sameClaimPath(configuredClaimFile, derivedClaimFile)) {
+    addAlert(alerts, 'claim_path_mismatch');
   } else {
-    for (const field of ['team', 'agent', 'project', 'sessionId', 'generation', 'pid', 'pidStart']) {
-      if (!isText(claim[field])) addAlert(alerts, `claim_${field}_invalid`);
-    }
-    let claimProject = '';
-    try { claimProject = fs.realpathSync.native(claim.project); } catch (_) { addAlert(alerts, 'claim_project_unreadable'); }
-    if (claim.team !== binding.team || claim.agent !== binding.agent || claimProject !== binding.project ||
-        claim.sessionId !== binding.sessionId || claim.generation !== binding.generation ||
-        claim.pid !== binding.pid || claim.pidStart !== binding.pidStart) {
-      addAlert(alerts, 'claim_mismatch');
-    }
+    const result = readClaim(derivedClaimFile, expectedOwner(binding.sessionId, binding.pid));
+    if (!result.ok) addAlert(alerts, result.reason);
   }
 }
 

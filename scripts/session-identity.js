@@ -15,6 +15,12 @@
 const fs = require('fs');
 const path = require('path');
 const {execFileSync, spawnSync} = require('child_process');
+const {
+  claimPath,
+  expectedOwner,
+  readClaim,
+  sameClaimPath,
+} = require('./lib/pm-claim');
 
 const fail = (reason) => {
   process.stderr.write(JSON.stringify({status: 'unidentifiable', reason}) + '\n');
@@ -96,18 +102,6 @@ const canonicalPath = (value, reason) => {
   } catch (_) {
     fail(reason);
   }
-};
-
-const encodeLockPart = (value) => {
-  const bytes = Buffer.from(value, 'utf8');
-  let result = '';
-  for (const byte of bytes) {
-    const character = String.fromCharCode(byte);
-    result += /[A-Za-z0-9._-]/.test(character)
-      ? character
-      : `%${byte.toString(16).toUpperCase().padStart(2, '0')}`;
-  }
-  return result;
 };
 
 const parseInput = () => {
@@ -210,22 +204,21 @@ for (const file of teamFiles) {
 }
 if (registrationCount !== 1) fail(registrationCount === 0 ? 'roster_no_match' : 'roster_multiple_match');
 
-const claimFile = path.join(
-  process.env.SKILL_DIR || path.join(__dirname, '..'),
-  'run',
-  `actas.${encodeLockPart(team)}__${encodeLockPart(agent)}.session`,
-);
-const claim = readJson(claimFile, 'claim_unreadable');
-if (!claim || claim.schemaVersion !== 1) fail('claim_schema_invalid');
-for (const field of ['team', 'agent', 'project', 'sessionId', 'generation', 'pid', 'pidStart']) {
-  text(claim[field], `claim_${field}`);
-}
-if (claim.team !== team || claim.agent !== agent || claim.sessionId !== input.sessionId ||
-    claim.generation !== binding.generation || claim.pid !== binding.pid ||
-    claim.pidStart !== binding.pidStart ||
-    canonicalPath(claim.project, 'claim_project_unreadable') !== binding.project) {
-  fail('claim_mismatch');
-}
+const skillDir = process.env.SKILL_DIR || path.join(__dirname, '..');
+const claimFile = claimPath(skillDir, team, agent);
+const configuredClaimFile = process.env.AGMSG_PM_CLAIM_FILE || '';
+if (configuredClaimFile && !sameClaimPath(configuredClaimFile, claimFile)) fail('claim_path_mismatch');
+const owner = expectedOwner(input.sessionId, processPid);
+const claim = readClaim(claimFile, owner);
+if (!claim.ok) fail(claim.reason);
+
+// Re-read the binding and claim immediately before success. A valid first
+// observation is not enough if either ownership record changes during the
+// identity checks.
+const bindingAgain = readJson(bindingFile, 'binding_unreadable');
+if (JSON.stringify(bindingAgain) !== JSON.stringify(binding)) fail('binding_changed');
+const claimAgain = readClaim(claimFile, owner);
+if (!claimAgain.ok) fail(claimAgain.reason);
 
 process.stdout.write(JSON.stringify({
   status: 'ok',
