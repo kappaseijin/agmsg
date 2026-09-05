@@ -21,7 +21,11 @@ try { valueJson = JSON.parse(fs.readFileSync(heartbeat, 'utf8')); } catch (_) {
 const observed = Number(valueJson.observedAtEpoch);
 const now = Number(nowRaw);
 const stale = Number(staleRaw);
-if (!Number.isSafeInteger(observed) || observed > now || now - observed > stale) {
+if (valueJson.schemaVersion !== 1 || valueJson.status !== 'healthy') {
+  process.stdout.write(JSON.stringify({status: 'alert', reason: 'heartbeat_status_alert'}) + '\n');
+  process.exit(1);
+}
+if (!Number.isSafeInteger(observed) || observed > now || now - observed >= stale) {
   process.stdout.write(JSON.stringify({status: 'alert', reason: 'heartbeat_stale'}) + '\n');
   process.exit(1);
 }

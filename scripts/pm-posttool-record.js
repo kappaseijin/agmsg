@@ -22,9 +22,11 @@ const record = {
   schemaVersion: 1,
   observedAt: new Date().toISOString(),
   sessionId: typeof input.session_id === 'string' ? input.session_id : '',
+  generation: process.env.AGMSG_PM_PROCESS_GENERATION || '',
   toolUseId: input.tool_use_id,
   tool: input.tool_name,
   inputDigest: `sha256:${crypto.createHash('sha256').update(JSON.stringify(toolInput)).digest('hex')}`,
+  policyVersion: 'pm-pretool-v1',
 };
 try {
   fs.mkdirSync(path.dirname(file), {recursive: true});

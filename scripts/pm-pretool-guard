@@ -97,7 +97,7 @@ const identity = (input) => {
   }
 };
 
-const brokerCommand = (input) => {
+const brokerCommand = (input, identityValue) => {
   if (input.tool_name !== 'Bash' || typeof input.tool_input.command !== 'string') return null;
   const command = input.tool_input.command;
   if (command.length === 0 || command !== command.trim()) return null;
@@ -106,10 +106,111 @@ const brokerCommand = (input) => {
   if (/[|;&<>$`()\\*?\n\r"']/u.test(command)) return null;
   const parts = command.split(' ');
   if (parts.some((part) => part.length === 0) || parts.length !== 3) return null;
+  let expectedHelper;
+  try {
+    expectedHelper = fs.realpathSync.native(path.join(__dirname, 'pm-broker.sh'));
+  } catch (_) {
+    return null;
+  }
   const helper = process.env.AGMSG_PM_BROKER_PATH;
-  if (typeof helper !== 'string' || helper.length === 0 || parts[0] !== helper) return null;
+  if (typeof helper !== 'string' || !path.isAbsolute(helper) || !path.isAbsolute(parts[0])) return null;
+  let stat;
+  let helperDigest;
+  try {
+    const helperPathStat = fs.lstatSync(helper);
+    const commandPathStat = fs.lstatSync(parts[0]);
+    if (helperPathStat.isSymbolicLink() || commandPathStat.isSymbolicLink() ||
+        !helperPathStat.isFile() || !commandPathStat.isFile()) return null;
+    if (fs.realpathSync.native(helper) !== expectedHelper || fs.realpathSync.native(parts[0]) !== expectedHelper) {
+      return null;
+    }
+    stat = fs.statSync(expectedHelper);
+    helperDigest = `sha256:${crypto.createHash('sha256').update(fs.readFileSync(expectedHelper)).digest('hex')}`;
+  } catch (_) {
+    return null;
+  }
+  if (!stat.isFile() || (process.platform !== 'win32' && !(stat.mode & 0o111)) || helperDigest !== identityValue.brokerDigest) {
+    return null;
+  }
   if (!BROKER_OPERATIONS.has(parts[1]) || !/^[A-Za-z0-9_-]+$/u.test(parts[2])) return null;
   return {helper, operation: parts[1]};
+};
+
+const parseLiteralCommand = (command) => {
+  if (typeof command !== 'string' || command.length === 0 || command !== command.trim()) return null;
+  const words = [];
+  let current = '';
+  let quoted = false;
+  let quote = '';
+  let escaped = false;
+  for (const character of command) {
+    if (escaped) {
+      current += character;
+      escaped = false;
+      quoted = true;
+      continue;
+    }
+    if (quote === "'") {
+      if (character === "'") quote = '';
+      else current += character;
+      quoted = true;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '"') quote = '';
+      else if (character === '\\') escaped = true;
+      else current += character;
+      quoted = true;
+      continue;
+    }
+    if (character === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      quoted = true;
+      continue;
+    }
+    if (/\s/u.test(character)) {
+      if (quoted) {
+        words.push(current);
+        current = '';
+        quoted = false;
+      }
+      continue;
+    }
+    if (/[|;&<>$`(){}*?!\n\r]/u.test(character)) return null;
+    current += character;
+    quoted = true;
+  }
+  if (escaped || quote) return null;
+  if (quoted) words.push(current);
+  return words;
+};
+
+const monitorCommand = (input, identityValue) => {
+  if (input.tool_name !== 'Monitor' || !input.tool_input || input.tool_input.persistent !== true ||
+      input.tool_input.description !== `agmsg inbox stream (acting as ${identityValue.agent})`) return false;
+  const words = parseLiteralCommand(input.tool_input.command);
+  if (!words || words.length !== 5) return false;
+  let expectedWatch;
+  let project;
+  try {
+    expectedWatch = fs.realpathSync.native(path.join(__dirname, 'watch.sh'));
+    const watchPathStat = fs.lstatSync(words[0]);
+    if (watchPathStat.isSymbolicLink() || !watchPathStat.isFile() ||
+        fs.realpathSync.native(words[0]) !== expectedWatch) return false;
+    if (process.platform !== 'win32' && !(fs.statSync(expectedWatch).mode & 0o111)) return false;
+    project = fs.realpathSync.native(words[2]);
+  } catch (_) {
+    return false;
+  }
+  const expectedInstance = `${identityValue.sessionId}.${identityValue.pid}`;
+  return words[1] === expectedInstance &&
+    project === identityValue.project &&
+    words[3] === identityValue.type &&
+    words[4] === identityValue.agent;
 };
 
 let input;
@@ -122,15 +223,17 @@ try {
 }
 
 if (NATIVE_TOOLS.has(input.tool_name)) {
-  try { appendDecision(input, 'native', 'native_conversation_tool'); } catch (error) { denyOutput(error.message); process.exit(); }
+  try { appendDecision(input, 'native', 'native_conversation_tool'); } catch (_) {}
   process.exit(0);
 }
 
 let reason = 'tool_not_allowed';
 try {
-  identity(input);
-  if (brokerCommand(input)) reason = '';
+  const identityValue = identity(input);
+  if (input.tool_name === 'Monitor' && monitorCommand(input, identityValue)) reason = '';
+  else if (brokerCommand(input, identityValue)) reason = '';
   else if (input.tool_name === 'Bash') reason = 'command_not_in_fixed_broker_contract';
+  else if (input.tool_name === 'Monitor') reason = 'monitor_not_in_fixed_contract';
   appendDecision(input, reason ? 'deny' : 'allow', reason || null);
 } catch (error) {
   reason = error.message || 'guard_internal_error';

@@ -16,14 +16,28 @@ setup() {
   export PM_SESSION="11111111-1111-4111-8111-111111111111"
   export PM_GENERATION="generation-1"
   export PM_PID="$$"
-  export PM_PROCESS_START="test-start"
+  export PM_PROCESS_START="$(node "$SCRIPTS/session-identity.js" --process-start "$PM_PID")"
   export PM_BINDING="$PM_ROOT/binding.json"
+  export PM_CLAIM_FILE="$RUN_DIR/actas.${PM_TEAM}__${PM_AGENT}.session"
   export PM_DECISIONS="$PM_ROOT/decisions.jsonl"
   export PM_EXECUTIONS="$PM_ROOT/executions.jsonl"
   export PM_HEARTBEAT="$PM_ROOT/heartbeat.json"
   export PM_AUDIT="$PM_ROOT/audit.json"
   export PM_BROKER_ROOT="$PM_ROOT/broker"
-  export PM_BROKER_PATH="$SCRIPTS/pm-broker.sh"
+  export PM_BROKER_PATH="$(cd "$SCRIPTS" && pwd -P)/pm-broker.sh"
+  export PM_WATCH_PATH="$(cd "$SCRIPTS" && pwd -P)/watch.sh"
+  export PM_GUARD_DIGEST="$(node - "$SCRIPTS/pm-pretool-guard" <<'NODE'
+const crypto = require('crypto');
+const fs = require('fs');
+process.stdout.write(`sha256:${crypto.createHash('sha256').update(fs.readFileSync(process.argv[2])).digest('hex')}`);
+NODE
+)"
+  export PM_BROKER_DIGEST="$(node - "$PM_BROKER_PATH" <<'NODE'
+const crypto = require('crypto');
+const fs = require('fs');
+process.stdout.write(`sha256:${crypto.createHash('sha256').update(fs.readFileSync(process.argv[2])).digest('hex')}`);
+NODE
+)"
   mkdir -p "$PM_PROJECT/.claude" "$PM_ROOT" "$PM_BROKER_ROOT" "$TEST_SKILL_DIR/teams/$PM_TEAM"
 
   node - "$TEST_SKILL_DIR/teams/$PM_TEAM/config.json" "$PM_PROJECT" <<'NODE'
@@ -34,13 +48,20 @@ fs.writeFileSync(file, JSON.stringify({
   agents: {pm: {registrations: [{type: 'claude-code', project}]}}
 }) + '\n');
 NODE
-  printf '%s\n' "$PM_SESSION.$PM_PID" > "$RUN_DIR/actas.${PM_TEAM}__${PM_AGENT}.session"
-  node - "$PM_BINDING" "$PM_PROJECT" "$PM_TEAM" "$PM_AGENT" "$PM_TYPE" "$PM_SESSION" "$PM_GENERATION" "$PM_PID" <<'NODE'
+  node - "$PM_CLAIM_FILE" "$PM_PROJECT" "$PM_TEAM" "$PM_AGENT" "$PM_SESSION" "$PM_GENERATION" "$PM_PID" "$PM_PROCESS_START" <<'NODE'
 const fs = require('fs');
-const [file, project, team, agent, type, sessionId, generation, pid] = process.argv.slice(2);
+const [file, project, team, agent, sessionId, generation, pid, pidStart] = process.argv.slice(2);
+fs.writeFileSync(file, JSON.stringify({
+  schemaVersion: 1, team, agent, project: fs.realpathSync.native(project), sessionId, generation, pid, pidStart,
+}) + '\n');
+NODE
+  node - "$PM_BINDING" "$PM_PROJECT" "$PM_TEAM" "$PM_AGENT" "$PM_TYPE" "$PM_SESSION" "$PM_GENERATION" "$PM_PID" "$PM_PROCESS_START" <<'NODE'
+const fs = require('fs');
+const [file, project, team, agent, type, sessionId, generation, pid, pidStart] = process.argv.slice(2);
 fs.writeFileSync(file, JSON.stringify({
   schemaVersion: 1, team, agent, type, project: fs.realpathSync.native(project), sessionId, generation,
-  pid: String(pid), pidStart: 'test-start', profileDigest: 'sha256:test-profile',
+  pid: String(pid), pidStart, guardDigest: process.env.PM_GUARD_DIGEST, brokerDigest: process.env.PM_BROKER_DIGEST,
+  profileDigest: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
   policyVersion: 'pm-pretool-v1'
 }) + '\n');
 NODE
@@ -53,6 +74,9 @@ NODE
   export AGMSG_PM_PROCESS_GENERATION="$PM_GENERATION"
   export AGMSG_PM_PROCESS_START="$PM_PROCESS_START"
   export AGMSG_PM_BROKER_PATH="$PM_BROKER_PATH"
+  export AGMSG_PM_GUARD_DIGEST="$PM_GUARD_DIGEST"
+  export AGMSG_PM_BROKER_DIGEST="$PM_BROKER_DIGEST"
+  export AGMSG_PM_CLAIM_FILE="$PM_CLAIM_FILE"
   export AGMSG_PM_GUARD_PATH="$SCRIPTS/pm-pretool-guard"
   export AGMSG_PM_BROKER_ROOT="$PM_BROKER_ROOT"
   export AGMSG_PM_DECISIONS_FILE="$PM_DECISIONS"
@@ -75,7 +99,13 @@ const input = {
   tool_use_id: 'toolu_isolated_1',
   tool_input: {},
 };
-if (process.env.TOOL_NAME === 'Bash') input.tool_input.command = process.env.COMMAND_TEXT;
+if (process.env.TOOL_NAME === 'Bash' || process.env.TOOL_NAME === 'Monitor') {
+  input.tool_input.command = process.env.COMMAND_TEXT;
+}
+if (process.env.TOOL_NAME === 'Monitor') {
+  input.tool_input.description = 'agmsg inbox stream (acting as pm)';
+  input.tool_input.persistent = true;
+}
 process.stdout.write(JSON.stringify(input));
 NODE
 }
@@ -115,6 +145,28 @@ run_hook() {
   done
 }
 
+@test "changing the broker path cannot create an allow" {
+  payload="eyJvcGVyYXRpb24iOiJhZ21zZ19zZW5kIn0"
+  run env AGMSG_PM_BROKER_PATH=/bin/echo "$SCRIPTS/pm-pretool-guard" \
+    <<<"$(hook_input Bash "/bin/echo agmsg_send $payload")"
+  [ "$status" -eq 2 ]
+}
+
+@test "role-limited Monitor permits only the fixed current-session watch command" {
+  monitor_command="$(printf '%q %q %q %q %q' "$PM_WATCH_PATH" "$PM_SESSION.$PM_PID" "$PM_PROJECT" "$PM_TYPE" "$PM_AGENT")"
+  run_hook "$(hook_input Monitor "$monitor_command")"
+  [ "$status" -eq 0 ]
+  grep -Fq '"tool":"Monitor"' "$PM_DECISIONS"
+
+  for command in \
+    "$(printf '%q %q %q %q' "$PM_WATCH_PATH" "$PM_SESSION.$PM_PID" "$PM_PROJECT" "$PM_TYPE")" \
+    "$(printf '%q %q %q %q %q' "$PM_WATCH_PATH" "$PM_SESSION.$PM_PID" "$PM_PROJECT" "$PM_TYPE" other-role)" \
+    "$monitor_command | tee monitor.log"; do
+    run_hook "$(hook_input Monitor "$command")"
+    [ "$status" -eq 2 ]
+  done
+}
+
 @test "the complete PM operation table uses only structured broker arguments" {
   for operation in agmsg_send agmsg_receive agmsg_delegate monitor actas drop \
     rule_load rule_record git_maintenance sync_origin_clone proxy_git_write \
@@ -135,12 +187,17 @@ NODE
   run_hook "$(hook_input AskUserQuestion)"
   [ "$status" -eq 0 ]
 
+  run env -u AGMSG_PM_DECISIONS_FILE "$SCRIPTS/pm-pretool-guard" <<<"$(hook_input AskUserQuestion)"
+  [ "$status" -eq 0 ]
+
   rm -f "$RUN_DIR/actas.${PM_TEAM}__${PM_AGENT}.session"
   run_hook "$(hook_input Bash 'git status')"
   [ "$status" -eq 2 ]
 }
 
 @test "identity anomalies fail closed: mismatched generation, duplicate roster, and stale claim" {
+  payload="eyJvcGVyYXRpb24iOiJhZ21zZ19zZW5kIiwicmVjaXBpZW50IjoicG0ifQ"
+  broker_command="$PM_BROKER_PATH agmsg_send $payload"
   node - "$PM_BINDING" <<'NODE'
 const fs = require('fs');
 const p = process.argv[2];
@@ -148,7 +205,7 @@ const value = JSON.parse(fs.readFileSync(p));
 value.generation = 'wrong-generation';
 fs.writeFileSync(p, JSON.stringify(value) + '\n');
 NODE
-  run_hook "$(hook_input Bash 'git status')"
+  run_hook "$(hook_input Bash "$broker_command")"
   [ "$status" -eq 2 ]
 
   node - "$TEST_SKILL_DIR/teams/$PM_TEAM/config.json" "$PM_PROJECT" <<'NODE'
@@ -165,11 +222,19 @@ const value = JSON.parse(fs.readFileSync(p));
 value.generation = process.env.PM_GENERATION;
 fs.writeFileSync(p, JSON.stringify(value) + '\n');
 NODE
-  run_hook "$(hook_input Bash 'git status')"
+  run_hook "$(hook_input Bash "$broker_command")"
   [ "$status" -eq 2 ]
 
-  printf '%s\n' "$PM_SESSION.999999" > "$RUN_DIR/actas.${PM_TEAM}__${PM_AGENT}.session"
-  run_hook "$(hook_input Bash 'git status')"
+  node - "$PM_CLAIM_FILE" "$PM_PROJECT" <<'NODE'
+const fs = require('fs');
+const [file, project] = process.argv.slice(2);
+fs.writeFileSync(file, JSON.stringify({
+  schemaVersion: 1, team: 'isolated-team', agent: 'pm', project: fs.realpathSync.native(project),
+  sessionId: process.env.PM_SESSION, generation: process.env.PM_GENERATION, pid: '999999',
+  pidStart: process.env.PM_PROCESS_START,
+}) + '\n');
+NODE
+  run_hook "$(hook_input Bash "$broker_command")"
   [ "$status" -eq 2 ]
 }
 
@@ -181,8 +246,8 @@ NODE
 
 @test "independent audit detects a denied execution and writes a heartbeat" {
   mkdir -p "$PM_ROOT"
-  printf '%s\n' '{"toolUseId":"toolu_isolated_1","decision":"deny","policyVersion":"pm-pretool-v1"}' > "$PM_DECISIONS"
-  printf '%s\n' '{"toolUseId":"toolu_isolated_1","tool":"Bash","inputDigest":"sha256:test"}' > "$PM_EXECUTIONS"
+  printf '%s\n' '{"schemaVersion":1,"sessionId":"11111111-1111-4111-8111-111111111111","generation":"generation-1","toolUseId":"toolu_isolated_1","tool":"Bash","inputDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","decision":"deny","reason":"test","policyVersion":"pm-pretool-v1"}' > "$PM_DECISIONS"
+  printf '%s\n' '{"schemaVersion":1,"sessionId":"11111111-1111-4111-8111-111111111111","generation":"generation-1","toolUseId":"toolu_isolated_1","tool":"Bash","inputDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","policyVersion":"pm-pretool-v1"}' > "$PM_EXECUTIONS"
   run env AGMSG_PM_GUARD_PATH="$BATS_TEST_DIRNAME/../scripts/pm-pretool-guard" \
     bash "$BATS_TEST_DIRNAME/../scripts/pm-audit.sh" --once
   [ "$status" -eq 1 ]
@@ -232,4 +297,40 @@ NODE
     --heartbeat "$PM_HEARTBEAT" --now 1000 --stale-seconds 180
   [ "$status" -eq 1 ]
   grep -Fq 'heartbeat_unavailable' <<<"$output"
+}
+
+@test "the watchdog treats the exact stale threshold as stale" {
+  printf '%s\n' '{"schemaVersion":1,"status":"healthy","observedAtEpoch":1000}' > "$PM_HEARTBEAT"
+  run bash "$BATS_TEST_DIRNAME/../scripts/pm-audit-watchdog.sh" \
+    --heartbeat "$PM_HEARTBEAT" --now 1180 --stale-seconds 180
+  [ "$status" -eq 1 ]
+  grep -Fq 'heartbeat_stale' <<<"$output"
+}
+
+@test "audit rejects malformed binding and unknown execution records" {
+  printf '%s\n' '{}' > "$PM_BINDING"
+  run env AGMSG_PM_BINDING_FILE="$PM_BINDING" "$SCRIPTS/pm-audit.sh" --once
+  [ "$status" -eq 1 ]
+  grep -Fq 'binding_schema_invalid' <<<"$output"
+
+  node - "$PM_EXECUTIONS" <<'NODE'
+const fs = require('fs');
+const file = process.argv[2];
+fs.writeFileSync(file, JSON.stringify({
+  schemaVersion: 1, sessionId: process.env.PM_SESSION, generation: process.env.PM_GENERATION,
+  toolUseId: 'unknown-tool-use', tool: 'UnknownTool', inputDigest: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+  policyVersion: 'pm-pretool-v1',
+}) + '\n');
+NODE
+  run "$SCRIPTS/pm-audit.sh" --once
+  [ "$status" -eq 1 ]
+  grep -Fq 'execution_unknown_tool' <<<"$output"
+}
+
+@test "audit failure does not mint a fresh heartbeat" {
+  mkdir -p "$PM_ROOT/audit-output-dir"
+  run env AGMSG_PM_AUDIT_FILE="$PM_ROOT/audit-output-dir" "$SCRIPTS/pm-audit.sh" --once
+  [ "$status" -eq 1 ]
+  grep -Fq 'EISDIR' <<<"$output"
+  [ ! -e "$PM_HEARTBEAT" ]
 }

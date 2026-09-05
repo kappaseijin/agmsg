@@ -14,7 +14,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const {spawnSync} = require('child_process');
+const {execFileSync, spawnSync} = require('child_process');
 
 const fail = (reason) => {
   process.stderr.write(JSON.stringify({status: 'unidentifiable', reason}) + '\n');
@@ -26,6 +26,58 @@ const text = (value, name) => {
     fail(`${name}_invalid`);
   }
   return value;
+};
+
+const commandOutput = (command, args, reason) => {
+  try {
+    return execFileSync(command, args, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 1000,
+    }).trim();
+  } catch (_) {
+    fail(reason);
+  }
+};
+
+const processStartToken = (pid) => {
+  if (process.platform === 'win32') {
+    return commandOutput(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command',
+        `(Get-Process -Id ${pid}).StartTime.ToUniversalTime().ToString("o")`],
+      'process_start_unavailable',
+    );
+  }
+  return commandOutput('ps', ['-o', 'lstart=', '-p', String(pid)], 'process_start_unavailable');
+};
+
+const parentPid = (pid) => {
+  if (process.platform === 'win32') {
+    const value = commandOutput(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command',
+        `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").ParentProcessId`],
+      'process_parent_unavailable',
+    );
+    if (!/^[0-9]+$/u.test(value)) fail('process_parent_invalid');
+    return Number(value);
+  }
+  const value = commandOutput('ps', ['-o', 'ppid=', '-p', String(pid)], 'process_parent_unavailable');
+  if (!/^[0-9]+$/u.test(value)) fail('process_parent_invalid');
+  return Number(value);
+};
+
+const isDescendantOf = (targetPid) => {
+  let current = process.ppid;
+  const seen = new Set();
+  for (let depth = 0; depth < 32 && current > 1; depth += 1) {
+    if (current === targetPid) return true;
+    if (seen.has(current)) break;
+    seen.add(current);
+    current = parentPid(current);
+  }
+  return false;
 };
 
 const readJson = (file, reason) => {
@@ -76,6 +128,13 @@ const parseInput = () => {
   return {sessionId, cwd, toolName, toolUseId};
 };
 
+if (process.argv[2] === '--process-start') {
+  const processPidArg = text(process.argv[3] || '', 'process_pid');
+  if (!/^[1-9][0-9]*$/u.test(processPidArg)) fail('process_pid_invalid');
+  process.stdout.write(`${processStartToken(Number(processPidArg))}\n`);
+  process.exit(0);
+}
+
 const input = parseInput();
 const bindingFile = text(process.env.AGMSG_PM_BINDING_FILE || '', 'binding_file');
 const team = text(process.env.AGMSG_PM_TEAM || '', 'launcher_team');
@@ -87,7 +146,10 @@ const processStart = text(process.env.AGMSG_PM_PROCESS_START || '', 'process_sta
 const binding = readJson(bindingFile, 'binding_unreadable');
 
 if (!binding || binding.schemaVersion !== 1) fail('binding_schema_invalid');
-for (const field of ['team', 'agent', 'type', 'project', 'sessionId', 'generation', 'pid', 'pidStart', 'profileDigest', 'policyVersion']) {
+for (const field of [
+  'team', 'agent', 'type', 'project', 'sessionId', 'generation', 'pid', 'pidStart',
+  'profileDigest', 'policyVersion', 'guardDigest', 'brokerDigest',
+]) {
   text(binding[field], `binding_${field}`);
 }
 if (binding.team !== team || binding.agent !== agent || binding.type !== type) fail('binding_launcher_mismatch');
@@ -99,7 +161,12 @@ if (binding.project !== canonicalPath(input.cwd, 'cwd_unreadable')) fail('bindin
 if (binding.project !== canonicalPath(binding.project, 'binding_project_unreadable')) fail('binding_project_mismatch');
 
 const pid = Number(processPid);
-if (!Number.isSafeInteger(pid) || pid <= 0) fail('binding_pid_invalid');
+if (!Number.isSafeInteger(pid) || pid <= 1) fail('binding_pid_invalid');
+if (!/^sha256:[0-9a-f]{64}$/u.test(binding.guardDigest) || !/^sha256:[0-9a-f]{64}$/u.test(binding.brokerDigest)) {
+  fail('binding_digest_invalid');
+}
+if (processStartToken(pid) !== processStart) fail('process_start_mismatch');
+if (!isDescendantOf(pid)) fail('process_parent_mismatch');
 const instanceScript = path.join(process.env.SKILL_DIR || path.join(__dirname, '..'), 'scripts', 'lib', 'instance-id.sh');
 const liveness = spawnSync('bash', ['-c', 'set -e; . "$1"; agmsg_instance_alive "$2"', '--', instanceScript, `${input.sessionId}.${processPid}`], {
   encoding: 'utf8',
@@ -148,15 +215,15 @@ const claimFile = path.join(
   'run',
   `actas.${encodeLockPart(team)}__${encodeLockPart(agent)}.session`,
 );
-let claim;
-try {
-  const raw = fs.readFileSync(claimFile, 'utf8').replace(/\n$/u, '');
-  if (!raw || /\r?\n/u.test(raw)) fail('claim_schema_invalid');
-  claim = raw;
-} catch (_) {
-  fail('claim_unreadable');
+const claim = readJson(claimFile, 'claim_unreadable');
+if (!claim || claim.schemaVersion !== 1) fail('claim_schema_invalid');
+for (const field of ['team', 'agent', 'project', 'sessionId', 'generation', 'pid', 'pidStart']) {
+  text(claim[field], `claim_${field}`);
 }
-if (claim !== `${input.sessionId}.${processPid}` || claim !== `${binding.sessionId}.${binding.pid}`) {
+if (claim.team !== team || claim.agent !== agent || claim.sessionId !== input.sessionId ||
+    claim.generation !== binding.generation || claim.pid !== binding.pid ||
+    claim.pidStart !== binding.pidStart ||
+    canonicalPath(claim.project, 'claim_project_unreadable') !== binding.project) {
   fail('claim_mismatch');
 }
 
@@ -169,6 +236,9 @@ process.stdout.write(JSON.stringify({
   sessionId: binding.sessionId,
   generation: binding.generation,
   pid: binding.pid,
+  pidStart: binding.pidStart,
   profileDigest: binding.profileDigest,
+  guardDigest: binding.guardDigest,
+  brokerDigest: binding.brokerDigest,
   policyVersion: binding.policyVersion,
 }) + '\n');

@@ -6,54 +6,159 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
+const POLICY_VERSION = 'pm-pretool-v1';
+const HASH = /^sha256:[0-9a-f]{64}$/u;
+const ALLOWED_TOOLS = new Set(['Bash', 'Monitor', 'AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode']);
+const NATIVE_TOOLS = new Set(['Monitor', 'AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode']);
+
 const fileFrom = (name) => process.env[name] || '';
+const isObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+const isText = (value) => typeof value === 'string' && value.length > 0 && !/[\u0000-\u001f\u007f]/u.test(value);
+const isDigest = (value) => typeof value === 'string' && HASH.test(value);
+const addAlert = (alerts, value) => alerts.push(value);
+
+const readJson = (file, reason, alerts) => {
+  if (!file || !fs.existsSync(file)) {
+    addAlert(alerts, reason);
+    return null;
+  }
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (_) {
+    addAlert(alerts, reason);
+    return null;
+  }
+};
+
 const readLines = (file, reason, alerts) => {
   if (!file || !fs.existsSync(file)) {
-    alerts.push(reason);
+    addAlert(alerts, reason);
     return [];
   }
   const rows = [];
   try {
     for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/u)) {
       if (!line) continue;
-      try { rows.push(JSON.parse(line)); } catch (_) { alerts.push(`${reason}_malformed`); }
+      try { rows.push(JSON.parse(line)); } catch (_) { addAlert(alerts, `${reason}_malformed`); }
     }
   } catch (_) {
-    alerts.push(reason);
+    addAlert(alerts, reason);
   }
   return rows;
 };
 
 const alerts = [];
 const guard = fileFrom('AGMSG_PM_GUARD_PATH');
-if (!guard || !fs.existsSync(guard) || !fs.statSync(guard).isFile() || (process.platform !== 'win32' && !(fs.statSync(guard).mode & 0o111))) {
-  alerts.push('guard_unavailable');
-}
 let guardDigest = '';
-try { guardDigest = `sha256:${crypto.createHash('sha256').update(fs.readFileSync(guard)).digest('hex')}`; } catch (_) {}
-if (process.env.AGMSG_PM_GUARD_DIGEST && process.env.AGMSG_PM_GUARD_DIGEST !== guardDigest) alerts.push('guard_digest_mismatch');
+try {
+  const stat = fs.statSync(guard);
+  if (!stat.isFile() || (process.platform !== 'win32' && !(stat.mode & 0o111))) addAlert(alerts, 'guard_unavailable');
+  guardDigest = `sha256:${crypto.createHash('sha256').update(fs.readFileSync(guard)).digest('hex')}`;
+} catch (_) {
+  addAlert(alerts, 'guard_unavailable');
+}
+const expectedGuardDigest = process.env.AGMSG_PM_GUARD_DIGEST || '';
+if (!isDigest(expectedGuardDigest)) addAlert(alerts, 'guard_digest_unconfigured');
+else if (expectedGuardDigest !== guardDigest) addAlert(alerts, 'guard_digest_mismatch');
 
 const bindingFile = fileFrom('AGMSG_PM_BINDING_FILE');
-let binding = null;
-try { binding = JSON.parse(fs.readFileSync(bindingFile, 'utf8')); } catch (_) { alerts.push('binding_unavailable'); }
+const binding = readJson(bindingFile, 'binding_unavailable', alerts);
+let bindingValid = true;
+if (!isObject(binding) || binding.schemaVersion !== 1) {
+  addAlert(alerts, 'binding_schema_invalid');
+  bindingValid = false;
+} else {
+  for (const field of [
+    'team', 'agent', 'type', 'project', 'sessionId', 'generation', 'pid', 'pidStart',
+    'profileDigest', 'policyVersion', 'guardDigest', 'brokerDigest',
+  ]) {
+    if (!isText(binding[field])) {
+      addAlert(alerts, `binding_${field}_invalid`);
+      bindingValid = false;
+    }
+  }
+  if (binding.policyVersion !== POLICY_VERSION) { addAlert(alerts, 'binding_policy_invalid'); bindingValid = false; }
+  if (!isDigest(binding.profileDigest) || !isDigest(binding.guardDigest) || !isDigest(binding.brokerDigest)) {
+    addAlert(alerts, 'binding_digest_invalid');
+    bindingValid = false;
+  }
+  if (!/^[1-9][0-9]*$/u.test(binding.pid || '')) { addAlert(alerts, 'binding_pid_invalid'); bindingValid = false; }
+  if (!path.isAbsolute(binding.project || '')) { addAlert(alerts, 'binding_project_invalid'); bindingValid = false; }
+  else {
+    try {
+      if (fs.realpathSync.native(binding.project) !== binding.project) {
+        addAlert(alerts, 'binding_project_noncanonical');
+        bindingValid = false;
+      }
+    } catch (_) {
+      addAlert(alerts, 'binding_project_unreadable');
+      bindingValid = false;
+    }
+  }
+}
+
+const claimFile = fileFrom('AGMSG_PM_CLAIM_FILE');
+const claim = readJson(claimFile, 'claim_unavailable', alerts);
+if (bindingValid) {
+  if (!isObject(claim) || claim.schemaVersion !== 1) {
+    addAlert(alerts, 'claim_schema_invalid');
+  } else {
+    for (const field of ['team', 'agent', 'project', 'sessionId', 'generation', 'pid', 'pidStart']) {
+      if (!isText(claim[field])) addAlert(alerts, `claim_${field}_invalid`);
+    }
+    let claimProject = '';
+    try { claimProject = fs.realpathSync.native(claim.project); } catch (_) { addAlert(alerts, 'claim_project_unreadable'); }
+    if (claim.team !== binding.team || claim.agent !== binding.agent || claimProject !== binding.project ||
+        claim.sessionId !== binding.sessionId || claim.generation !== binding.generation ||
+        claim.pid !== binding.pid || claim.pidStart !== binding.pidStart) {
+      addAlert(alerts, 'claim_mismatch');
+    }
+  }
+}
+
 const decisions = readLines(fileFrom('AGMSG_PM_DECISIONS_FILE'), 'decision_log_unavailable', alerts);
 const executions = readLines(fileFrom('AGMSG_PM_EXECUTIONS_FILE'), 'execution_log_unavailable', alerts);
 const decisionById = new Map();
+const decisionIds = new Set();
 for (const decision of decisions) {
-  if (!decision || typeof decision.toolUseId !== 'string' || typeof decision.decision !== 'string') {
-    alerts.push('decision_schema_invalid');
+  if (!isObject(decision) || decision.schemaVersion !== 1 || !isText(decision.toolUseId) ||
+      !isText(decision.tool) || !isText(decision.sessionId) || !isText(decision.generation) ||
+      !isDigest(decision.inputDigest) || !['allow', 'deny', 'native'].includes(decision.decision) ||
+      decision.policyVersion !== POLICY_VERSION || (decision.reason !== null && !isText(decision.reason))) {
+    addAlert(alerts, 'decision_schema_invalid');
     continue;
+  }
+  if (decisionIds.has(decision.toolUseId)) addAlert(alerts, 'decision_duplicate_id');
+  decisionIds.add(decision.toolUseId);
+  if (bindingValid && (decision.sessionId !== binding.sessionId || decision.generation !== binding.generation)) {
+    addAlert(alerts, 'decision_binding_mismatch');
   }
   decisionById.set(decision.toolUseId, decision);
 }
+
+const executionIds = new Set();
 for (const execution of executions) {
-  if (!execution || typeof execution.toolUseId !== 'string') {
-    alerts.push('execution_schema_invalid');
+  if (!isObject(execution) || execution.schemaVersion !== 1 || !isText(execution.toolUseId) ||
+      !isText(execution.tool) || !isText(execution.sessionId) || !isText(execution.generation) ||
+      !isDigest(execution.inputDigest) || execution.policyVersion !== POLICY_VERSION) {
+    addAlert(alerts, 'execution_schema_invalid');
     continue;
   }
+  if (!ALLOWED_TOOLS.has(execution.tool)) addAlert(alerts, 'execution_unknown_tool');
+  if (executionIds.has(execution.toolUseId)) addAlert(alerts, 'execution_duplicate_id');
+  executionIds.add(execution.toolUseId);
+  if (bindingValid && (execution.sessionId !== binding.sessionId || execution.generation !== binding.generation)) {
+    addAlert(alerts, 'execution_binding_mismatch');
+  }
   const decision = decisionById.get(execution.toolUseId);
-  if (!decision) alerts.push('execution_without_decision');
-  else if (decision.decision === 'deny') alerts.push('denied_tool_executed');
+  if (!decision) {
+    addAlert(alerts, 'execution_without_decision');
+    continue;
+  }
+  if (decision.decision === 'deny') addAlert(alerts, 'denied_tool_executed');
+  if (decision.tool !== execution.tool) addAlert(alerts, 'decision_execution_tool_mismatch');
+  if (decision.inputDigest !== execution.inputDigest) addAlert(alerts, 'decision_execution_input_mismatch');
+  if (decision.decision === 'native' && !NATIVE_TOOLS.has(execution.tool)) addAlert(alerts, 'native_tool_mismatch');
 }
 
 const now = Math.floor(Date.now() / 1000);
@@ -70,19 +175,30 @@ const report = {
   guardDigest,
   decisionCount: decisions.length,
   executionCount: executions.length,
-  policyVersion: 'pm-pretool-v1',
+  policyVersion: POLICY_VERSION,
 };
+
+const writeAtomic = (file, value) => {
+  if (!file) throw new Error('audit_output_unconfigured');
+  fs.mkdirSync(path.dirname(file), {recursive: true});
+  const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify(value) + '\n');
+  fs.renameSync(temporary, file);
+};
+
+let auditCommitted = false;
 try {
-  for (const file of [heartbeatFile, auditFile]) {
-    if (!file) throw new Error('audit_output_unconfigured');
-    fs.mkdirSync(path.dirname(file), {recursive: true});
-    const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
-    fs.writeFileSync(temporary, JSON.stringify(report) + '\n');
-    fs.renameSync(temporary, file);
-  }
+  // The audit is the source record. Heartbeat is committed only after it is
+  // durable, so a failed audit cannot leave a fresh healthy heartbeat behind.
+  writeAtomic(auditFile, report);
+  auditCommitted = true;
+  writeAtomic(heartbeatFile, report);
 } catch (error) {
   report.status = 'alert';
-  report.alerts.push(error.message || 'audit_output_failed');
+  report.alerts = [...new Set([...report.alerts, error.message || 'audit_output_failed'])];
+  try {
+    if (auditCommitted || auditFile) writeAtomic(auditFile, report);
+  } catch (_) {}
 }
 process.stdout.write(JSON.stringify(report) + '\n');
 process.exitCode = report.alerts.length === 0 ? 0 : 1;
