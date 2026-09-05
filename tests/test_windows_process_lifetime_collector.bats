@@ -19,6 +19,9 @@ setup() {
 
   run powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
     -File "$collector" -Mode preflight -Root "$root" -PacketPath "$packet"
+  if [ "$status" -ne 0 ]; then
+    printf 'collector preflight failed (status=%s):\n%s\n' "$status" "$output" >&2
+  fi
   [ "$status" -eq 0 ]
   [ -s "$packet" ]
   grep -Fq '"record_type":"subscription-ready"' "$packet"
