@@ -82,6 +82,33 @@ _mock_event() {
     "$1" "$$" "$_ssrc" "$_start" "$_lease" >> "$MOCK_BRIDGE_EVENTS"
 }
 _mock_event start
+if [ -n "${MOCK_BRIDGE_CHILD_BARRIER:-}" ]; then
+  (
+    _mock_event child-start
+    : > "$MOCK_BRIDGE_CHILD_BARRIER.reached"
+    _child_waited=0
+    while [ ! -e "$MOCK_BRIDGE_CHILD_BARRIER.release" ]; do
+      sleep 0.05
+      _child_waited=$((_child_waited + 1))
+      [ "$_child_waited" -ge 600 ] && break
+    done
+    _mock_event child-exit
+    : > "$MOCK_BRIDGE_CHILD_BARRIER.exited"
+  ) 3>&- &
+  _child_pid=$!
+  wait "$_child_pid" 2>/dev/null || true
+fi
+_mock_event ready
+if [ -n "${MOCK_BRIDGE_READY_BARRIER:-}" ]; then
+  : > "$MOCK_BRIDGE_READY_BARRIER.reached"
+  _ready_waited=0
+  while [ ! -e "$MOCK_BRIDGE_READY_BARRIER.release" ]; do
+    sleep 0.05
+    _ready_waited=$((_ready_waited + 1))
+    [ "$_ready_waited" -ge 600 ] && break
+  done
+fi
+_mock_event live
 trap 'rm -f "$_lease"; _mock_event exit' EXIT
 [ -z "${MOCK_BRIDGE_SLEEP:-}" ] || sleep "$MOCK_BRIDGE_SLEEP"
 exit 0
@@ -441,20 +468,233 @@ windows_native_diagnostics() {
   else
     echo "no bridge exec event observed"
   fi
+  echo "native diagnostic packet:"
+  if [ -n "${AGMSG_WINDOWS_DIAG_FILE:-}" ] && [ -f "$AGMSG_WINDOWS_DIAG_FILE" ]; then
+    sed -n '1,260p' "$AGMSG_WINDOWS_DIAG_FILE"
+  else
+    echo "no native diagnostic packet observed"
+  fi
   echo "process snapshot:"
-  snapshot="$(ps -Ao pid=,ppid=,stat=,args= 2>&1 || true)"
+  snapshot="$(ps -Ao pid=,ppid=,stat=,comm= 2>&1 || true)"
   printf '%s\n' "$snapshot" | grep -F -e "$LAUNCHER" -e 'codex-bridge.js' -e "$PROJ" || true
 }
 
+_windows_native_diag_append() {
+  [ -n "${AGMSG_WINDOWS_DIAG_FILE:-}" ] || return 0
+  printf '%s\n' "$1" >> "$AGMSG_WINDOWS_DIAG_FILE" 2>/dev/null || true
+}
+
+_windows_native_diag_root_key() {
+  if [ "${AGMSG_WINDOWS_DIAG_TARGET_ROOT:-}" = "$1" ]; then
+    printf 'target'
+  elif [ "${AGMSG_WINDOWS_DIAG_ENDED_ROOT:-}" = "$1" ]; then
+    printf 'ended'
+  else
+    printf 'foreign'
+  fi
+}
+
+_windows_native_diag_register_pid() {
+  local root_key="$1" pid="$2"
+  [ -n "${AGMSG_WINDOWS_DIAG_PID_FILE:-}" ] || return 0
+  printf '%s|%s\n' "$root_key" "$pid" >> "$AGMSG_WINDOWS_DIAG_PID_FILE" 2>/dev/null || true
+}
+
+_windows_native_diag_tasklist() {
+  local stage="$1" root_key="$2" pid="$3" tasklist_record tasklist_rc state
+  if tasklist_record="$(MSYS_NO_PATHCONV=1 tasklist /FI "PID eq $pid" /FO CSV /NH 2>&1)"; then
+    tasklist_rc=0
+  else
+    tasklist_rc="$?"
+  fi
+  tasklist_record="$(printf '%s\n' "$tasklist_record" | tr '\r\n' '  ')"
+  if [ "$tasklist_rc" -ne 0 ]; then
+    state=unknown
+  elif printf '%s\n' "$tasklist_record" | awk -F',' -v pid="$pid" \
+    '$2 == "\"" pid "\"" { found=1 } END { exit !found }'; then
+    state=present
+  else
+    case "$tasklist_record" in
+      ''|INFO:*|*No\ tasks*|*no\ tasks*) state=gone ;;
+      *) state=unknown ;;
+    esac
+  fi
+  _windows_native_diag_append \
+    "event=tasklist stage=$stage root=$root_key pid=$pid rc=$tasklist_rc state=$state output=$tasklist_record"
+}
+
+# Capture a root-matched Win32_Process set and all descendants without emitting
+# the command line. The command line is used only inside PowerShell for the
+# root predicate; the packet keeps the stable identity fields needed to compare
+# the target and foreign controls. Previously captured PIDs are queried again
+# so the final packet retains a state even after a parent has exited or been
+# reparented.
+_windows_native_diag_snapshot() {
+  local stage="$1" root="$2" root_key native_root='' path_rc
+  local process_record process_rc line kind pid ppid creation name root_match
+  local retained_key retained_pid
+  [ -n "${AGMSG_WINDOWS_DIAG_FILE:-}" ] || return 0
+  root_key="$(_windows_native_diag_root_key "$root")"
+
+  if ! command -v cygpath >/dev/null 2>&1; then
+    _windows_native_diag_append \
+      "event=process-snapshot stage=$stage root=$root_key outcome=unknown reason=cygpath-unavailable"
+    return 0
+  fi
+  if native_root="$(MSYS_NO_PATHCONV=1 cygpath -m "$root" 2>&1)"; then
+    path_rc=0
+  else
+    path_rc="$?"
+  fi
+  native_root="$(printf '%s\n' "$native_root" | tr -d '\r')"
+  if [ "$path_rc" -ne 0 ] || [ -z "$native_root" ]; then
+    _windows_native_diag_append \
+      "event=process-snapshot stage=$stage root=$root_key outcome=unknown reason=cygpath rc=$path_rc output=$native_root"
+    return 0
+  fi
+
+  if process_record="$(
+    AGMSG_WINDOWS_ROOT_POSIX="$root" \
+    AGMSG_WINDOWS_ROOT_NATIVE="$native_root" \
+    MSYS_NO_PATHCONV=1 powershell.exe -NoProfile -NonInteractive -Command '
+      $ErrorActionPreference = "Stop"
+      try {
+        $needles = @($env:AGMSG_WINDOWS_ROOT_POSIX, $env:AGMSG_WINDOWS_ROOT_NATIVE) |
+          Where-Object { $_ } |
+          ForEach-Object { $_.Replace("\", "/").ToLowerInvariant() }
+        $all = @(Get-CimInstance Win32_Process | ForEach-Object {
+          $creation = ""
+          if ($_.CreationDate) { $creation = $_.CreationDate.ToString("o") }
+          [PSCustomObject]@{
+            Pid = [int64]$_.ProcessId
+            Ppid = [int64]$_.ParentProcessId
+            Name = [string]$_.Name
+            Creation = $creation
+            Command = [string]$_.CommandLine
+          }
+        })
+        $roots = @($all | Where-Object {
+          $line = $_.Command.Replace("\", "/").ToLowerInvariant()
+          $hasRoot = $false
+          foreach ($needle in $needles) {
+            if ($needle -and $line.Contains($needle)) { $hasRoot = $true }
+          }
+          $line.Contains("codex-bridge.js") -and $hasRoot
+        })
+        $ids = New-Object "System.Collections.Generic.HashSet[long]"
+        $rootIds = New-Object "System.Collections.Generic.HashSet[long]"
+        foreach ($process in $roots) {
+          [void]$ids.Add($process.Pid)
+          [void]$rootIds.Add($process.Pid)
+        }
+        $changed = $true
+        while ($changed) {
+          $changed = $false
+          foreach ($process in $all) {
+            if ($ids.Contains($process.Pid)) { continue }
+            if ($ids.Contains($process.Ppid)) {
+              [void]$ids.Add($process.Pid)
+              $changed = $true
+            }
+          }
+        }
+        foreach ($process in $all) {
+          if ($ids.Contains($process.Pid)) {
+            $rootMatch = if ($rootIds.Contains($process.Pid)) { 1 } else { 0 }
+            Write-Output ("process|{0}|{1}|{2}|{3}|{4}" -f $process.Pid, $process.Ppid, $process.Creation, $process.Name, $rootMatch)
+          }
+        }
+        if ($ids.Count -eq 0) { Write-Output "empty" }
+      } catch {
+        Write-Error $_
+        exit 1
+      }
+    ' 2>&1
+  )"; then
+    process_rc=0
+  else
+    process_rc="$?"
+  fi
+  process_record="$(printf '%s\n' "$process_record" | tr -d '\r')"
+  if [ "$process_rc" -ne 0 ]; then
+    _windows_native_diag_append \
+      "event=process-snapshot stage=$stage root=$root_key outcome=unknown reason=Win32_Process rc=$process_rc output=$process_record"
+  else
+    while IFS='|' read -r kind pid ppid creation name root_match; do
+      case "$kind" in
+        process)
+          case "$pid" in ''|*[!0-9]*|0)
+            _windows_native_diag_append \
+              "event=process-snapshot stage=$stage root=$root_key outcome=unknown reason=invalid-pid value=$pid"
+            continue
+            ;;
+          esac
+          _windows_native_diag_register_pid "$root_key" "$pid"
+          _windows_native_diag_append \
+            "event=process-snapshot stage=$stage root=$root_key pid=$pid ppid=$ppid creation=$creation name=$name root_match=$root_match"
+          _windows_native_diag_tasklist "$stage" "$root_key" "$pid"
+          ;;
+        empty)
+          _windows_native_diag_append \
+            "event=process-snapshot stage=$stage root=$root_key outcome=empty"
+          ;;
+        '') ;;
+        *)
+          _windows_native_diag_append \
+            "event=process-snapshot stage=$stage root=$root_key outcome=unknown reason=malformed-record value=$kind"
+          ;;
+      esac
+    done <<< "$process_record"
+  fi
+
+  # A process can disappear from the current ancestry after taskkill. Re-query
+  # every PID seen for this root, including those not in this snapshot.
+  if [ -n "${AGMSG_WINDOWS_DIAG_PID_FILE:-}" ] && [ -f "$AGMSG_WINDOWS_DIAG_PID_FILE" ]; then
+    while IFS='|' read -r retained_key retained_pid; do
+      [ "$retained_key" = "$root_key" ] || continue
+      case "$retained_pid" in ''|*[!0-9]*|0) continue ;; esac
+      _windows_native_diag_tasklist "$stage-retained" "$root_key" "$retained_pid"
+    done < <(awk -F'|' '!seen[$1 FS $2]++ { print $1 "|" $2 }' "$AGMSG_WINDOWS_DIAG_PID_FILE")
+  fi
+}
+
+_windows_native_diag_record_signal() {
+  local stage="$1" pid="$2" rc="$3"
+  _windows_native_diag_append \
+    "event=signal stage=$stage namespace=msys pid=$pid rc=$rc"
+}
+
+_windows_native_diag_record_taskkill() {
+  local stage="$1" root="$2" pid="$3" rc="$4" output="$5" root_key
+  root_key="$(_windows_native_diag_root_key "$root")"
+  output="$(printf '%s\n' "$output" | tr '\r\n' '  ')"
+  _windows_native_diag_append \
+    "event=taskkill stage=$stage root=$root_key pid=$pid rc=$rc output=$output"
+}
+
 cleanup_windows_native_processes() {
-  local dispatcher_pid="$1" parent_pid="$2"
+  local dispatcher_pid="$1" parent_pid="$2" kill_rc
   # Signal both direct children before waiting for either. Waiting on the
   # dispatcher first can hold the parent alive until its full test timer when a
   # native signal is delivered between two launcher polls.
-  kill "$dispatcher_pid" 2>/dev/null || true
-  kill "$parent_pid" 2>/dev/null || true
+  if [ -n "${AGMSG_WINDOWS_DIAG_FILE:-}" ]; then
+    _windows_native_diag_snapshot before-signal "$AGMSG_WINDOWS_DIAG_TARGET_ROOT"
+  fi
+  if kill "$dispatcher_pid" 2>/dev/null; then kill_rc=0; else kill_rc="$?"; fi
+  _windows_native_diag_record_signal dispatcher "$dispatcher_pid" "$kill_rc"
+  if [ -n "${AGMSG_WINDOWS_DIAG_FILE:-}" ]; then
+    _windows_native_diag_snapshot after-dispatcher-signal "$AGMSG_WINDOWS_DIAG_TARGET_ROOT"
+  fi
+  if kill "$parent_pid" 2>/dev/null; then kill_rc=0; else kill_rc="$?"; fi
+  _windows_native_diag_record_signal parent "$parent_pid" "$kill_rc"
+  if [ -n "${AGMSG_WINDOWS_DIAG_FILE:-}" ]; then
+    _windows_native_diag_snapshot after-parent-signal "$AGMSG_WINDOWS_DIAG_TARGET_ROOT"
+  fi
   wait "$dispatcher_pid" 2>/dev/null || true
   wait "$parent_pid" 2>/dev/null || true
+  if [ -n "${AGMSG_WINDOWS_DIAG_FILE:-}" ]; then
+    _windows_native_diag_snapshot after-msys-wait "$AGMSG_WINDOWS_DIAG_TARGET_ROOT"
+  fi
 }
 
 # Win32_Process is the only process table here that exposes the command line
@@ -646,12 +886,24 @@ _windows_native_wait_tasklist_gone() {
 
 _windows_native_reap_bridge_root() {
   local root="$1" pids pid taskkill_output taskkill_rc wait_rc reap_status=0
+  if [ -n "${AGMSG_WINDOWS_DIAG_FILE:-}" ]; then
+    _windows_native_diag_snapshot before-enumeration "$root"
+  fi
   if ! pids="$(_windows_native_bridge_pids "$root")"; then
+    if [ -n "${AGMSG_WINDOWS_DIAG_FILE:-}" ]; then
+      _windows_native_diag_snapshot after-enumeration-failure "$root"
+    fi
     return 1
+  fi
+  if [ -n "${AGMSG_WINDOWS_DIAG_FILE:-}" ]; then
+    _windows_native_diag_snapshot after-enumeration "$root"
   fi
   # A failed wait must not prevent later candidates from receiving taskkill.
   # Aggregate failures and make the final residual check after every attempt.
   for pid in $pids; do
+    if [ -n "${AGMSG_WINDOWS_DIAG_FILE:-}" ]; then
+      _windows_native_diag_snapshot "before-taskkill-$pid" "$root"
+    fi
     if taskkill_output="$(MSYS_NO_PATHCONV=1 taskkill /PID "$pid" /T /F 2>&1)"; then
       taskkill_rc=0
     else
@@ -659,6 +911,11 @@ _windows_native_reap_bridge_root() {
       reap_status=1
       printf 'windows-native bridge cleanup failure: taskkill PID=%s rc=%s output=%s\n' \
         "$pid" "$taskkill_rc" "$taskkill_output" >&2
+    fi
+    _windows_native_diag_record_taskkill "taskkill-$pid" "$root" "$pid" \
+      "$taskkill_rc" "$taskkill_output"
+    if [ -n "${AGMSG_WINDOWS_DIAG_FILE:-}" ]; then
+      _windows_native_diag_snapshot "after-taskkill-$pid" "$root"
     fi
     if _windows_native_wait_tasklist_gone "$pid"; then
       wait_rc=0
@@ -668,9 +925,15 @@ _windows_native_reap_bridge_root() {
       printf 'windows-native bridge cleanup failure: wait tasklist gone PID=%s rc=%s taskkill_rc=%s output=%s\n' \
         "$pid" "$wait_rc" "$taskkill_rc" "$taskkill_output" >&2
     fi
+    if [ -n "${AGMSG_WINDOWS_DIAG_FILE:-}" ]; then
+      _windows_native_diag_snapshot "after-wait-$pid" "$root"
+    fi
   done
   if ! _windows_native_assert_no_bridge_processes "$root"; then
     reap_status=1
+  fi
+  if [ -n "${AGMSG_WINDOWS_DIAG_FILE:-}" ]; then
+    _windows_native_diag_snapshot final "$root"
   fi
   return "$reap_status"
 }
@@ -1329,27 +1592,53 @@ _diagnose_485_failure() {
   # evaluation, which means neither loop turns over and no bridge is ever
   # started. Real tasklist, no stub.
   put_record team alice thread-win "$PROJ" codex
-  export MOCK_BRIDGE_CAPTURE_DELAY=7
   export MOCK_BRIDGE_EVENTS="$TEST_SKILL_DIR/native-bridge-events.log"
+  export AGMSG_WINDOWS_DIAG_FILE="$TEST_SKILL_DIR/native-cleanup-diagnostic.log"
+  export AGMSG_WINDOWS_DIAG_PID_FILE="$TEST_SKILL_DIR/native-cleanup-diagnostic-pids.log"
+  export AGMSG_WINDOWS_DIAG_TARGET_ROOT="$TEST_SKILL_DIR"
+  local short_child_barrier="$TEST_SKILL_DIR/short-child"
+  local target_ready_barrier="$TEST_SKILL_DIR/target-ready"
+  export MOCK_BRIDGE_CHILD_BARRIER="$short_child_barrier"
+  export MOCK_BRIDGE_READY_BARRIER="$target_ready_barrier"
   local lifecycle_events="$TEST_SKILL_DIR/native-launcher-events.log"
 
-  # Keep the MSYS parent alive beyond the capture deadline. The old fixture
-  # waited for a six-second parent before looking at capture for three seconds,
-  # so a slow bridge could be killed before the assertion ever observed it.
+  # Keep the MSYS parent alive while the barriers establish the process order.
   sleep 30 3>&- & local p=$!
-  # Keep the bridge alive after it has published the capture. This makes the
-  # native descendant cleanup an observable invariant rather than a race with
-  # the mock's natural exit.
+  # The target bridge remains alive after the ready barrier. This makes native
+  # descendant cleanup an observable invariant rather than a race with the
+  # mock's natural exit.
   export MOCK_BRIDGE_SLEEP=30
   bash "$LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$p" >/dev/null 2>&1 3>&- &
   local dispatcher=$!
   record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
-  local i
-  for i in {1..150}; do
-    record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
-    [ -f "$CAPTURE" ] && break
-    sleep 0.1
-  done
+  if ! wait_for_file "$short_child_barrier.reached"; then
+    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_reap_bridge_root "$AGMSG_WINDOWS_DIAG_TARGET_ROOT" || true
+    false
+  fi
+  _windows_native_diag_snapshot short-child-before-release "$AGMSG_WINDOWS_DIAG_TARGET_ROOT"
+  : > "$short_child_barrier.release"
+  if ! wait_for_file "$short_child_barrier.exited"; then
+    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_reap_bridge_root "$AGMSG_WINDOWS_DIAG_TARGET_ROOT" || true
+    false
+  fi
+  _windows_native_diag_snapshot short-child-after-release "$AGMSG_WINDOWS_DIAG_TARGET_ROOT"
+  if ! wait_for_file "$target_ready_barrier.reached"; then
+    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_reap_bridge_root "$AGMSG_WINDOWS_DIAG_TARGET_ROOT" || true
+    false
+  fi
+  : > "$target_ready_barrier.release"
+  if ! wait_for_file_contains "$MOCK_BRIDGE_EVENTS" 'live'; then
+    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_reap_bridge_root "$AGMSG_WINDOWS_DIAG_TARGET_ROOT" || true
+    false
+  fi
   record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
 
   if [ ! -f "$CAPTURE" ]; then
@@ -1359,32 +1648,77 @@ _diagnose_485_failure() {
     false
   fi
 
+  # A separately rooted bridge is released before cleanup. Its before/after
+  # snapshots provide the already-ended control without turning a naturally
+  # exited target into a successful taskkill result.
+  local ended_root="$BATS_TEST_TMPDIR/already-ended-root"
+  local ended_bridge="$ended_root/codex-bridge.js"
+  local ended_barrier="$TEST_SKILL_DIR/already-ended"
+  local ended_events="$TEST_SKILL_DIR/already-ended-events.log"
+  mkdir -p "$ended_root"
+  cp "$SCRIPTS/drivers/types/codex/codex-bridge.js" "$ended_bridge"
+  chmod +x "$ended_bridge"
+  export AGMSG_WINDOWS_DIAG_ENDED_ROOT="$ended_root"
+  MOCK_BRIDGE_CHILD_BARRIER='' MOCK_BRIDGE_READY_BARRIER="$ended_barrier" \
+    MOCK_BRIDGE_EVENTS="$ended_events" MOCK_BRIDGE_SLEEP=0 \
+    bash "$ended_bridge" --project "$ended_root" --pair $'team\tended' \
+      >/dev/null 2>&1 3>&- & local ended_pid=$!
+  if ! wait_for_file "$ended_barrier.reached"; then
+    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_reap_bridge_root "$AGMSG_WINDOWS_DIAG_TARGET_ROOT" || true
+    false
+  fi
+  _windows_native_diag_snapshot already-ended-before-release "$ended_root"
+  : > "$ended_barrier.release"
+  wait "$ended_pid" 2>/dev/null || true
+  _windows_native_diag_snapshot already-ended-after-release "$ended_root"
+
   # A bridge under a different root is the negative control: target-root
   # cleanup must not become a global "kill every codex-bridge.js" sweep.
   local foreign_root="$BATS_TEST_TMPDIR/foreign-bridge-root"
   local foreign_bridge="$foreign_root/codex-bridge.js"
+  local foreign_barrier="$TEST_SKILL_DIR/foreign-root"
   mkdir -p "$foreign_root"
   cat > "$foreign_bridge" <<'EOF'
 #!/usr/bin/env bash
+: > "$FOREIGN_BARRIER.reached"
+_foreign_waited=0
+while [ ! -e "$FOREIGN_BARRIER.release" ]; do
+  sleep 0.05
+  _foreign_waited=$((_foreign_waited + 1))
+  [ "$_foreign_waited" -ge 600 ] && break
+done
 while :; do sleep 1; done
 EOF
   chmod +x "$foreign_bridge"
-  bash "$foreign_bridge" >/dev/null 2>&1 3>&- & local foreign_pid=$!
+  FOREIGN_BARRIER="$foreign_barrier" bash "$foreign_bridge" >/dev/null 2>&1 3>&- & local foreign_pid=$!
   TEST_LAUNCHER_EXTRA_PIDS="$foreign_pid"
-  if ! _windows_native_wait_bridge_pid "$foreign_root" >/dev/null; then
+  if ! wait_for_file "$foreign_barrier.reached"; then
     windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
     cleanup_windows_native_processes "$dispatcher" "$p"
-    _windows_native_reap_bridge_root "$TEST_SKILL_DIR" || true
+    _windows_native_reap_bridge_root "$AGMSG_WINDOWS_DIAG_TARGET_ROOT" || true
     _windows_native_reap_bridge_root "$foreign_root" || true
     TEST_LAUNCHER_EXTRA_PIDS=''
     false
   fi
+  : > "$foreign_barrier.release"
+  if ! _windows_native_wait_bridge_pid "$foreign_root" >/dev/null; then
+    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_reap_bridge_root "$AGMSG_WINDOWS_DIAG_TARGET_ROOT" || true
+    _windows_native_reap_bridge_root "$foreign_root" || true
+    TEST_LAUNCHER_EXTRA_PIDS=''
+    false
+  fi
+  _windows_native_diag_snapshot foreign-control-before-target-reap "$foreign_root"
 
   cleanup_windows_native_processes "$dispatcher" "$p"
   local target_cleanup_rc=0 foreign_control_rc=0 foreign_cleanup_rc=0
   if ! _windows_native_reap_bridge_root "$TEST_SKILL_DIR"; then
     target_cleanup_rc=1
   fi
+  _windows_native_diag_snapshot foreign-after-target-reap "$foreign_root"
   # Assert the invariant immediately before the rest of the test teardown.
   if ! _windows_native_assert_no_bridge_processes "$TEST_SKILL_DIR"; then
     target_cleanup_rc=1
@@ -1398,6 +1732,7 @@ EOF
   TEST_LAUNCHER_EXTRA_PIDS=''
   if [ "$target_cleanup_rc" -ne 0 ] || [ "$foreign_control_rc" -ne 0 ] || \
     [ "$foreign_cleanup_rc" -ne 0 ]; then
+    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
     false
   fi
   grep -q -- '--thread thread-win' "$CAPTURE"
