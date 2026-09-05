@@ -1,0 +1,272 @@
+{
+  "schemaVersion": 1,
+  "kind": "comparison-file-inventory",
+  "source": "worker collection; architect readback",
+  "forkHead": "688f4fdec837488e2326444fcc8ce3954db18a38",
+  "upstreamCutoff": "e58dbafad5a84be625f070385bb0c076c3daa4db",
+  "mergeBase": "3d06318de3aff9929cfaf87c092fef6709d2cc8b",
+  "direction": "reverse",
+  "fileCount": 37,
+  "classification": "unclassified-per-file; see design responsibility matrix",
+  "files": [
+    {
+      "filename": ".github/enforced-assertions-baseline",
+      "status": "modified",
+      "additions": 1,
+      "deletions": 1,
+      "previous_filename": null
+    },
+    {
+      "filename": ".github/workflows/tests.yml",
+      "status": "modified",
+      "additions": 75,
+      "deletions": 15,
+      "previous_filename": null
+    },
+    {
+      "filename": ".github/workflows/verify-versions.yml",
+      "status": "modified",
+      "additions": 17,
+      "deletions": 9,
+      "previous_filename": null
+    },
+    {
+      "filename": "install.sh",
+      "status": "modified",
+      "additions": 53,
+      "deletions": 9,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/check-inbox.sh",
+      "status": "modified",
+      "additions": 55,
+      "deletions": 3,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/delivery.sh",
+      "status": "modified",
+      "additions": 99,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/drivers/storage/sqlite-sync.sh",
+      "status": "modified",
+      "additions": 120,
+      "deletions": 26,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/drivers/storage/sqlite.sh",
+      "status": "modified",
+      "additions": 62,
+      "deletions": 2,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/drivers/types/codex/type.conf",
+      "status": "modified",
+      "additions": 24,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/inbox.sh",
+      "status": "modified",
+      "additions": 9,
+      "deletions": 2,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/internal/migrate-team-store.sh",
+      "status": "modified",
+      "additions": 3,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/internal/remote-sync.mjs",
+      "status": "modified",
+      "additions": 81,
+      "deletions": 1,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/storage.sh",
+      "status": "modified",
+      "additions": 28,
+      "deletions": 1,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/session-start.sh",
+      "status": "modified",
+      "additions": 95,
+      "deletions": 10,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/perf/957-apply-results.jsonl",
+      "status": "added",
+      "additions": 30,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/perf/957-profile-results.jsonl",
+      "status": "added",
+      "additions": 120,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/perf/957-results.md",
+      "status": "added",
+      "additions": 65,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/perf/README.md",
+      "status": "modified",
+      "additions": 20,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/perf/apply-blob.py",
+      "status": "added",
+      "additions": 198,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/perf/profile-apply-sql.py",
+      "status": "added",
+      "additions": 116,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/remote_sync_engine.test.mjs",
+      "status": "modified",
+      "additions": 100,
+      "deletions": 1,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_actas_integration.bats",
+      "status": "modified",
+      "additions": 5,
+      "deletions": 5,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_apply_fail_stderr.bats",
+      "status": "added",
+      "additions": 46,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_ci_workflow.bats",
+      "status": "modified",
+      "additions": 70,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_codex_bridge_launcher.bats",
+      "status": "modified",
+      "additions": 134,
+      "deletions": 23,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_delivery.bats",
+      "status": "modified",
+      "additions": 138,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_despawn.bats",
+      "status": "modified",
+      "additions": 7,
+      "deletions": 13,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_inbox.bats",
+      "status": "modified",
+      "additions": 132,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_install.bats",
+      "status": "modified",
+      "additions": 123,
+      "deletions": 16,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_remote.bats",
+      "status": "modified",
+      "additions": 19,
+      "deletions": 19,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_remote_engine_start_refusal.bats",
+      "status": "modified",
+      "additions": 24,
+      "deletions": 1,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_remote_sync.bats",
+      "status": "modified",
+      "additions": 253,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_remote_sync_apply_blob.bats",
+      "status": "added",
+      "additions": 108,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_resume_seat_guard.bats",
+      "status": "added",
+      "additions": 194,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_storage.bats",
+      "status": "modified",
+      "additions": 143,
+      "deletions": 2,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_storage_contract.bats",
+      "status": "modified",
+      "additions": 3,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_watch.bats",
+      "status": "modified",
+      "additions": 122,
+      "deletions": 9,
+      "previous_filename": null
+    }
+  ]
+}

@@ -1,0 +1,1812 @@
+{
+  "schemaVersion": 1,
+  "kind": "comparison-file-inventory",
+  "source": "worker collection; architect readback",
+  "forkHead": "688f4fdec837488e2326444fcc8ce3954db18a38",
+  "upstreamCutoff": "e58dbafad5a84be625f070385bb0c076c3daa4db",
+  "mergeBase": "3d06318de3aff9929cfaf87c092fef6709d2cc8b",
+  "direction": "forward",
+  "fileCount": 257,
+  "classification": "unclassified-per-file; see design responsibility matrix",
+  "files": [
+    {
+      "filename": ".github/enforced-assertions-baseline",
+      "status": "modified",
+      "additions": 1,
+      "deletions": 1,
+      "previous_filename": null
+    },
+    {
+      "filename": ".github/workflows/tests.yml",
+      "status": "modified",
+      "additions": 1,
+      "deletions": 1,
+      "previous_filename": null
+    },
+    {
+      "filename": "README.ja.md",
+      "status": "modified",
+      "additions": 176,
+      "deletions": 7,
+      "previous_filename": null
+    },
+    {
+      "filename": "README.md",
+      "status": "modified",
+      "additions": 969,
+      "deletions": 15,
+      "previous_filename": null
+    },
+    {
+      "filename": "SKILL.md",
+      "status": "modified",
+      "additions": 13,
+      "deletions": 5,
+      "previous_filename": null
+    },
+    {
+      "filename": "app/README.md",
+      "status": "modified",
+      "additions": 13,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "app/scripts/bundle-core.sh",
+      "status": "modified",
+      "additions": 13,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/actas.md",
+      "status": "modified",
+      "additions": 6,
+      "deletions": 6,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/adr/0005-safe-scripts-dir-sync-for-install.md",
+      "status": "added",
+      "additions": 127,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/building-on-agmsg.md",
+      "status": "modified",
+      "additions": 11,
+      "deletions": 2,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-11T121328_git-push-owner-guard.md",
+      "status": "added",
+      "additions": 174,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-11T124253_required-role-overlay-and-codex-profile-validation.md",
+      "status": "added",
+      "additions": 205,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-11T124720_scale-exporter-work-queue-boundary.md",
+      "status": "added",
+      "additions": 130,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-11T192614_gh-write-owner-guard.md",
+      "status": "added",
+      "additions": 219,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-14T131041_issue-23-derived-agent.md",
+      "status": "added",
+      "additions": 62,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-17T060000_codex不在期間のClaude単独運用とmerge方針.md",
+      "status": "added",
+      "additions": 84,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-20T170319_issue-92-team-work-rollout.md",
+      "status": "added",
+      "additions": 211,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-21T114715_issue-101-blocked-state-ready.md",
+      "status": "added",
+      "additions": 106,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-21T174508_issue-103-roster-normalizer.md",
+      "status": "added",
+      "additions": 141,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-21T203441_issue-97-102-dispatch-recovery-g4.md",
+      "status": "added",
+      "additions": 230,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-21T210215_issue-102-g4-implementation-design.md",
+      "status": "added",
+      "additions": 283,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-22T141536_issue-116-git-push-ssh-alias-guard.md",
+      "status": "added",
+      "additions": 101,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-22T181337_issue-119-multiteam-actas-subscription.md",
+      "status": "added",
+      "additions": 152,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-23T230831_issue-128-launcher-flake-design.md",
+      "status": "added",
+      "additions": 117,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-24T081841_issue-88-ready-deadline.md",
+      "status": "added",
+      "additions": 50,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-25T140818_issue-145-b-invalid-utf8-repair.md",
+      "status": "added",
+      "additions": 73,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-26T091709_r1-test-harness-environment-isolation.md",
+      "status": "added",
+      "additions": 125,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-27T090957_issue-210-g4-reconcile-closeout-design.md",
+      "status": "added",
+      "additions": 140,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-27T090957_issue-211-g4-reblock-transition-design.md",
+      "status": "added",
+      "additions": 157,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-08-27T110605_issue-214-gh-owner-guard-path-activation-design.md",
+      "status": "added",
+      "additions": 196,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-09-04T182436_issue-219-symlinked-startup-file-update-design.md",
+      "status": "added",
+      "additions": 191,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-09-04T204406_issue-221-nonexact-whoami-account-selection-design.md",
+      "status": "added",
+      "additions": 213,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-09-04T230624_issue-209-g4-transition-required-quiescent-design.md",
+      "status": "added",
+      "additions": 235,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-09-05T030329_issue-223-delivery-gate-runtime-initialization-design.md",
+      "status": "added",
+      "additions": 261,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-09-05T100910_issue-230-watch-gate-release-resilience-design.md",
+      "status": "added",
+      "additions": 244,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-09-05T125720_issue-230-pr233-event-order-diagnosis.md",
+      "status": "added",
+      "additions": 99,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-09-05T150240_issue-236-pm-execution-boundary.md",
+      "status": "added",
+      "additions": 198,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-09-05T174503_issue-236-native-tui-hook-design.md",
+      "status": "added",
+      "additions": 184,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/decisions/2026-09-05T205739_issue-236-claim-schema-integration.md",
+      "status": "added",
+      "additions": 152,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/plan/2026-08-14_issue-10-gh-write-owner-guard.md",
+      "status": "added",
+      "additions": 80,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/plan/2026-08-14_issue-22-safe-dir-sync.md",
+      "status": "added",
+      "additions": 74,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/plan/2026-08-14_issue-28_dependency-audit.md",
+      "status": "added",
+      "additions": 76,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/plan/2026-08-14_issue-3-git-push-owner-guard.md",
+      "status": "added",
+      "additions": 72,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/plan/2026-08-14_issue-7-and-17-reset-flags.md",
+      "status": "added",
+      "additions": 90,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/plan/2026-08-16_issue-63-gh-default-destination-failure.md",
+      "status": "added",
+      "additions": 45,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/plan/2026-08-16_issue-65-codex-sessionstart-json.md",
+      "status": "added",
+      "additions": 53,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/plan/2026-08-16_issue-67-gh-rerun-guard.md",
+      "status": "added",
+      "additions": 64,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/plan/2026-08-21_issue-88-hang-artifact-verification.md",
+      "status": "added",
+      "additions": 38,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/plan/2026-08-22_issue-98-roster-check-verification.md",
+      "status": "added",
+      "additions": 39,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/plan/2026-08-25_issue-155-gh-label-create-guard.md",
+      "status": "added",
+      "additions": 100,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/plan/2026-08-25_issue-162-bridge-metadata-identity.md",
+      "status": "added",
+      "additions": 142,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/plan/2026-08-26_issue-164-pr3-writer-gate.md",
+      "status": "added",
+      "additions": 43,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/plan/2026-08-26_issue-168-watch-runtime-db-preflight.md",
+      "status": "added",
+      "additions": 64,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/plan/2026-08-26_issue-169-codex-monitor-launcher-teardown.md",
+      "status": "added",
+      "additions": 92,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/plan/2026-08-26_issue-169-windows-diagnostic-repair.md",
+      "status": "added",
+      "additions": 81,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/plan/2026-08-26_issue-169-windows-teardown-evidence.md",
+      "status": "added",
+      "additions": 72,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/plan/2026-08-26_issue-171-bats-storage-isolation.md",
+      "status": "added",
+      "additions": 65,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/plan/2026-08-26_issue-175-delivery-status-tristate.md",
+      "status": "added",
+      "additions": 93,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-11-issue-15-core-tag-sync-diagnostic.md",
+      "status": "added",
+      "additions": 238,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-11-issue-4-bsd-awk-newlines.md",
+      "status": "added",
+      "additions": 139,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-14-message-claim-ack.md",
+      "status": "added",
+      "additions": 305,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-14-upstream-main-sync.md",
+      "status": "added",
+      "additions": 166,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-15-delivery-capability-json.md",
+      "status": "added",
+      "additions": 79,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-15-gh-pr-ready-guard.md",
+      "status": "added",
+      "additions": 75,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-15-git-push-quiet-option.md",
+      "status": "added",
+      "additions": 66,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-15-preinstalled-git-guard-fixtures.md",
+      "status": "added",
+      "additions": 75,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-15-role-overlay-capability-contract.md",
+      "status": "added",
+      "additions": 205,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-15-roster-json-contract.md",
+      "status": "added",
+      "additions": 159,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-15-team-work-contract.md",
+      "status": "added",
+      "additions": 365,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-15-team-work-lease.md",
+      "status": "added",
+      "additions": 275,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-15-team-work-live-audit.md",
+      "status": "added",
+      "additions": 333,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-15-team-work-reconciler-dispatch.md",
+      "status": "added",
+      "additions": 256,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-20-issue-91-lock-test-isolation.md",
+      "status": "added",
+      "additions": 154,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-20-issue-99-model-sync.md",
+      "status": "added",
+      "additions": 87,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-21-issue-102-g4-audit.md",
+      "status": "added",
+      "additions": 182,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-21-issue-97-dispatch-recovery.md",
+      "status": "added",
+      "additions": 83,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-21_17-45-08-issue-103-roster-normalizer.md",
+      "status": "added",
+      "additions": 298,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/plans/2026-08-22-issue-102-g4-phase-1b.md",
+      "status": "added",
+      "additions": 361,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/specs/2026-08-11-issue-15-core-tag-sync-design.md",
+      "status": "added",
+      "additions": 69,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/specs/2026-08-14-message-claim-ack-design.md",
+      "status": "added",
+      "additions": 109,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/specs/2026-08-15-delivery-capability-json-design.md",
+      "status": "added",
+      "additions": 148,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/specs/2026-08-15-roster-json-contract-design.md",
+      "status": "added",
+      "additions": 96,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/specs/2026-08-15-team-work-contract-design.md",
+      "status": "added",
+      "additions": 150,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/specs/2026-08-15-team-work-lease-design.md",
+      "status": "added",
+      "additions": 165,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/specs/2026-08-15-team-work-live-audit-design.md",
+      "status": "added",
+      "additions": 169,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "docs/superpowers/specs/2026-08-15-team-work-reconciler-dispatch-design.md",
+      "status": "added",
+      "additions": 111,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "install.sh",
+      "status": "modified",
+      "additions": 338,
+      "deletions": 7,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/actas-claim.sh",
+      "status": "modified",
+      "additions": 43,
+      "deletions": 7,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/api.sh",
+      "status": "modified",
+      "additions": 31,
+      "deletions": 2,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/check-inbox.sh",
+      "status": "modified",
+      "additions": 5,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/claim.sh",
+      "status": "added",
+      "additions": 50,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/delivery.sh",
+      "status": "modified",
+      "additions": 66,
+      "deletions": 30,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/despawn.sh",
+      "status": "modified",
+      "additions": 69,
+      "deletions": 9,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/drivers/storage/sqlite.sh",
+      "status": "modified",
+      "additions": 114,
+      "deletions": 6,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/drivers/types/claude-code/template.md",
+      "status": "modified",
+      "additions": 7,
+      "deletions": 7,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/drivers/types/claude-code/type.conf",
+      "status": "modified",
+      "additions": 6,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/drivers/types/codex/_session-start.sh",
+      "status": "modified",
+      "additions": 55,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/drivers/types/codex/codex-bridge-launcher.sh",
+      "status": "modified",
+      "additions": 5,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/drivers/types/codex/codex-bridge.js",
+      "status": "modified",
+      "additions": 72,
+      "deletions": 7,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/drivers/types/codex/template.md",
+      "status": "modified",
+      "additions": 2,
+      "deletions": 2,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/drivers/types/codex/type.conf",
+      "status": "modified",
+      "additions": 9,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/drivers/types/codex/watch-once.sh",
+      "status": "modified",
+      "additions": 17,
+      "deletions": 3,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/guards/gh-owner-guard-path.sh",
+      "status": "added",
+      "additions": 50,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/guards/gh-write-owner-guard-launcher.sh",
+      "status": "added",
+      "additions": 38,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/guards/gh-write-owner-guard.sh",
+      "status": "added",
+      "additions": 871,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/guards/git-push-owner-guard-launcher.sh",
+      "status": "added",
+      "additions": 36,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/guards/git-push-owner-guard.sh",
+      "status": "added",
+      "additions": 451,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/history.sh",
+      "status": "modified",
+      "additions": 13,
+      "deletions": 1,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/identities.sh",
+      "status": "modified",
+      "additions": 43,
+      "deletions": 5,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/inbox.sh",
+      "status": "modified",
+      "additions": 6,
+      "deletions": 2,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/internal/init-db.sh",
+      "status": "modified",
+      "additions": 297,
+      "deletions": 1,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/internal/migrate-team-work-dispatch.sh",
+      "status": "added",
+      "additions": 145,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/internal/remote-sync.mjs",
+      "status": "modified",
+      "additions": 35,
+      "deletions": 14,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/internal/team-work-dispatch-schema.sql",
+      "status": "added",
+      "additions": 37,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/internal/team-work-dispatch-triggers.sql",
+      "status": "added",
+      "additions": 97,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/join.sh",
+      "status": "modified",
+      "additions": 80,
+      "deletions": 11,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/actas-lock.sh",
+      "status": "modified",
+      "additions": 350,
+      "deletions": 23,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/claims.sh",
+      "status": "added",
+      "additions": 182,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/cli-options.sh",
+      "status": "added",
+      "additions": 78,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/delivery-capability.sh",
+      "status": "added",
+      "additions": 647,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/g4-audit.js",
+      "status": "added",
+      "additions": 584,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/g4-contract.js",
+      "status": "added",
+      "additions": 342,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/g4-ledger.js",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/pm-claim.js",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/registry-lock.sh",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/resolve-project.sh",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/roster-contract.sh",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/safe-dir-sync.sh",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/spawn-options.sh",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/startup-path-resolver.sh",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/storage.sh",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/subscription.sh",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/team-work-audit.js",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/team-work-reconciler.js",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/team-work.js",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/utf8.sh",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/lib/validate.sh",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/message-status.sh",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/pane-liveness.sh",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/pm-audit-loop.sh",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/pm-audit-watchdog.js",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/pm-audit-watchdog.sh",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/pm-audit.js",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/pm-audit.sh",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/pm-broker.js",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/pm-broker.sh",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/pm-posttool-record",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/pm-posttool-record.js",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/pm-pretool-guard",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/remote.sh",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/repair-invalid-utf8.sh",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/reset.sh",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/roster-normalize.sh",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/send.sh",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/session-identity.js",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/session-identity.sh",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/session-start.sh",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/spawn.sh",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/team-work.sh",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/team.sh",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/watch.sh",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "scripts/whoami.sh",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/g4-audit/duplicate.json",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/g4-audit/empty.json",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/g4-audit/error.json",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/g4-audit/gh",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/g4-audit/one-open.json",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/g4-audit/pagination-failure.json",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/g4-audit/predicate-gh-failure.json",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/g4-audit/predicate-negative.json",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/g4-audit/predicate-positive.json",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/g4-audit/two-open-two-pages.json",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/g4-audit/two-open.json",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/pane-liveness/crashed-pane.txt",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/pane-liveness/queued-live-pane.txt",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/pane-liveness/quiet-pane.txt",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/pane-liveness/quoted-crash-terms-pane.txt",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/pm-broker/broker.js",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/spawn_options_header_compat.yaml",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/spawn_options_header_compat_codex.tokens",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/spawn_options_legacy.yaml",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/spawn_options_legacy_claude-code.tokens",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/spawn_options_legacy_codex.tokens",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/team-work-audit/closed.json",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/team-work-audit/complete-two-pages.json",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/team-work-audit/error.json",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/team-work-audit/gh",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/team-work-audit/incomplete-relation.json",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/team-work-audit/open-two.json",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/fixtures/team-work-audit/open.json",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/helpers/g4-fixtures.bash",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/isolated/test_pm_pretool_guard_real_cli.sh",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_actas_integration.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_actas_lock.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_api.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_binding_mode.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_boot_command.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_bundle_core.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_claims.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_claude_template.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_codex_bridge.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_codex_bridge_launcher.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_codex_monitor.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_codex_resume.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_codex_watch_failure.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_cut_release.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_delivery.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_despawn.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_doctor.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_fixture_helpers.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_g4_audit.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_g4_bootstrap.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_g4_ledger.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_g4_transition.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_gh_write_owner_guard.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_git_push_owner_guard.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_helper.bash",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_identities.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_identity_path_forms.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_inbox.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_install.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_instance_id.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_jsonl_remote_sync.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_messaging.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_migrate_team_store.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_pane_liveness.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_pm_broker_fixture.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_pm_pretool_guard.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_remote.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_remote_engine_start_refusal.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_remote_ready_deadline.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_remote_sync.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_repair_invalid_utf8.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_reset.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_resolve_project.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_resurrect_panes.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_role_session.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_safe_dir_sync.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_spawn.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_spawn_options.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_sqlite_sync_jq_binary.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_storage.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_storage_contract.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_sync_autostart.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_sync_cipher.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_team.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_team_work.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_team_work_audit.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_team_work_dispatch_migration.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_team_work_reconciler.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_team_work_state.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_wait_helpers.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_watch.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_watch_install_changed.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_watch_once.bats",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "tests/test_watch_ownership_log.bats",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    },
+    {
+      "filename": "uninstall.sh",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 0,
+      "previous_filename": null
+    }
+  ]
+}
