@@ -14,6 +14,13 @@ HEADS = {'original':'32f6411e4e7a13d42e0811fc023c2d8d51138cb1',
          'stable-hold':'b0156754dd706bf3ffc178c654f6ccbf23f340d8'}
 
 
+def bash_executable():
+    if os.name!='nt': return 'bash'
+    candidate=Path(os.environ.get('ProgramFiles', 'C:/Program Files'))/'Git/bin/bash.exe'
+    if not candidate.is_file(): raise RuntimeError('Git Bash executable unavailable')
+    return str(candidate)
+
+
 def publish(directory, run_id, record):
     record=dict(record, run_id=run_id, actor_filetime=str(time.time_ns()//100+116444736000000000),
                 actor_time=datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).isoformat())

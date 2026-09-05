@@ -13,7 +13,7 @@ import platform
 import subprocess
 import time
 import uuid
-from lifetime_adapter import HEADS, publish
+from lifetime_adapter import HEADS, publish, bash_executable
 from lifetime_packet import evaluate, read_packet
 
 TOOLS=Path(__file__).resolve().parent
@@ -78,7 +78,7 @@ def manifest(condition,run_id):
     def version(args):
         try: return subprocess.check_output(args,stderr=subprocess.STDOUT,text=True).strip()
         except (OSError,subprocess.CalledProcessError): return 'unknown'
-    return dict(record_type='run-manifest',schema_version=2,run_id=run_id,condition_id=condition,clock_quality='known',clock_basis='same-host UTC FILETIME; event raw ticks and actor ticks stored separately',collector_deadline_s=600,subject_deadline_s=540,required_root_keys=['target'],tools_sha256={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in TOOLS.iterdir() if p.suffix in ('.py','.ps1','.sh')},collector_head=version(['git','-C',str(TOOLS),'rev-parse','HEAD']),os=platform.platform(),bash=version(['bash','--version']),powershell=version([PS,'-NoProfile','-Command','$PSVersionTable.PSVersion.ToString()']),bats=version(['bash','-c','bats --version']),job=dict(run_id=os.environ.get('GITHUB_RUN_ID'),run_attempt=os.environ.get('GITHUB_RUN_ATTEMPT'),job=os.environ.get('GITHUB_JOB')),observation_perturbation='nonzero; original fixture deadlines unchanged')
+    return dict(record_type='run-manifest',schema_version=2,run_id=run_id,condition_id=condition,clock_quality='known',clock_basis='same-host UTC FILETIME; event raw ticks and actor ticks stored separately',collector_deadline_s=600,subject_deadline_s=540,required_root_keys=['target'],tools_sha256={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in TOOLS.iterdir() if p.suffix in ('.py','.ps1','.sh')},collector_head=version(['git','-C',str(TOOLS),'rev-parse','HEAD']),os=platform.platform(),bash=version([bash_executable(),'--version']),powershell=version([PS,'-NoProfile','-Command','$PSVersionTable.PSVersion.ToString()']),bats=version([bash_executable(),'-c','bats --version']),job=dict(run_id=os.environ.get('GITHUB_RUN_ID'),run_attempt=os.environ.get('GITHUB_RUN_ATTEMPT'),job=os.environ.get('GITHUB_JOB')),observation_perturbation='nonzero; original fixture deadlines unchanged')
 
 
 def main():
@@ -135,7 +135,7 @@ def main():
     prepared=out.parent/(run_id+'-application.json'); prepared.parent.mkdir(parents=True,exist_ok=True)
     subprocess.run([os.sys.executable,str(TOOLS/'lifetime_adapter.py'),'prepare',args.subject,args.condition,str(prepared)],check=True)
     m=manifest(args.condition,run_id); m.update(json.loads(prepared.read_text())); m['required_root_keys']=['target','foreign']
-    command=['bash','-c','exec bats --tap --filter "$1" "$2"','_','^launcher: windows-native starts the bridge',str(Path(args.subject).resolve()/'tests/test_codex_bridge_launcher.bats')]
+    command=[bash_executable(),'-c','exec bats --tap --filter "$1" "$2"','_','^launcher: windows-native starts the bridge',str(Path(args.subject).resolve()/'tests/test_codex_bridge_launcher.bats')]
     rc=collect(out,command,m)
     (out/'application.json').write_bytes(prepared.read_bytes())
     (out/'verifier-receipt.json').write_bytes(Path(args.verifier_receipt).read_bytes())

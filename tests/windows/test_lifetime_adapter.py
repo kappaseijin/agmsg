@@ -3,7 +3,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from lifetime_adapter import instrument
+from lifetime_adapter import instrument, bash_executable
 
 SOURCE=Path(__file__).resolve().parents[1]/'test_codex_bridge_launcher.bats'
 
@@ -25,13 +25,15 @@ _windows_native_assert_no_bridge_processes() { return 0; }
 '''
         with tempfile.TemporaryDirectory() as temp:
             trace=Path(temp)/'trace'
-            env=dict(__import__('os').environ,TRACE=str(trace))
+            env=dict(__import__('os').environ,TRACE=trace.as_posix())
             results=[]
             for text in (source,adapted):
                 code=prefix+function(text,'_windows_native_reap_bridge_root')+'\n_windows_native_reap_bridge_root root\n'
-                results.append(subprocess.run(['bash','-c',code],env=env,capture_output=True,text=True))
-            self.assertEqual(results[0].returncode,1)
-            self.assertEqual(results[1].returncode,1)
+                script=Path(temp)/'case.sh'
+                script.write_text(code,encoding='utf8',newline='\n')
+                results.append(subprocess.run([bash_executable(),script.as_posix()],env=env,capture_output=True,text=True))
+            self.assertEqual(results[0].returncode,1,results[0].stderr)
+            self.assertEqual(results[1].returncode,1,results[1].stderr)
             self.assertEqual(results[0].stdout,results[1].stdout)
             self.assertEqual(results[0].stderr,results[1].stderr)
             self.assertEqual(trace.read_text().count('observed rc=5'),2)
@@ -44,10 +46,15 @@ wait() { return 8; }
 _lifetime_begin() { :; }
 _lifetime_end() { printf 'observed=%s\\n' "$1"; }
 '''
-        original=subprocess.run(['bash','-ec',prefix+function(source,'cleanup_windows_native_processes')+'\ncleanup_windows_native_processes 11 22'],capture_output=True,text=True)
-        observed=subprocess.run(['bash','-ec',prefix+function(adapted,'cleanup_windows_native_processes')+'\ncleanup_windows_native_processes 11 22'],capture_output=True,text=True)
-        self.assertEqual(original.returncode,0)
-        self.assertEqual(observed.returncode,0)
+        results=[]
+        with tempfile.TemporaryDirectory() as temp:
+            for text in (source,adapted):
+                script=Path(temp)/'case.sh'
+                script.write_text(prefix+function(text,'cleanup_windows_native_processes')+'\ncleanup_windows_native_processes 11 22',encoding='utf8',newline='\n')
+                results.append(subprocess.run([bash_executable(),'-e',script.as_posix()],capture_output=True,text=True))
+        original,observed=results
+        self.assertEqual(original.returncode,0,original.stderr)
+        self.assertEqual(observed.returncode,0,observed.stderr)
         self.assertEqual(observed.stdout.splitlines(),['observed=7','observed=7','observed=8','observed=8'])
 
     def test_unknown_source_rejected_before_adaptation(self):
