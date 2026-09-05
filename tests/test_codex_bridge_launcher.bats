@@ -109,7 +109,16 @@ if [ -n "${MOCK_BRIDGE_READY_BARRIER:-}" ]; then
   done
 fi
 _mock_event live
-trap 'rm -f "$_lease"; _mock_event exit' EXIT
+trap 'rm -f "$_lease"; _mock_event exit; [ -z "${MOCK_BRIDGE_HOLD_BARRIER:-}" ] || : > "$MOCK_BRIDGE_HOLD_BARRIER.exited"' EXIT
+if [ -n "${MOCK_BRIDGE_HOLD_BARRIER:-}" ]; then
+  : > "$MOCK_BRIDGE_HOLD_BARRIER.reached"
+  _hold_waited=0
+  while [ ! -e "$MOCK_BRIDGE_HOLD_BARRIER.release" ]; do
+    sleep 0.05
+    _hold_waited=$((_hold_waited + 1))
+    [ "$_hold_waited" -ge 6000 ] && break
+  done
+fi
 [ -z "${MOCK_BRIDGE_SLEEP:-}" ] || sleep "$MOCK_BRIDGE_SLEEP"
 exit 0
 EOF
@@ -470,7 +479,7 @@ windows_native_diagnostics() {
   fi
   echo "native diagnostic packet:"
   if [ -n "${AGMSG_WINDOWS_DIAG_FILE:-}" ] && [ -f "$AGMSG_WINDOWS_DIAG_FILE" ]; then
-    sed -n '1,260p' "$AGMSG_WINDOWS_DIAG_FILE"
+    cat "$AGMSG_WINDOWS_DIAG_FILE"
   else
     echo "no native diagnostic packet observed"
   fi
@@ -1598,16 +1607,18 @@ _diagnose_485_failure() {
   export AGMSG_WINDOWS_DIAG_TARGET_ROOT="$TEST_SKILL_DIR"
   local short_child_barrier="$TEST_SKILL_DIR/short-child"
   local target_ready_barrier="$TEST_SKILL_DIR/target-ready"
+  local target_hold_barrier="$TEST_SKILL_DIR/target-hold"
   export MOCK_BRIDGE_CHILD_BARRIER="$short_child_barrier"
   export MOCK_BRIDGE_READY_BARRIER="$target_ready_barrier"
+  export MOCK_BRIDGE_HOLD_BARRIER="$target_hold_barrier"
   local lifecycle_events="$TEST_SKILL_DIR/native-launcher-events.log"
 
   # Keep the MSYS parent alive while the barriers establish the process order.
   sleep 30 3>&- & local p=$!
-  # The target bridge remains alive after the ready barrier. This makes native
-  # descendant cleanup an observable invariant rather than a race with the
-  # mock's natural exit.
-  export MOCK_BRIDGE_SLEEP=30
+  # The target bridge remains alive behind an explicit barrier. This makes
+  # native descendant cleanup an observable invariant rather than a race with
+  # the mock's natural exit or the diagnostic snapshots' duration.
+  export MOCK_BRIDGE_SLEEP=0
   bash "$LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$p" >/dev/null 2>&1 3>&- &
   local dispatcher=$!
   record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
@@ -1639,6 +1650,12 @@ _diagnose_485_failure() {
     _windows_native_reap_bridge_root "$AGMSG_WINDOWS_DIAG_TARGET_ROOT" || true
     false
   fi
+  if ! wait_for_file "$target_hold_barrier.reached"; then
+    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_reap_bridge_root "$AGMSG_WINDOWS_DIAG_TARGET_ROOT" || true
+    false
+  fi
   record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
 
   if [ ! -f "$CAPTURE" ]; then
@@ -1660,6 +1677,7 @@ _diagnose_485_failure() {
   chmod +x "$ended_bridge"
   export AGMSG_WINDOWS_DIAG_ENDED_ROOT="$ended_root"
   MOCK_BRIDGE_CHILD_BARRIER='' MOCK_BRIDGE_READY_BARRIER="$ended_barrier" \
+    MOCK_BRIDGE_HOLD_BARRIER='' \
     MOCK_BRIDGE_EVENTS="$ended_events" MOCK_BRIDGE_SLEEP=0 \
     bash "$ended_bridge" --project "$ended_root" --pair $'team\tended' \
       >/dev/null 2>&1 3>&- & local ended_pid=$!
@@ -1718,6 +1736,7 @@ EOF
   if ! _windows_native_reap_bridge_root "$TEST_SKILL_DIR"; then
     target_cleanup_rc=1
   fi
+  : > "$target_hold_barrier.release"
   _windows_native_diag_snapshot foreign-after-target-reap "$foreign_root"
   # Assert the invariant immediately before the rest of the test teardown.
   if ! _windows_native_assert_no_bridge_processes "$TEST_SKILL_DIR"; then
