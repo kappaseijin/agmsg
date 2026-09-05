@@ -397,6 +397,41 @@ assert_output_contains() {
   wait "$successor" 2>/dev/null || true
 }
 
+@test "delivery gate: same PID can re-enter its owned runtime row" {
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+  local resource
+  resource="$(actas_lock_gate_resource "$lock_path")"
+
+  # Keep both calls in this top-level Bats shell. `run` would fork a different
+  # process and test the wrong owner contract.
+  actas_lock_gate_try_acquire "$lock_path"
+  [ "$(agmsg_runtime_lock_owner "$resource")" = "$$" ]
+
+  # Ordinary observe: the row is still owned by this PID, so re-entry succeeds.
+  actas_lock_gate_try_acquire "$lock_path"
+  [ "$(agmsg_runtime_lock_owner "$resource")" = "$$" ]
+
+  actas_lock_gate_release "$lock_path"
+  [ -z "$(agmsg_runtime_lock_owner "$resource")" ]
+}
+
+@test "delivery gate: same PID remains owner after expected-owner CAS observe" {
+  local lock_path="$RUN_DIR/actas.T__alice.session"
+  local resource dead
+  resource="$(actas_lock_gate_resource "$lock_path")"
+
+  # Expected-owner CAS observe: a confirmed-dead generation is replaced by
+  # this same PID, and the CAS success path must also preserve its owner.
+  bash -c 'exit 0' &
+  dead=$!
+  wait "$dead"
+  agmsg_runtime_lock_acquire "$resource" "$dead" >/dev/null
+  actas_lock_gate_try_acquire "$lock_path"
+  [ "$(agmsg_runtime_lock_owner "$resource")" = "$$" ]
+  actas_lock_gate_release "$lock_path"
+  [ -z "$(agmsg_runtime_lock_owner "$resource")" ]
+}
+
 # --- writer mutation gate ---
 
 @test "claim: unavailable delivery gate leaves the lock untouched" {

@@ -372,14 +372,16 @@ fi
 # watcher is currently receiving for that role.
 READY_FILES=""
 GATE_UNAVAILABLE_REPORTED=""
+WATCH_RELEASE_INCOMPLETE=""
 WATCH_HELD_GATE_PATH=""
 WATCH_HELD_GATE_LABEL=""
 cleanup() {
   # A signal can arrive while the poll owns its delivery gate. Release it before
-  # removing watcher metadata; a failed release remains fail-closed and the
-  # dead PID can be reclaimed by the next writer's CAS.
+  # removing watcher metadata. A failed release is reported, then cleanup keeps
+  # the original shutdown reason and the dead PID can be reclaimed by the next
+  # writer's CAS.
   if [ -n "$WATCH_HELD_GATE_PATH" ]; then
-    if ! _watch_release_gate; then
+    if ! _watch_release_gate cleanup; then
       :
     fi
   fi
@@ -609,7 +611,39 @@ _watch_gate_unavailable_once() {
   watch_log "$label: ownership_gate_unavailable; skipping fetch, output, consume, and receipt."
 }
 
+_watch_release_incomplete_has() {
+  local want="$1" line
+  [ -n "$want" ] || return 1
+  while IFS= read -r line; do
+    [ "$line" = "$want" ] && return 0
+  done <<< "$WATCH_RELEASE_INCOMPLETE"
+  return 1
+}
+
+_watch_release_incomplete_without() {
+  local drop="$1" line out=""
+  [ -n "$WATCH_RELEASE_INCOMPLETE" ] || return 0
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    [ "$line" = "$drop" ] && continue
+    out="${out:+$out$'\n'}$line"
+  done <<< "$WATCH_RELEASE_INCOMPLETE"
+  WATCH_RELEASE_INCOMPLETE="$out"
+}
+
+_watch_release_incomplete_once() {
+  local lock_path="$1" label="$2" context="${3:-normal}"
+  _watch_release_incomplete_has "$lock_path" && return 0
+  WATCH_RELEASE_INCOMPLETE="${WATCH_RELEASE_INCOMPLETE:+$WATCH_RELEASE_INCOMPLETE$'\n'}$lock_path"
+  if [ "$context" = normal ]; then
+    watch_log "${label:-$lock_path}: ownership gate release incomplete; holding continues to the next poll."
+  else
+    watch_log "${label:-$lock_path}: ownership gate release incomplete during $context; preserving the controlled stop."
+  fi
+}
+
 _watch_release_gate() {
+  local context="${1:-normal}"
   local lock_path="$WATCH_HELD_GATE_PATH"
   local label="$WATCH_HELD_GATE_LABEL"
   [ -n "$lock_path" ] || return 0
@@ -618,10 +652,33 @@ _watch_release_gate() {
   WATCH_HELD_GATE_PATH=""
   WATCH_HELD_GATE_LABEL=""
   if actas_lock_gate_release "$lock_path"; then
+    if _watch_release_incomplete_has "$lock_path"; then
+      _watch_release_incomplete_without "$lock_path"
+      watch_log "${label:-$lock_path}: ownership gate release resolved; normal release resumed."
+    fi
     return 0
   fi
-  watch_log "${label:-$lock_path}: ownership gate release failed; watcher is stopping."
+  if [ "$context" = normal ]; then
+    _watch_release_incomplete_once "$lock_path" "$label" normal
+  else
+    _watch_release_incomplete_once "$lock_path" "$label" "$context"
+  fi
   return 1
+}
+
+# Test-only synchronization point immediately before the normal-poll release.
+# The acceptance fixture uses this to start a real SQLite holder after payload,
+# cursor, and receipt work has completed, so only the release operation enters
+# the holder's busy window. Production never sets this variable.
+_watch_test_release_barrier() {
+  local barrier="${AGMSG_TEST_ACTAS_DELIVERY_GATE_RELEASE_BARRIER:-}" waited=0
+  [ -n "$barrier" ] || return 0
+  : > "$barrier.reached" || return 1
+  while [ ! -e "$barrier.release" ]; do
+    sleep 0.05 || return 1
+    waited=$((waited + 1))
+    [ "$waited" -lt 200 ] || return 1
+  done
 }
 
 while true; do
@@ -715,17 +772,13 @@ while true; do
     # read. Gaining one is the caller's job, at the point it creates the team.
     if ! pair_state="$(actas_lock_state "$pair_team" "$pair_agent" "$SESSION_ID")"; then
       watch_log "$GATE_LABEL: ownership state unavailable; skipping this poll."
-      if ! _watch_release_gate; then
-        exit 1
-      fi
+      _watch_release_gate normal || :
       continue
     fi
     case "$pair_state" in
       other:*)
         if [ -n "$ACTIVE_NAME" ]; then
-          if ! _watch_release_gate; then
-            exit 1
-          fi
+          _watch_release_gate controlled-stop || :
           # This watcher exists to serve exactly this role and no longer owns
           # it. Stop -- and say so: stderr is the only place a reason survives,
           # and a watcher that ends without one is indistinguishable from one
@@ -754,9 +807,7 @@ while true; do
 }${pair_team}/${pair_agent}"
           watch_log "${pair_team}/${pair_agent} was claimed by session ${pair_state#other:}; not serving it while they hold it."
         fi
-        if ! _watch_release_gate; then
-          exit 1
-        fi
+        _watch_release_gate normal || :
         continue
         ;;
       free|mine)
@@ -770,9 +821,7 @@ while true; do
         ;;
       *)
         watch_log "$GATE_LABEL: ownership state '$pair_state' is not usable; skipping this poll."
-        if ! _watch_release_gate; then
-          exit 1
-        fi
+        _watch_release_gate normal || :
         continue
         ;;
     esac
@@ -780,9 +829,7 @@ while true; do
     _watch_after_status=$?
     if [ "$_watch_after_status" -ne 0 ]; then
       watch_log "$GATE_LABEL: storage_watch_after failed (status $_watch_after_status); skipping this poll."
-      if ! _watch_release_gate; then
-        exit 1
-      fi
+      _watch_release_gate normal || :
       continue
     fi
     if [ -n "$OUT" ]; then
@@ -838,7 +885,7 @@ while true; do
         continue
       fi
       if ! ( printf '%s | %s | %s → %s | %s\n' "$ts" "$team" "$from" "$to" "$body" ); then
-        _watch_release_gate || {
+        _watch_release_gate controlled-stop || {
           cleanup
           exit 1
         }
@@ -878,9 +925,7 @@ while true; do
       placed_id=""
       spawn_rec="$(agmsg_spawn_path "$pair_team" "$DESPAWN_TARGET" 2>/dev/null || true)"
       [ -f "$spawn_rec" ] && IFS=$'\t' read -r placed_id _ _ < "$spawn_rec"
-      if ! _watch_release_gate; then
-        watch_log "$GATE_LABEL: continuing despawn role drop after gate release failure."
-      fi
+      _watch_release_gate despawn || :
       "$SCRIPT_DIR/reset.sh" "$PROJECT_PATH" "$AGENT_TYPE" "$DESPAWN_TARGET" "$SESSION_ID" >/dev/null 2>&1 || true
       if [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then
         tmux kill-pane -t "$TMUX_PANE" 2>/dev/null || true
@@ -894,9 +939,8 @@ while true; do
       exit 0
     fi
     fi
-    if ! _watch_release_gate; then
-      exit 1
-    fi
+    _watch_test_release_barrier || exit 1
+    _watch_release_gate normal || :
   done <<< "$PAIRS"
 
   # Run sleep in the background and `wait` for it so signal traps fire

@@ -506,6 +506,239 @@ _wait_for_file_contains() {
   grep -q "M-after-closed-stdout" "$TEST_SKILL_DIR/closed-redelivery.log"
 }
 
+@test "watch: normal release failure keeps the watcher alive and resolves once" {
+  skip_on_windows "watcher SQLite holder under Git Bash (#182)"
+  local sid="sess-release-resilience"
+  local iid="$(_iid "$sid")"
+  local out="$TEST_SKILL_DIR/release-resilience.out"
+  local err="$TEST_SKILL_DIR/release-resilience.err"
+  local log="$TEST_SKILL_DIR/run/watch.$iid.log"
+  local release_barrier="$TEST_SKILL_DIR/release-gate"
+  local holder_sql="$TEST_SKILL_DIR/sqlite-holder.sql"
+  local holder_out="$TEST_SKILL_DIR/sqlite-holder.out"
+  local db="$TEST_SKILL_DIR/db/messages.db"
+  local lock_path="$TEST_SKILL_DIR/run/actas.team__alice.session"
+  local resource watcher holder holder_writer
+
+  bash "$SCRIPTS/send.sh" team bob alice "before-release-holder" >/dev/null
+
+  AGMSG_TEST_ACTAS_DELIVERY_GATE_RELEASE_BARRIER="$release_barrier" AGMSG_WATCH_INTERVAL=1 \
+    bash "$SCRIPTS/watch.sh" "$sid" "$PROJ" claude-code alice \
+    >"$out" 2>"$err" 3>&- 4>&- &
+  watcher=$!
+
+  if ! wait_for_file "$release_barrier.reached"; then
+    _stop_watcher "$watcher"
+    cat "$err" >&2
+    false
+  fi
+  resource="$(
+    SKILL_DIR="$TEST_SKILL_DIR"
+    source "$SCRIPTS/lib/actas-lock.sh"
+    actas_lock_gate_resource "$lock_path"
+  )"
+  local gate_owner
+  gate_owner="$(
+    SKILL_DIR="$TEST_SKILL_DIR"
+    source "$SCRIPTS/lib/actas-lock.sh"
+    agmsg_runtime_lock_owner "$resource"
+  )"
+  [ "$gate_owner" = "$watcher" ]
+
+  # Keep a real BEGIN IMMEDIATE transaction open. The SELECT output is the
+  # readiness marker: it is emitted only after SQLite has acquired the write
+  # reservation on the same runtime DB that gate release uses.
+  mkfifo "$holder_sql"
+  sqlite3 "$db" <"$holder_sql" >"$holder_out" 2>&1 &
+  holder=$!
+  (
+    exec 9>"$holder_sql"
+    printf 'BEGIN IMMEDIATE;\nSELECT 1;\n' >&9
+    sleep 12
+    printf 'COMMIT;\n' >&9
+    exec 9>&-
+  ) &
+  holder_writer=$!
+  if ! wait_for_file_contains "$holder_out" "1"; then
+    _stop_watcher "$watcher"
+    kill "$holder_writer" 2>/dev/null || true
+    kill "$holder" 2>/dev/null || true
+    wait "$holder_writer" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+    cat "$holder_out" "$err" >&2
+    false
+  fi
+
+  : > "$release_barrier.release"
+  if ! AGMSG_TEST_WAIT_TIMEOUT_S=30 wait_for_file_contains \
+      "$log" "ownership gate release incomplete; holding continues to the next poll."; then
+    _stop_watcher "$watcher"
+    kill "$holder_writer" 2>/dev/null || true
+    kill "$holder" 2>/dev/null || true
+    wait "$holder_writer" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+    cat "$out" "$err" "$log" >&2
+    false
+  fi
+
+  # The release budget is five seconds, while the holder stays for twelve.
+  # Therefore this assertion observes the repaired behavior before the holder
+  # can disappear and make the failure mode accidentally pass.
+  if ! kill -0 "$watcher" 2>/dev/null; then
+    _stop_watcher "$watcher"
+    kill "$holder_writer" 2>/dev/null || true
+    kill "$holder" 2>/dev/null || true
+    wait "$holder_writer" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+    cat "$out" "$err" "$log" >&2
+    false
+  fi
+
+  wait "$holder_writer"
+  wait "$holder"
+  bash "$SCRIPTS/send.sh" team bob alice "after-release-holder" >/dev/null
+  if ! wait_for_file_contains "$out" "after-release-holder"; then
+    _stop_watcher "$watcher"
+    cat "$out" "$err" "$log" >&2
+    false
+  fi
+  if ! wait_for_file_contains "$log" "ownership gate release resolved; normal release resumed."; then
+    _stop_watcher "$watcher"
+    cat "$out" "$err" "$log" >&2
+    false
+  fi
+  _stop_watcher "$watcher"
+
+  [ "$(grep -Fc "ownership gate release incomplete; holding continues to the next poll." "$err" || true)" -eq 1 ]
+  [ "$(grep -Fc "ownership gate release incomplete; holding continues to the next poll." "$log" || true)" -eq 1 ]
+  [ "$(grep -Fc "ownership gate release resolved; normal release resumed." "$err" || true)" -eq 1 ]
+  [ "$(grep -Fc "ownership gate release resolved; normal release resumed." "$log" || true)" -eq 1 ]
+  ! grep -Fq "ownership gate release incomplete" "$out"
+  ! grep -Fq "ownership gate release resolved" "$out"
+}
+
+@test "watch: release recovery is keyed by the gate path" {
+  skip_on_windows "watcher SQLite holder under Git Bash (#182)"
+  local sid="sess-release-path-key"
+  local iid="$(_iid "$sid")"
+  local out="$TEST_SKILL_DIR/release-path-key.out"
+  local err="$TEST_SKILL_DIR/release-path-key.err"
+  local log="$TEST_SKILL_DIR/run/watch.$iid.log"
+  local release_barrier="$TEST_SKILL_DIR/release-path-key-gate"
+  local holder_sql="$TEST_SKILL_DIR/sqlite-path-holder.sql"
+  local holder_out="$TEST_SKILL_DIR/sqlite-path-holder.out"
+  local db_a lock_a lock_b resource_a resource_b
+  local watcher holder holder_writer
+
+  # Leave the second setup identity so the broad watcher has exactly one pair
+  # in the held database and one pair in an independent database.
+  bash "$SCRIPTS/leave.sh" team bob >/dev/null
+  bash "$SCRIPTS/join.sh" team2 bob claude-code "$PROJ" >/dev/null
+  bash "$SCRIPTS/send.sh" team2 alice bob "path-key-successor" --force >/dev/null
+  db_a="$(_team_store team)"
+  lock_a="$TEST_SKILL_DIR/run/actas.team__alice.session"
+  lock_b="$TEST_SKILL_DIR/run/actas.team2__bob.session"
+
+  AGMSG_TEST_ACTAS_DELIVERY_GATE_RELEASE_BARRIER="$release_barrier" AGMSG_WATCH_INTERVAL=1 \
+    bash "$SCRIPTS/watch.sh" "$sid" "$PROJ" claude-code \
+    >"$out" 2>"$err" 3>&- 4>&- &
+  watcher=$!
+
+  if ! wait_for_file "$release_barrier.reached"; then
+    _stop_watcher "$watcher"
+    cat "$err" >&2
+    false
+  fi
+  resource_a="$(
+    SKILL_DIR="$TEST_SKILL_DIR"
+    source "$SCRIPTS/lib/actas-lock.sh"
+    actas_lock_gate_resource "$lock_a"
+  )"
+  resource_b="$(
+    SKILL_DIR="$TEST_SKILL_DIR"
+    source "$SCRIPTS/lib/actas-lock.sh"
+    actas_lock_gate_resource "$lock_b"
+  )"
+  [ "$(
+    SKILL_DIR="$TEST_SKILL_DIR"
+    source "$SCRIPTS/lib/actas-lock.sh"
+    agmsg_runtime_lock_owner "$resource_a"
+  )" = "$watcher" ]
+
+  # Hold only team’s runtime DB. team2’s release must succeed while team’s
+  # release remains pending; a process-global pending flag would resolve the
+  # wrong path at that point.
+  mkfifo "$holder_sql"
+  sqlite3 "$db_a" <"$holder_sql" >"$holder_out" 2>&1 &
+  holder=$!
+  (
+    exec 9>"$holder_sql"
+    printf 'BEGIN IMMEDIATE;\nSELECT 1;\n' >&9
+    sleep 12
+    printf 'COMMIT;\n' >&9
+    exec 9>&-
+  ) &
+  holder_writer=$!
+  if ! wait_for_file_contains "$holder_out" "1"; then
+    _stop_watcher "$watcher"
+    kill "$holder_writer" 2>/dev/null || true
+    kill "$holder" 2>/dev/null || true
+    wait "$holder_writer" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+    cat "$holder_out" "$err" >&2
+    false
+  fi
+  : > "$release_barrier.release"
+
+  if ! AGMSG_TEST_WAIT_TIMEOUT_S=30 wait_for_file_contains \
+      "$log" "team/alice: ownership gate release incomplete; holding continues to the next poll."; then
+    _stop_watcher "$watcher"
+    kill "$holder_writer" 2>/dev/null || true
+    kill "$holder" 2>/dev/null || true
+    wait "$holder_writer" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+    cat "$out" "$err" "$log" >&2
+    false
+  fi
+  wait_for_file_contains "$out" "path-key-successor"
+
+  # The independent team2 gate must be released before team’s holder ends.
+  # That success must not resolve team/alice’s pending release.
+  local owner_b="" tick
+  for tick in $(seq 1 100); do
+    owner_b="$(
+      SKILL_DIR="$TEST_SKILL_DIR"
+      source "$SCRIPTS/lib/actas-lock.sh"
+      agmsg_runtime_lock_owner "$resource_b"
+    )"
+    [ -z "$owner_b" ] && break
+    sleep 0.1
+  done
+  [ -z "$owner_b" ]
+  ! grep -Fq "ownership gate release resolved" "$log"
+
+  wait "$holder_writer"
+  wait "$holder"
+  bash "$SCRIPTS/send.sh" team bob alice "path-key-recovered" --force >/dev/null
+  if ! AGMSG_TEST_WAIT_TIMEOUT_S=30 wait_for_file_contains "$out" "path-key-recovered"; then
+    _stop_watcher "$watcher"
+    cat "$out" "$err" "$log" >&2
+    false
+  fi
+  if ! AGMSG_TEST_WAIT_TIMEOUT_S=30 wait_for_file_contains \
+      "$log" "team/alice: ownership gate release resolved; normal release resumed."; then
+    _stop_watcher "$watcher"
+    cat "$out" "$err" "$log" >&2
+    false
+  fi
+  _stop_watcher "$watcher"
+
+  [ "$(grep -Fc "team/alice: ownership gate release incomplete; holding continues to the next poll." "$log" || true)" -eq 1 ]
+  [ "$(grep -Fc "team/alice: ownership gate release resolved; normal release resumed." "$log" || true)" -eq 1 ]
+  ! grep -Fq "ownership gate release incomplete" "$out"
+  ! grep -Fq "ownership gate release resolved" "$out"
+}
+
 @test "session-end: leaves the store-owned read cursor intact" {
   bash "$SCRIPTS/send.sh" team bob alice "read-before-end" >/dev/null
   run bash "$SCRIPTS/inbox.sh" team alice
