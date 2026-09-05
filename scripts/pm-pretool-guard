@@ -1,0 +1,144 @@
+#!/usr/bin/env node
+
+/* Native Claude PreToolUse policy boundary for the isolated PM probe. */
+
+'use strict';
+
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const {spawnSync} = require('child_process');
+
+const POLICY_VERSION = 'pm-pretool-v1';
+const MAX_INPUT_BYTES = 1024 * 1024;
+const NATIVE_TOOLS = new Set(['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode']);
+const BROKER_OPERATIONS = new Set([
+  'agmsg_send', 'agmsg_receive', 'agmsg_delegate', 'monitor', 'actas', 'drop',
+  'rule_load', 'rule_record', 'git_maintenance', 'sync_origin_clone',
+  'proxy_git_write', 'team_provision', 'bot_collaborator', 'apply_decision',
+  'stale_runtime_cleanup', 'issue_view', 'issue_comment', 'pr_view',
+  'pr_comment', 'seat_start', 'seat_stop',
+]);
+
+const digest = (value) => `sha256:${crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex')}`;
+
+const denyOutput = (reason) => {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: reason,
+    },
+  }) + '\n');
+  process.exitCode = 2;
+};
+
+const parseInput = () => {
+  let raw = '';
+  try {
+    raw = fs.readFileSync(0, 'utf8');
+  } catch (_) {
+    throw new Error('hook_input_unreadable');
+  }
+  if (Buffer.byteLength(raw, 'utf8') > MAX_INPUT_BYTES) throw new Error('hook_input_too_large');
+  let input;
+  try {
+    input = JSON.parse(raw);
+  } catch (_) {
+    throw new Error('hook_input_invalid');
+  }
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('hook_input_invalid');
+  for (const field of ['session_id', 'cwd', 'tool_name', 'tool_use_id']) {
+    if (typeof input[field] !== 'string' || input[field].length === 0) throw new Error(`${field}_invalid`);
+  }
+  if (!input.tool_input || typeof input.tool_input !== 'object' || Array.isArray(input.tool_input)) {
+    throw new Error('tool_input_invalid');
+  }
+  return input;
+};
+
+const appendDecision = (input, decision, reason) => {
+  const file = process.env.AGMSG_PM_DECISIONS_FILE;
+  if (typeof file !== 'string' || file.length === 0) throw new Error('decision_log_unconfigured');
+  const record = {
+    schemaVersion: 1,
+    observedAt: new Date().toISOString(),
+    sessionId: input.session_id,
+    generation: process.env.AGMSG_PM_PROCESS_GENERATION || '',
+    toolUseId: input.tool_use_id,
+    tool: input.tool_name,
+    inputDigest: digest(input.tool_input),
+    decision,
+    reason: reason || null,
+    policyVersion: POLICY_VERSION,
+  };
+  fs.mkdirSync(path.dirname(file), {recursive: true});
+  fs.appendFileSync(file, JSON.stringify(record) + '\n', {encoding: 'utf8', flag: 'a'});
+};
+
+const identity = (input) => {
+  const scriptDir = __dirname;
+  const result = spawnSync(path.join(scriptDir, 'session-identity.sh'), [], {
+    input: JSON.stringify(input),
+    encoding: 'utf8',
+    timeout: 2000,
+    env: process.env,
+  });
+  if (result.error || result.status !== 0) {
+    const detail = String(result.stderr || '').trim().replace(/[^A-Za-z0-9_.-]/gu, '_').slice(0, 80);
+    throw new Error(detail ? `session_identity_unavailable_${detail}` : 'session_identity_unavailable');
+  }
+  try {
+    const value = JSON.parse(result.stdout || '');
+    if (!value || value.status !== 'ok') throw new Error('session_identity_invalid');
+    return value;
+  } catch (_) {
+    throw new Error('session_identity_invalid');
+  }
+};
+
+const brokerCommand = (input) => {
+  if (input.tool_name !== 'Bash' || typeof input.tool_input.command !== 'string') return null;
+  const command = input.tool_input.command;
+  if (command.length === 0 || command !== command.trim()) return null;
+  // Only space-separated literal argv is accepted. All shell syntax and all
+  // wrappers are rejected before any permission decision is returned.
+  if (/[|;&<>$`()\\*?\n\r"']/u.test(command)) return null;
+  const parts = command.split(' ');
+  if (parts.some((part) => part.length === 0) || parts.length !== 3) return null;
+  const helper = process.env.AGMSG_PM_BROKER_PATH;
+  if (typeof helper !== 'string' || helper.length === 0 || parts[0] !== helper) return null;
+  if (!BROKER_OPERATIONS.has(parts[1]) || !/^[A-Za-z0-9_-]+$/u.test(parts[2])) return null;
+  return {helper, operation: parts[1]};
+};
+
+let input;
+try {
+  input = parseInput();
+} catch (error) {
+  try { appendDecision({session_id: 'unknown', tool_name: 'unknown', tool_use_id: 'unknown', tool_input: {}}, 'deny', error.message); } catch (_) {}
+  denyOutput(error.message);
+  process.exit();
+}
+
+if (NATIVE_TOOLS.has(input.tool_name)) {
+  try { appendDecision(input, 'native', 'native_conversation_tool'); } catch (error) { denyOutput(error.message); process.exit(); }
+  process.exit(0);
+}
+
+let reason = 'tool_not_allowed';
+try {
+  identity(input);
+  if (brokerCommand(input)) reason = '';
+  else if (input.tool_name === 'Bash') reason = 'command_not_in_fixed_broker_contract';
+  appendDecision(input, reason ? 'deny' : 'allow', reason || null);
+} catch (error) {
+  reason = error.message || 'guard_internal_error';
+  try { appendDecision(input, 'deny', reason); } catch (_) {}
+}
+
+if (reason) {
+  denyOutput(`${reason}; delegate this operation through the fixed PM broker`);
+  process.exit();
+}
+process.exit(0);
