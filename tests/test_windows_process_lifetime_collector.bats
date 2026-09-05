@@ -27,7 +27,7 @@ setup() {
   grep -Fq '"event_generated_time_utc"' "$packet"
   grep -Fq '"event_received_time_utc"' "$packet"
   grep -Fq '"actor_time_utc"' "$packet"
-  ! grep -Fq 'CommandLine' "$packet"
+  refute grep -Fq 'CommandLine' "$packet"
 
   run powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
     -File "$collector" -Mode evaluate -PacketPath "$packet"
