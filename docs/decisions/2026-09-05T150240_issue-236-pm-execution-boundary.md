@@ -22,6 +22,8 @@ command型PreToolUseを追加するだけでは、障害時を含む委譲の強
 今回は調査と設計文書だけを扱い、既存hook、起動設定、製品コードを変更しない。
 #230、PR #233、remind-clickable-options.sh等の既存リマインダー修正は対象外とする。
 内部運用の検討書なので今回のREADME変更はない。
+共有launcherやactas連携へ実装する場合、影響候補はagmsgチームだけでなくagmsgを利用する全プロジェクトのPM運用である。
+導入は対象team/agentを明示して段階的に行い、未導入席と非PM席への無変更を受入条件に含める。
 
 ## 根拠と確認範囲
 
@@ -99,8 +101,28 @@ PM brokerは任意command、任意URL、任意path、任意コードを実行す
 | 会話、受信、委譲 | team内のinbox/history/send、他PMとの連絡。送信元はbindingから固定 | 任意sender詐称、他席の履歴全量読取、shell式を引数として評価 |
 | 提示と記録 | 指定PLAN/NOTESへの追記、指定Issue/PRの連絡用取得とコメント、承認済み判断の状態反映 | 任意file編集、任意GitHub API、PR一括棚卸し、設計や実装の生成処理 |
 | 体制操作 | 登録済み席の状態取得、固定profileによる起動。停止は既存の所有権条件を維持 | 任意argv、別profileへの差替え、汎用pane command、端末への任意文字投入 |
+| git保守と代理実行 | 条件を満たすローカル/リモートの作業ブランチ削除、`git fetch --prune`、mainのff-only同期、post-merge検証、レビュー用worktree撤去/prune、`sync-origin-clone.sh`、代理commit/代理push/代理PR作成 | 対象未確定の棚卸し、未取り込み内容の無承認削除、force push、無合意差分の代理作成 |
+| 体制構築と決定反映 | 決定済み方針に基づく作業クローン作成、AGENT.md/config.toml作成更新、登録と配置、ユーザー所有botへのprivate repo collaborator追加と招待受諾、グローバルルールとCLIホットキャッシュ更新、stale pidfile/lockの限定除去 | public化、第三者への権限付与、既存collaborator削除の無承認実行、任意設定変更、稼働中lock除去 |
 
-元の`fetch`、remote branch棚卸し、PR一覧集計はbroker操作に含めず、workerへ依頼する。
+最後の2行は既存の`~/.agents/rules/git.rule.md`「マージ後の後片付け」「原本クローンを最新に保つ」と`~/.agents/rules/autonomy.rule.md`の許可を維持するための構造化APIである。
+この修正でworkerへの委譲へ方針転換せず、PMに汎用Bashを戻すこともしない。
+「任意file編集」「任意GitHub API」の禁止は無制限の入力を禁止する意味であり、以下の対象と条件を固定した操作を禁止しない。
+
+| broker操作 | 構造化入力と実行前条件 | 拒否する対照 |
+| --- | --- | --- |
+| `git_maintenance` | 登録済みrepo ID、対象PR/branch/commit、操作enum。マージ済み内容の取込を実際に照合し、指定cloneのfetch --prune、mainのff-only同期、対象branch削除、登録されたpost-merge preflight/test、レビュー用worktree撤去を実行する | 未取り込み内容、対象変更、未合意command、untrackedメモ削除。必要な承認がない破壊操作は停止 |
+| `sync_origin_clone` | 登録済み原本repo IDから絶対pathを解決し、固定`sync-origin-clone.sh`を呼ぶ。tracked差分なし、main上、ff-only可能を確認し、同期後HEADとorigin/mainを照合する | dirty tree、別branch、分岐、未登録path。untrackedメモは保持 |
+| `proxy_git_write` | 依頼元seat、sandbox制約の確認資料、合意した差分digest/commit message、対象repo/branchとexpected HEAD、操作enum。実際の差分と制約を確認し、代理commit/push/PR作成だけを行う | 制約未確認、差分不一致、対象HEAD変動。producer vendor由来のaccountと独立review条件を変更しない |
+| `team_provision` | 決定記録ID、team/role、登録済みtemplateとprofile、許可先path ID。作業clone、AGENT.md、config.toml、agmsg登録、herdr配置を固定操作で作成更新する | 任意argv、任意path、決定外のmodel/権限変更。自席の稼働中policyを書き換えて権限を増やす操作 |
+| `bot_collaborator` | 対象repo ID、ユーザー所有bot ID、決定済み権限、招待ID。所有関係とprivate状態をAPIで確認し、追加または対応招待受諾だけを行う | public repo、第三者/organization、権限増大、招待のrepo/受取人不一致、既存collaborator削除 |
+| `apply_decision` | 決定記録ID、合意済みpatch digest、許可されたrule/hot-cache/profile path ID、expected preimage。決定事項だけを反映する | 未承認方針、別file、preimage不一致、symlink逸脱。broker自身の認可変更は通常更新APIから拒否 |
+| `stale_runtime_cleanup` | 登録席とexact pidfile/lock ID、所有者とprocess generationの失効証拠。削除直前にも所有状態を照合する | 生存、不明、所有者交代、広域削除。削除失敗を成功にしない |
+
+上表の確認はPMの自己申告booleanだけでは満たせず、brokerの固定検査か対象HEADに結び付いた独立証拠を用いる。
+依頼元と合意した内容を代理実行することと、PMが差分や調査手順を起草することを分ける。
+post-merge検証も登録済み手順だけを実行し、任意shellやコードを引数として受け取らない。
+通常の調査としての`fetch`、remote branch棚卸し、PR一覧集計はworkerへ依頼する。
+同じfetchでも、対象確定済みのpost-merge保守または規約上の代理保守だけを`git_maintenance`の限定操作として扱い、自由なfetch APIは設けない。
 特定PRの状態確認と全PRを調べる実作業を同じAPIへまとめない。
 起動、記録の各操作は固定実行ファイルと構造化引数を使い、message本文をshellへ渡して評価しない。
 記録先はcanonical pathと固定許可先を照合し、symlinkによる設定fileへの逸脱を拒否する。
@@ -116,7 +138,7 @@ flowchart TD
   I -->|不成立| X[PM起動拒否]
   I -->|成立| P[汎用実行toolを持たないPM]
   P --> B{PM brokerの操作認可}
-  B -->|許可| C[連絡 / 記録 / 固定profileの席操作]
+  B -->|許可| C[連絡 / 記録 / 体制構築 / 条件付きgit保守と代理実行]
   B -->|範囲外または異常| D[拒否と診断]
   C --> W[実務は登録済み担当席へ委譲]
 ```
@@ -149,6 +171,12 @@ programmerが隔離fixtureを実装し、独立実測は既存verifier等の別t
 | hook故障 | hook削除、非実行可能、exit 1、timeoutでも元3操作のmarker 0 |
 | 構成変動 | plugin追加、MCP追加、resume、設定破損、未知toolで能力が増えない。読込結果不明なら起動拒否 |
 | PMの正常操作 | agmsg連絡、依頼の記録、指定PR確認、固定profileの席操作が通る。本文のshell文字はデータのまま |
+| git保守の許可境界 | 隔離repoで取込済みbranch削除、fetch --prune、ff-only同期、post-merge検証、worktree撤去、原本同期が通る。未取込branch、dirty tree、分岐、対象差替えでは拒否し、untrackedメモを保持 |
+| 代理実行の許可境界 | 確認済みsandbox制約と合意digest/HEADで代理commit/push/PRが通る。制約不明、差分変更、誤accountでは副作用0 |
+| 体制構築の許可境界 | 決定済みtemplateによるclone/AGENT.md/config.toml/登録/配置、ruleとhot-cache更新、失効済みpidfile/lock除去が通る。任意path、未承認patch、稼働中owner、自席の認可変更では拒否 |
+| bot権限の許可境界 | fixture APIでユーザー所有botとprivate repoの追加/招待受諾が通る。第三者、public化、既存collaborator削除、不一致招待ではAPI書込0。本番権限を試験で変更しない |
+| 保守と調査の区別 | 同じfetch stubが、確定済み保守requestではmarker 1、一般調査requestでは0。単にgitを全面許可/全面拒否した実装は双方の対照を通せない |
+| 導入範囲 | 導入対象PMだけに制限が適用され、同一共有scriptを使う未導入teamと非PM席の実効tool/起動契約は変わらない |
 | broker異常 | identity/config障害では副作用0、実行後timeoutではoutcome_unknownを返し重複実行しない |
 
 packetには`value / cutoff / source / command`、CLI版、起動profile digest、固定HEAD、実効tool一覧、markerの生出力を残す。
