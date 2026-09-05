@@ -5,6 +5,7 @@
 # already consumed by either delivery path.
 
 load test_helper
+load watch_stop_helper
 
 setup() {
   setup_test_env
@@ -989,11 +990,12 @@ _wait_for_file_contains() {
   # existing unread ("watch: a fresh session delivers existing unread" above),
   # so the marker is streamed whether it lands before or after the first cursor
   # read. The wait below is still the evidence; only the ordering crutch is gone.
-  local out="$TEST_SKILL_DIR/broad.log"
+  local out="$TEST_SKILL_DIR/broad.log" rc=0 packet
+  packet=$(mktemp "${RUNNER_TEMP:-${BATS_SUITE_TMPDIR:-${TMPDIR:-/tmp}}}/agmsg-watch-stop.XXXXXX")
   AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "sess-broad" "$PROJ" claude-code >"$out" 2>/dev/null 3>&- &
   local w=$!
   bash "$SCRIPTS/send.sh" team bob alice "M-broad-marker" >/dev/null
-  wait_for_file_contains "$out" "M-broad-marker"
+  wait_for_file_contains "$out" "M-broad-marker" || rc=1
 
   # Asserted while the watcher is STILL RUNNING, and that is the whole point.
   # cleanup() removes on exit every sentinel this watcher owns, so an assertion
@@ -1002,14 +1004,24 @@ _wait_for_file_contains() {
   # something. Verified by injection: with watch.sh's `[ -n "$ACTIVE_NAME" ]`
   # guard removed so a broad watcher writes the sentinels, this test fails,
   # while the kill-then-assert form it replaces still passes.
-  local rc=0 _s
+  local _s
   for _s in ready.team__alice ready.team__bob; do
     if [ -e "$TEST_SKILL_DIR/run/$_s" ]; then
       echo "broad watcher created $_s" >&2
       rc=1
     fi
   done
-  _stop_watcher "$w"
+  # Capture ownership while the child is still ours. A stop failure cannot be
+  # overwritten by the earlier sentinel result. Other _stop_watcher callers
+  # are deliberately unchanged by this test248-only correction.
+  if _watch_stop_register "$w" "$SCRIPTS/watch.sh" "$packet"; then
+    _watch_stop_owned || rc=1
+    _watch_stop_log test-end "result=$rc sentinel_checked=before-stop"
+  else
+    printf 'phase=registration-failed pid=%s result=1\n' "$w" >> "$packet"
+    rc=1
+  fi
+  [ "$rc" -eq 0 ] || cat "$packet" >&2
   return "$rc"
 }
 

@@ -334,7 +334,9 @@ jobs:
           set +e
           xargs bats --print-output-on-failure < shard-files.txt
           status=$?
+          printf 'phase=xargs-end result=%s\n' "$status" > "$RUNNER_TEMP/bats-terminal.txt"
           : > "$RUNNER_TEMP/bats-done"
+          printf 'phase=step-exit-request result=%s\n' "$status" | tee -a "$RUNNER_TEMP/bats-terminal.txt"
           exit $status
 
       # always() so this also runs when the job is cancelled at its cap, which
@@ -389,6 +391,16 @@ jobs:
           path: ${{ runner.temp }}/hang-samples.txt
           if-no-files-found: ignore
           retention-days: 3
+
+      - name: Preserve bounded watcher stop packets and suite terminal status
+        if: always() && needs.changes.outputs.docs_only != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: watch-stop-${{ matrix.os }}-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/agmsg-watch-stop.*
+            ${{ runner.temp }}/bats-terminal.txt
+          if-no-files-found: ignore
 
       - name: Record which files this shard ran
         if: needs.changes.outputs.docs_only != 'true'
