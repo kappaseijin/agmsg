@@ -112,12 +112,12 @@ _mock_event live
 trap 'rm -f "$_lease"; _mock_event exit; [ -z "${MOCK_BRIDGE_HOLD_BARRIER:-}" ] || : > "$MOCK_BRIDGE_HOLD_BARRIER.exited"' EXIT
 if [ -n "${MOCK_BRIDGE_HOLD_BARRIER:-}" ]; then
   : > "$MOCK_BRIDGE_HOLD_BARRIER.reached"
-  _hold_waited=0
-  while [ ! -e "$MOCK_BRIDGE_HOLD_BARRIER.release" ]; do
-    sleep 0.05
-    _hold_waited=$((_hold_waited + 1))
-    [ "$_hold_waited" -ge 6000 ] && break
-  done
+  # Keep one stable native child for the bounded hold. A short polling sleep
+  # would rotate children while the diagnostic packet is being collected; the
+  # native `/T` reap could then report an already-gone child as taskkill
+  # failure. The test releases this target by reaping it, and writes the
+  # release marker after that operation for the barrier trace.
+  [ -e "$MOCK_BRIDGE_HOLD_BARRIER.release" ] || sleep 300
 fi
 [ -z "${MOCK_BRIDGE_SLEEP:-}" ] || sleep "$MOCK_BRIDGE_SLEEP"
 exit 0
