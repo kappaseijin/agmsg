@@ -53,6 +53,10 @@ def instrument(source):
         replace(end,'''    fi
     _lifetime_end "$taskkill_rc" "$taskkill_output"
     if _windows_native_wait_tasklist_gone "$pid"; then''')
+    wait_call='    if _windows_native_wait_tasklist_gone "$pid"; then'
+    replace(wait_call,'    _lifetime_begin native-wait native "$pid"\n'+wait_call)
+    wait_end='        "$pid" "$wait_rc" "$taskkill_rc" "$taskkill_output" >&2\n    fi'
+    replace(wait_end,wait_end+'\n    _lifetime_end "$wait_rc" ""')
     # Restrict built-in instrumentation to the cleanup function, preserving
     # original protection/suppression and every original signal/wait command.
     start=source.index('cleanup_windows_native_processes() {')
@@ -102,7 +106,7 @@ def main():
         original=subprocess.check_output(['git','-C',str(root),'show',head+':tests/test_codex_bridge_launcher.bats'])
         if path.read_bytes()!=original: raise SystemExit('subject fixture is dirty')
         modified=instrument(original.decode())
-        path.write_text(modified,encoding='utf8')
+        path.write_text(modified,encoding='utf8',newline='\n')
         subprocess.run(['git','-C',str(root),'add','tests/test_codex_bridge_launcher.bats'],check=True)
         applied_tree=subprocess.check_output(['git','-C',str(root),'write-tree'],text=True).strip()
         Path(a.out).write_text(json.dumps(dict(applied_tree=applied_tree,condition_id=a.condition,subject_head=head,subject_tree=subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD^{tree}'],text=True).strip(),original_sha256=hashlib.sha256(original).hexdigest(),applied_sha256=hashlib.sha256(path.read_bytes()).hexdigest()),indent=2)+'\n')
@@ -110,6 +114,14 @@ def main():
         subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-File',str(Path(__file__).with_name('lifetime-bind.ps1')),'-Directory',os.environ['AGMSG_LIFETIME_CONTROL'],'-RunId',os.environ['AGMSG_LIFETIME_RUN_ID'],'-ControllerPid',str(os.getppid()),'-MsysPid',a.msys_pid],check=True)
     else:
         record=dict(record_type=a.record_type)
+        if os.environ.get('AGMSG_LIFETIME_OBSERVER_STARTED'):
+            from decimal import Decimal
+            try:
+                started=int(Decimal(os.environ['AGMSG_LIFETIME_OBSERVER_STARTED'])*1000000000)
+                record['observer_startup_ns']=time.time_ns()-started
+                record['observer_cost_scope']='shell invocation to publisher entry; excludes final publication'
+            except (ValueError,ArithmeticError):
+                record['observer_cost_scope']='unknown'
         for item in a.fields:
             key,value=item.split('=',1)
             if key=='rc': value=int(value)
@@ -117,7 +129,8 @@ def main():
         if a.record_type=='operation' and record.get('phase')=='begin' and record.get('namespace')=='msys':
             record['mapping_quality']='unknown'
             try:
-                lines=subprocess.check_output(['ps','-p',record['process_id']],text=True).splitlines()
+                ps=str(Path(bash_executable()).parent.parent/'usr/bin/ps.exe') if os.name=='nt' else 'ps'
+                lines=subprocess.check_output([ps,'-p',record['process_id']],text=True).splitlines()
                 header=lines[0].split(); native_index=header.index('WINPID'); pid_index=header.index('PID')
                 matches=[line.split() for line in lines[1:] if len(line.split())>native_index and line.split()[pid_index]==record['process_id']]
                 if len(matches)==1:

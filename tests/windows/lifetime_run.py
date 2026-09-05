@@ -28,7 +28,7 @@ def finalize(out):
     out=Path(out)
     for packet in sorted(out.glob('*.jsonl')):
         write_json(packet.with_suffix('.summary.json'),evaluate(read_packet(packet)))
-    hashes={str(p.relative_to(out)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(out.rglob('*')) if p.is_file() and p.name!='hashes.json'}
+    hashes={p.relative_to(out).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(out.rglob('*')) if p.is_file() and p.name!='hashes.json'}
     write_json(out/'hashes.json',hashes)
 
 
@@ -36,7 +36,7 @@ def collect(out,command,manifest):
     out=Path(out).resolve(); out.mkdir(parents=True,exist_ok=False)
     control=out/'control'; control.mkdir()
     write_json(out/'manifest.json',manifest)
-    env=dict(os.environ,AGMSG_LIFETIME_CONTROL=str(control),AGMSG_LIFETIME_RUN_ID=manifest['run_id'],AGMSG_LIFETIME_OUTPUT=str(out),AGMSG_LIFETIME_TOOLS=str(TOOLS),AGMSG_LIFETIME_ADAPTER_SHELL=str(TOOLS/'lifetime-adapter.sh'))
+    env=dict(os.environ,AGMSG_LIFETIME_CONTROL=control.as_posix(),AGMSG_LIFETIME_RUN_ID=manifest['run_id'],AGMSG_LIFETIME_OUTPUT=out.as_posix(),AGMSG_LIFETIME_TOOLS=TOOLS.as_posix(),AGMSG_LIFETIME_ADAPTER_SHELL=(TOOLS/'lifetime-adapter.sh').as_posix())
     collector_args=[PS,'-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',str(TOOLS/'process-lifetime-collector.ps1'),'-Mode','collect','-PacketPath',str(out/'packet.jsonl'),'-ControlDirectory',str(control),'-RunManifestPath',str(out/'manifest.json')]
     subject_rc=None
     with (out/'collector.stdout').open('wb') as stdout, (out/'collector.stderr').open('wb') as stderr:

@@ -14,7 +14,7 @@ def replay(root):
     for run in runs:
         hashes=json.loads((run/'hashes.json').read_text())
         for name,digest in hashes.items():
-            path=(run/name).resolve()
+            path=(run/name.replace('\\','/')).resolve()
             if not path.is_relative_to(run.resolve()): raise ValueError('artifact path escape')
             if hashlib.sha256(path.read_bytes()).hexdigest()!=digest: raise ValueError('artifact hash mismatch: '+name)
         for name,quality in [('packet','known'),('missing-child-stop','unknown')]:

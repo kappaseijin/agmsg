@@ -2,7 +2,7 @@
 # Observation failure must not overwrite the subject rc. Missing begin/end
 # and publisher diagnostics remain quality failures in the external artifact.
 _lifetime_emit() {
-  python "$AGMSG_LIFETIME_TOOLS/lifetime_adapter.py" emit "$@" 2>>"$AGMSG_LIFETIME_OUTPUT/adapter.stderr" || :
+  AGMSG_LIFETIME_OBSERVER_STARTED="${EPOCHREALTIME:-}" python "$AGMSG_LIFETIME_TOOLS/lifetime_adapter.py" emit "$@" 2>>"$AGMSG_LIFETIME_OUTPUT/adapter.stderr" || :
   return 0
 }
 _lifetime_controller() {
