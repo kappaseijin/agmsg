@@ -762,12 +762,13 @@ _wait_for_file_contains() {
   lock_a="$TEST_SKILL_DIR/run/actas.team__alice.session"
   lock_b="$TEST_SKILL_DIR/run/actas.team2__bob.session"
 
-  AGMSG_TEST_ACTAS_DELIVERY_GATE_RELEASE_BARRIER="$release_barrier" AGMSG_WATCH_INTERVAL=5 \
+  AGMSG_TEST_ACTAS_DELIVERY_GATE_RELEASE_BARRIER="$release_barrier" \
+    AGMSG_TEST_ACTAS_DELIVERY_GATE_RELEASE_BARRIER_COUNTED=1 AGMSG_WATCH_INTERVAL=5 \
     bash "$SCRIPTS/watch.sh" "$sid" "$PROJ" claude-code \
     >"$out" 2>"$err" 3>&- 4>&- &
   watcher=$!
 
-  if ! wait_for_file "$release_barrier.reached"; then
+  if ! wait_for_file "$release_barrier.reached.1"; then
     _stop_watcher "$watcher"
     cat "$err" >&2
     false
@@ -814,7 +815,7 @@ _wait_for_file_contains() {
     cat "$holder_out" "$err" >&2
     false
   fi
-  : > "$release_barrier.release"
+  : > "$release_barrier.release.1"
 
   if ! AGMSG_TEST_WAIT_TIMEOUT_S=60 wait_for_file_contains \
       "$log" "team/alice: ownership gate release incomplete; holding continues to the next poll."; then
@@ -826,11 +827,21 @@ _wait_for_file_contains() {
     cat "$out" "$err" "$log" >&2
     false
   fi
-  # The runtime lock database is shared by every pair, so keep the holder only
-  # until team/alice's failure is observed. This lets team2 release in the
-  # same poll without conflating a database-wide busy window with the
-  # path-keyed pending state.
+  # The runtime lock database is shared by every pair, so team2 cannot acquire
+  # its gate while this holder is open. Open the holder barrier after
+  # team/alice's failure, then wait for the second counted barrier and allow
+  # team2's release. The third barrier stops immediately before team/alice's
+  # next release, making the cross-path pending assertion independent of
+  # scheduler timing.
   : > "$holder_release"
+  wait "$holder_writer"
+  wait "$holder"
+  if ! wait_for_file "$release_barrier.reached.2"; then
+    _stop_watcher "$watcher"
+    cat "$out" "$err" "$log" >&2
+    false
+  fi
+  : > "$release_barrier.release.2"
   if ! AGMSG_TEST_WAIT_TIMEOUT_S=60 wait_for_file_contains "$out" "path-key-successor"; then
     _stop_watcher "$watcher"
     wait "$holder_writer" 2>/dev/null || true
@@ -838,10 +849,11 @@ _wait_for_file_contains() {
     cat "$out" "$err" "$log" >&2
     false
   fi
-
-  # The team/alice failure is already recorded before the shared holder is
-  # released. team2 can then release in the same poll, and that success must
-  # not resolve team/alice’s pending release.
+  if ! wait_for_file "$release_barrier.reached.3"; then
+    _stop_watcher "$watcher"
+    cat "$out" "$err" "$log" >&2
+    false
+  fi
   local owner_b="" tick
   for tick in $(seq 1 100); do
     owner_b="$(
@@ -855,15 +867,7 @@ _wait_for_file_contains() {
   [ -z "$owner_b" ]
   run grep -Fq "team/alice: ownership gate release resolved" "$log"
   [ "$status" -ne 0 ]
-
-  wait "$holder_writer"
-  wait "$holder"
-  bash "$SCRIPTS/send.sh" team bob alice "path-key-recovered" --force >/dev/null
-  if ! AGMSG_TEST_WAIT_TIMEOUT_S=30 wait_for_file_contains "$out" "path-key-recovered"; then
-    _stop_watcher "$watcher"
-    cat "$out" "$err" "$log" >&2
-    false
-  fi
+  : > "$release_barrier.release.3"
   if ! AGMSG_TEST_WAIT_TIMEOUT_S=30 wait_for_file_contains \
       "$log" "team/alice: ownership gate release resolved; normal release resumed."; then
     _stop_watcher "$watcher"

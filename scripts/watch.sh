@@ -672,9 +672,18 @@ _watch_release_gate() {
 # the holder's busy window. Production never sets this variable.
 _watch_test_release_barrier() {
   local barrier="${AGMSG_TEST_ACTAS_DELIVERY_GATE_RELEASE_BARRIER:-}" waited=0
+  local reached release
   [ -n "$barrier" ] || return 0
-  : > "$barrier.reached" || return 1
-  while [ ! -e "$barrier.release" ]; do
+  if [ "${AGMSG_TEST_ACTAS_DELIVERY_GATE_RELEASE_BARRIER_COUNTED:-0}" = 1 ]; then
+    WATCH_TEST_RELEASE_BARRIER_COUNT=$(( ${WATCH_TEST_RELEASE_BARRIER_COUNT:-0} + 1 ))
+    reached="$barrier.reached.$WATCH_TEST_RELEASE_BARRIER_COUNT"
+    release="$barrier.release.$WATCH_TEST_RELEASE_BARRIER_COUNT"
+  else
+    reached="$barrier.reached"
+    release="$barrier.release"
+  fi
+  : > "$reached" || return 1
+  while [ ! -e "$release" ]; do
     sleep 0.05 || return 1
     waited=$((waited + 1))
     [ "$waited" -lt 200 ] || return 1
