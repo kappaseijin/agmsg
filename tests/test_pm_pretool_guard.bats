@@ -88,7 +88,7 @@ run_hook() {
 @test "normal direct Bash work is denied before execution" {
   run_hook "$(hook_input Bash 'git fetch origin')"
   [ "$status" -eq 2 ]
-  [[ "$output" == *'permissionDecision'* ]]
+  grep -Fq 'permissionDecision' <<<"$output"
   [ ! -e "$PM_BROKER_ROOT/executed" ]
 }
 
@@ -176,7 +176,7 @@ NODE
 @test "malformed hook input is a blocking internal error" {
   run "$SCRIPTS/pm-pretool-guard" <<< '{not-json'
   [ "$status" -eq 2 ]
-  [[ "$output" == *'permissionDecision'* ]]
+  grep -Fq 'permissionDecision' <<<"$output"
 }
 
 @test "independent audit detects a denied execution and writes a heartbeat" {
@@ -186,7 +186,7 @@ NODE
   run env AGMSG_PM_GUARD_PATH="$BATS_TEST_DIRNAME/../scripts/pm-pretool-guard" \
     bash "$BATS_TEST_DIRNAME/../scripts/pm-audit.sh" --once
   [ "$status" -eq 1 ]
-  [[ "$output" == *'denied_tool_executed'* ]]
+  grep -Fq 'denied_tool_executed' <<<"$output"
   [ -s "$PM_HEARTBEAT" ]
 }
 
@@ -201,7 +201,7 @@ NODE
   run env AGMSG_PM_GUARD_PATH="$SCRIPTS/pm-pretool-guard" \
     "$SCRIPTS/pm-audit.sh" --once
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"status":"healthy"'* ]]
+  grep -Fq '"status":"healthy"' <<<"$output"
   run env AGMSG_PM_AUDIT_CYCLES=1 AGMSG_PM_AUDIT_INTERVAL_S=0 \
     AGMSG_PM_GUARD_PATH="$SCRIPTS/pm-pretool-guard" \
     "$SCRIPTS/pm-audit-loop.sh"
@@ -222,8 +222,8 @@ NODE
   run env AGMSG_PM_GUARD_PATH="$AGMSG_PM_GUARD_PATH" \
     "$SCRIPTS/pm-audit.sh" --once
   [ "$status" -eq 1 ]
-  [[ "$output" == *'guard_unavailable'* ]]
-  [[ "$output" == *'execution_without_decision'* ]]
+  grep -Fq 'guard_unavailable' <<<"$output"
+  grep -Fq 'execution_without_decision' <<<"$output"
   [ -s "$PM_HEARTBEAT" ]
 }
 
@@ -231,5 +231,5 @@ NODE
   run bash "$BATS_TEST_DIRNAME/../scripts/pm-audit-watchdog.sh" \
     --heartbeat "$PM_HEARTBEAT" --now 1000 --stale-seconds 180
   [ "$status" -eq 1 ]
-  [[ "$output" == *'heartbeat_unavailable'* ]]
+  grep -Fq 'heartbeat_unavailable' <<<"$output"
 }
