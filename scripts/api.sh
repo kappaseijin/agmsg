@@ -27,6 +27,7 @@ set -euo pipefail
 #   api.sh get teams
 #   api.sh get teams <team> members
 #   api.sh get teams <team> registrations --schema-version 1
+#   api.sh get teams <team> actas-owner <agent> --schema-version 1
 #   api.sh get teams <team> messages [--agent <name>] [--limit N] [--before-id <id>]
 #
 # Output is always JSONL — one JSON object per line, UTF-8, no
@@ -42,10 +43,13 @@ source "$SCRIPT_DIR/lib/storage.sh"
 agmsg_storage_load
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/validate.sh"
-# shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/resolve-project.sh"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/api-registrations.sh"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/actas-lock.sh"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/api-actas-owner.sh"
 
 _agmsg_sqlesc() { printf %s "$1" | sed "s/'/''/g"; }
 
@@ -217,7 +221,7 @@ get_messages() {
 }
 
 route_get() {
-  local resource="${1:?Usage: api.sh get teams [<team> store|members|registrations|messages ...]}"
+  local resource="${1:?Usage: api.sh get teams [<team> store|members|registrations|actas-owner|messages ...]}"
   shift
   case "$resource" in
     teams)
@@ -229,11 +233,12 @@ route_get() {
       # Validate before the value is used by the members filesystem path.
       agmsg_validate_team_name "$team" || exit 1
       shift
-      local sub="${1:?Usage: api.sh get teams <team> store|members|registrations|messages ...}"
+      local sub="${1:?Usage: api.sh get teams <team> store|members|registrations|actas-owner|messages ...}"
       shift
       case "$sub" in
         members) get_members "$team" ;;
         registrations) get_registrations "$team" "$@" ;;
+        actas-owner) get_actas_owner "$team" "$@" ;;
         messages) get_messages "$team" "$@" ;;
         store) get_store "$team" ;;
         *) echo "Unknown resource: teams $team $sub" >&2; exit 1 ;;
