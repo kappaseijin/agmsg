@@ -43,6 +43,7 @@ setup() {
   run powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
     -File "$collector" -Mode evaluate -PacketPath "$packet"
   [ "$status" -eq 0 ]
+  printf 'collector known summary: %s\n' "$output"
   printf '%s\n' "$output" | grep -Fq '"comparison":"known"'
   printf '%s\n' "$output" | grep -Fq '"reaper_judgment":"stop-observed-after-taskkill"'
   printf '%s\n' "$output" | grep -Fq '"termination_actor":"not-determined"'
@@ -50,6 +51,7 @@ setup() {
   run powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
     -File "$collector" -Mode evaluate -PacketPath "$packet" -DropStopEvent
   [ "$status" -eq 0 ]
+  printf 'collector missing-stop summary: %s\n' "$output"
   printf '%s\n' "$output" | grep -Fq '"comparison":"unknown"'
   printf '%s\n' "$output" | grep -Fq '"reason":"missing-stop-event"'
 }
