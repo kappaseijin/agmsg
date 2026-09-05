@@ -88,8 +88,10 @@ NODE
 teardown() { teardown_test_env; }
 
 hook_input() {
-  local tool="$1" command="${2:-}" input_json
-  TOOL_NAME="$tool" COMMAND_TEXT="$command" SESSION_ID="$PM_SESSION" CWD="$PM_PROJECT" \
+  local tool="$1" command="${2:-}" persistent="${3:-true}" \
+    description="${4:-agmsg inbox stream (acting as pm)}" input_json
+  TOOL_NAME="$tool" COMMAND_TEXT="$command" MONITOR_PERSISTENT="$persistent" \
+    MONITOR_DESCRIPTION="$description" SESSION_ID="$PM_SESSION" CWD="$PM_PROJECT" \
     node <<'NODE'
 const input = {
   hook_event_name: 'PreToolUse',
@@ -103,8 +105,8 @@ if (process.env.TOOL_NAME === 'Bash' || process.env.TOOL_NAME === 'Monitor') {
   input.tool_input.command = process.env.COMMAND_TEXT;
 }
 if (process.env.TOOL_NAME === 'Monitor') {
-  input.tool_input.description = 'agmsg inbox stream (acting as pm)';
-  input.tool_input.persistent = true;
+  input.tool_input.description = process.env.MONITOR_DESCRIPTION;
+  input.tool_input.persistent = process.env.MONITOR_PERSISTENT === 'true';
 }
 process.stdout.write(JSON.stringify(input));
 NODE
@@ -165,6 +167,11 @@ run_hook() {
     run_hook "$(hook_input Monitor "$command")"
     [ "$status" -eq 2 ]
   done
+
+  run_hook "$(hook_input Monitor "$monitor_command" false)"
+  [ "$status" -eq 2 ]
+  run_hook "$(hook_input Monitor "$monitor_command" true 'agmsg inbox stream (acting as another-role)')"
+  [ "$status" -eq 2 ]
 }
 
 @test "the complete PM operation table uses only structured broker arguments" {
@@ -236,6 +243,50 @@ fs.writeFileSync(file, JSON.stringify({
 NODE
   run_hook "$(hook_input Bash "$broker_command")"
   [ "$status" -eq 2 ]
+}
+
+@test "identity rejects a forged process start token" {
+  payload="eyJvcGVyYXRpb24iOiJhZ21zZ19zZW5kIiwicmVjaXBpZW50IjoicG0ifQ"
+  forged_start=forged-process-start
+  node - "$PM_BINDING" "$PM_CLAIM_FILE" "$forged_start" <<'NODE'
+const fs = require('fs');
+const [bindingFile, claimFile, forgedStart] = process.argv.slice(2);
+for (const file of [bindingFile, claimFile]) {
+  const value = JSON.parse(fs.readFileSync(file));
+  value.pidStart = forgedStart;
+  fs.writeFileSync(file, JSON.stringify(value) + '\n');
+}
+NODE
+  export AGMSG_PM_PROCESS_START="$forged_start"
+  run_hook "$(hook_input Bash "$PM_BROKER_PATH agmsg_send $payload")"
+  [ "$status" -eq 2 ]
+  grep -Fq 'process_start_mismatch' <<<"$output"
+}
+
+@test "identity rejects a live process outside the current process ancestry" {
+  payload="eyJvcGVyYXRpb24iOiJhZ21zZ19zZW5kIiwicmVjaXBpZW50IjoicG0ifQ"
+  sleep 60 &
+  other_pid=$!
+  other_start="$(node "$SCRIPTS/session-identity.js" --process-start "$other_pid")"
+  node - "$PM_BINDING" "$PM_CLAIM_FILE" "$other_pid" "$other_start" <<'NODE'
+const fs = require('fs');
+const [bindingFile, claimFile, pid, pidStart] = process.argv.slice(2);
+for (const file of [bindingFile, claimFile]) {
+  const value = JSON.parse(fs.readFileSync(file));
+  value.pid = pid;
+  value.pidStart = pidStart;
+  fs.writeFileSync(file, JSON.stringify(value) + '\n');
+}
+NODE
+  export AGMSG_PM_PROCESS_PID="$other_pid"
+  export AGMSG_PM_PROCESS_START="$other_start"
+  run_hook "$(hook_input Bash "$PM_BROKER_PATH agmsg_send $payload")"
+  hook_status="$status"
+  hook_output="$output"
+  kill "$other_pid" 2>/dev/null || true
+  wait "$other_pid" 2>/dev/null || true
+  [ "$hook_status" -eq 2 ]
+  grep -Fq 'process_parent_mismatch' <<<"$hook_output"
 }
 
 @test "malformed hook input is a blocking internal error" {
