@@ -75,23 +75,27 @@ json_valid_line() {
   [ -z "$output" ]
 }
 
-@test "api: get teams <team> registrations emits one JSONL row per registration" {
+@test "api: get teams <team> registrations emits a complete versioned envelope" {
   bash "$SCRIPTS/join.sh" testteam alice claude-code /tmp/project-a-2
-  run bash "$SCRIPTS/api.sh" get teams testteam registrations
+  run bash "$SCRIPTS/api.sh" get teams testteam registrations --schema-version 1
   [ "$status" -eq 0 ]
-  [ "$(echo "$output" | wc -l | tr -d ' ')" -eq 3 ]
+  [ "$(echo "$output" | wc -l | tr -d ' ')" -eq 1 ]
+  [ "$(json_field "$output" status)" = "ok" ]
+  [ "$(json_field "$output" complete)" = "1" ]
+  [ "$(sqlite_mem "SELECT json_array_length('$output', '\$.registrations');")" -eq 3 ]
 
   local seen_alice_a=0 seen_alice_b=0 seen_bob=0 unexpected=0 line key
   while IFS= read -r line; do
     [ -n "$line" ] || continue
-    key="$(json_field "$line" team)|$(json_field "$line" agent)|$(json_field "$line" type)|$(json_field "$line" project)"
+    key="$(json_field "$line" agent)|$(json_field "$line" type)|$(json_field "$line" project)"
     case "$key" in
-      "testteam|alice|claude-code|/tmp/project-a") seen_alice_a=1 ;;
-      "testteam|alice|claude-code|/tmp/project-a-2") seen_alice_b=1 ;;
-      "testteam|bob|codex|/tmp/project-b") seen_bob=1 ;;
+      "alice|claude-code|/tmp/project-a") seen_alice_a=1 ;;
+      "alice|claude-code|/tmp/project-a-2") seen_alice_b=1 ;;
+      "bob|codex|/tmp/project-b") seen_bob=1 ;;
       *) unexpected=1 ;;
     esac
-  done <<< "$output"
+  done < <(sqlite3 -batch -noheader :memory: \
+    "SELECT value FROM json_each('$(printf '%s' "$output" | sed "s/'/''/g")', '\$.registrations');")
 
   [ "$unexpected" -eq 0 ]
   [ "$seen_alice_a" -eq 1 ]

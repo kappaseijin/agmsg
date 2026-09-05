@@ -1205,19 +1205,42 @@ External tools should read agmsg through `api.sh`, not through `db/` or
 
 ```bash
 ~/.agents/skills/<cmd>/scripts/api.sh get teams <team> members
-~/.agents/skills/<cmd>/scripts/api.sh get teams <team> registrations
+~/.agents/skills/<cmd>/scripts/api.sh get teams <team> registrations --schema-version 1
 ~/.agents/skills/<cmd>/scripts/api.sh get teams <team> messages
 ```
 
-The `registrations` resource emits one JSONL object per registration, so each
-agent/type/project pair stays associated:
+The `registrations` resource requires an explicit schema version and emits one
+JSON object per query. It returns every registration tuple without aggregating
+or deduplicating it, so each agent/type/project association stays intact:
 
 ```json
-{"team":"agsuite","agent":"alice","type":"claude-code","project":"/work/agmsg"}
+{"schemaVersion":1,"resource":"registrations","team":"agsuite","status":"ok","reason":null,"complete":true,"registrations":[{"agent":"alice","type":"claude-code","project":"/work/agmsg","canonicalProject":"/work/agmsg"}]}
 ```
 
-The existing `members` resource remains unchanged for compatibility; it is an
-agent-level aggregate and may return only one project.
+The array is ordered by agent, type, and project byte order. Duplicate tuples
+remain visible. `canonicalProject` is the provider's normalized, physical
+project spelling when it can be resolved; `project` is the stored spelling.
+An existing team with no registrations returns `status: "ok"`,
+`complete: true`, and an empty array. A missing team returns
+`status: "not_found"`, `reason: "team_not_found"`, `complete: false`, and
+exit status 1. Invalid or unsupported team data returns `status: "unknown"`
+with a classified reason such as `data_invalid`,
+`storage_schema_unsupported`, `read_failed`, `project_unresolvable`, or
+`concurrent_change`; these responses also exit 1 and contain
+`registrations: null`. Missing or unsupported `--schema-version`, and unknown
+options, return `status: "error"` with `reason: "invalid_argument"` or
+`unsupported_schema_version` and exit status 2.
+
+The query is read-only. It reads only the requested team's `config.json`,
+validates and buffers the complete result before writing stdout, then checks
+the source identity and bytes again. A source exchange during the query is
+reported as `concurrent_change`; the command does not retry into a new
+snapshot. It does not initialize a database, scan other teams, join, reset,
+normalize, migrate, claim, or start an engine. This is a single-observation
+contract: it does not freeze registrations after the response or provide a
+transaction across multiple files. The existing `members` resource remains
+unchanged for compatibility; it is an agent-level aggregate and may return
+only one project.
 
 ## FAQ / Design notes
 

@@ -26,7 +26,7 @@ set -euo pipefail
 # Usage:
 #   api.sh get teams
 #   api.sh get teams <team> members
-#   api.sh get teams <team> registrations
+#   api.sh get teams <team> registrations --schema-version 1
 #   api.sh get teams <team> messages [--agent <name>] [--limit N] [--before-id <id>]
 #
 # Output is always JSONL — one JSON object per line, UTF-8, no
@@ -37,10 +37,15 @@ set -euo pipefail
 # interface spec, and today's sqlite integer ids are no exception.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+export SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/storage.sh"
 agmsg_storage_load
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/validate.sh"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/resolve-project.sh"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/api-registrations.sh"
 
 _agmsg_sqlesc() { printf %s "$1" | sed "s/'/''/g"; }
 
@@ -122,33 +127,6 @@ get_members() {
     )
     FROM cfg, json_each(json_extract(cfg.json, '\$.agents')) AS a
     ORDER BY a.key;
-  "
-}
-
-get_registrations() {
-  local team="$1"
-  local config="$SCRIPT_DIR/../teams/$team/config.json"
-  [ -f "$config" ] || return 0
-  local path_sql team_sql
-  path_sql="$(agmsg_sql_readfile_path "$config")"
-  team_sql="$(_agmsg_sqlesc "$team")"
-  # Keep each type/project pair intact. Unlike get_members, this resource
-  # deliberately does not aggregate an agent's registrations or choose one
-  # project with LIMIT 1 (#19).
-  agmsg_sqlite_mem "
-    WITH cfg AS (SELECT CAST(readfile('$path_sql') AS TEXT) AS json)
-    SELECT json_object(
-      'team', '$team_sql',
-      'agent', a.key,
-      'type', json_extract(r.value, '\$.type'),
-      'project', json_extract(r.value, '\$.project')
-    )
-    FROM cfg,
-         json_each(json_extract(cfg.json, '\$.agents')) AS a,
-         json_each(json_extract(a.value, '\$.registrations')) AS r
-    ORDER BY a.key,
-             json_extract(r.value, '\$.type'),
-             json_extract(r.value, '\$.project');
   "
 }
 
@@ -255,7 +233,7 @@ route_get() {
       shift
       case "$sub" in
         members) get_members "$team" ;;
-        registrations) get_registrations "$team" ;;
+        registrations) get_registrations "$team" "$@" ;;
         messages) get_messages "$team" "$@" ;;
         store) get_store "$team" ;;
         *) echo "Unknown resource: teams $team $sub" >&2; exit 1 ;;
