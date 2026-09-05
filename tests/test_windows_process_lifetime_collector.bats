@@ -44,7 +44,7 @@ setup() {
     -File "$collector" -Mode evaluate -PacketPath "$packet"
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" | grep -Fq '"comparison":"known"'
-  printf '%s\n' "$output" | grep -Fq '"reaper_judgment":"unknown"'
+  printf '%s\n' "$output" | grep -Fq '"reaper_judgment":"stop-observed-after-taskkill"'
   printf '%s\n' "$output" | grep -Fq '"termination_actor":"not-determined"'
 
   run powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
