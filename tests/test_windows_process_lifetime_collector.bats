@@ -21,6 +21,14 @@ setup() {
     -File "$collector" -Mode preflight -Root "$root" -PacketPath "$packet"
   if [ "$status" -ne 0 ]; then
     printf 'collector preflight failed (status=%s):\n%s\n' "$status" "$output" >&2
+    if [ -f "$packet" ]; then
+      printf 'collector packet:\n' >&2
+      cat "$packet" >&2
+    fi
+    if [ -f "$packet.summary.json" ]; then
+      printf 'collector summary:\n' >&2
+      cat "$packet.summary.json" >&2
+    fi
   fi
   [ "$status" -eq 0 ]
   [ -s "$packet" ]
