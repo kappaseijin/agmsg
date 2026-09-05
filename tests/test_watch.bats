@@ -744,23 +744,30 @@ _wait_for_file_contains() {
   local holder_release="$TEST_SKILL_DIR/sqlite-path-holder.release"
   local holder_out="$TEST_SKILL_DIR/sqlite-path-holder.out"
   local db_a db_b lock_a lock_b resource_a resource_b
-  local watcher holder holder_writer
+  local watcher holder holder_writer owner_a="" owner_b="" tick
 
-  # Leave the second setup identity so the broad watcher has exactly one pair
-  # in the held database and one pair in an independent database.
+  # Make team/alice the independent successor (the first sorted pair) and
+  # team2/bob the held path (the second sorted pair). The pair order is only a
+  # fixture control; every assertion below identifies the event by its message
+  # or exact resource path, never by a barrier number.
+  bash "$SCRIPTS/send.sh" team bob alice "path-key-successor-initial" --force >/dev/null
   bash "$SCRIPTS/leave.sh" team bob >/dev/null
   bash "$SCRIPTS/join.sh" team2 bob claude-code "$PROJ" >/dev/null
   local team2_cfg="$TEST_SKILL_DIR/teams/team2/config.json"
   local team2_updated
   team2_updated="$(sqlite_mem "SELECT json_set(CAST(readfile('$(rf "$team2_cfg")') AS TEXT), '\$.drivers.partition', 'per-team');")"
   printf '%s' "$team2_updated" > "$team2_cfg"
-  bash "$SCRIPTS/send.sh" team2 alice bob "path-key-successor" --force >/dev/null
+  bash "$SCRIPTS/send.sh" team2 alice bob "path-key-setup" --force >/dev/null
+  bash "$SCRIPTS/inbox.sh" team2 bob >/dev/null
+  # db_a is the shared runtime database used by the gate. db_b is team2's
+  # message store; keeping the names explicit prevents the message-store
+  # partition from being mistaken for the gate resource.
   db_a="$(_team_store team)"
   db_b="$(_team_store team2)"
   [ -f "$db_b" ]
   [ "$db_a" != "$db_b" ]
-  lock_a="$TEST_SKILL_DIR/run/actas.team__alice.session"
-  lock_b="$TEST_SKILL_DIR/run/actas.team2__bob.session"
+  lock_a="$TEST_SKILL_DIR/run/actas.team2__bob.session"
+  lock_b="$TEST_SKILL_DIR/run/actas.team__alice.session"
 
   AGMSG_TEST_ACTAS_DELIVERY_GATE_RELEASE_BARRIER="$release_barrier" \
     AGMSG_TEST_ACTAS_DELIVERY_GATE_RELEASE_BARRIER_COUNTED=1 AGMSG_WATCH_INTERVAL=5 \
@@ -783,15 +790,48 @@ _wait_for_file_contains() {
     source "$SCRIPTS/lib/actas-lock.sh"
     actas_lock_gate_resource "$lock_b"
   )"
-  [ "$(
+  # Barrier 1 is identified as B by its resource owner and B's delivery event.
+  # Release B before starting the holder for A, so the later B release can be
+  # observed while A's pending path is still present.
+  owner_b="$(
+    SKILL_DIR="$TEST_SKILL_DIR"
+    source "$SCRIPTS/lib/actas-lock.sh"
+    agmsg_runtime_lock_owner "$resource_b"
+  )"
+  [ "$owner_b" = "$watcher" ]
+  if ! wait_for_file_contains "$out" "path-key-successor-initial"; then
+    _stop_watcher "$watcher"
+    cat "$out" "$err" "$log" >&2
+    false
+  fi
+  : > "$release_barrier.release.1"
+  owner_b=""
+  for tick in $(seq 1 100); do
+    owner_b="$(
+      SKILL_DIR="$TEST_SKILL_DIR"
+      source "$SCRIPTS/lib/actas-lock.sh"
+      agmsg_runtime_lock_owner "$resource_b"
+    )"
+    [ -z "$owner_b" ] && break
+    sleep 0.1
+  done
+  [ -z "$owner_b" ]
+
+  if ! wait_for_file "$release_barrier.reached.2"; then
+    _stop_watcher "$watcher"
+    cat "$out" "$err" "$log" >&2
+    false
+  fi
+  owner_a="$(
     SKILL_DIR="$TEST_SKILL_DIR"
     source "$SCRIPTS/lib/actas-lock.sh"
     agmsg_runtime_lock_owner "$resource_a"
-  )" = "$watcher" ]
+  )"
+  [ "$owner_a" = "$watcher" ]
 
-  # Hold only team’s runtime DB. team2’s release must succeed while team’s
-  # release remains pending; a process-global pending flag would resolve the
-  # wrong path at that point.
+  # Hold the shared runtime DB only after A has acquired its gate and reached
+  # its release barrier. This makes A's failed release deterministic without
+  # blocking B's already-completed normal release.
   mkfifo "$holder_sql"
   sqlite3 "$db_a" <"$holder_sql" >"$holder_out" 2>&1 &
   holder=$!
@@ -815,10 +855,10 @@ _wait_for_file_contains() {
     cat "$holder_out" "$err" >&2
     false
   fi
-  : > "$release_barrier.release.1"
+  : > "$release_barrier.release.2"
 
   if ! AGMSG_TEST_WAIT_TIMEOUT_S=60 wait_for_file_contains \
-      "$log" "team/alice: ownership gate release incomplete; holding continues to the next poll."; then
+      "$log" "team2/bob: ownership gate release incomplete; holding continues to the next poll."; then
     _stop_watcher "$watcher"
     kill "$holder_writer" 2>/dev/null || true
     kill "$holder" 2>/dev/null || true
@@ -827,34 +867,40 @@ _wait_for_file_contains() {
     cat "$out" "$err" "$log" >&2
     false
   fi
-  # The runtime lock database is shared by every pair, so team2 cannot acquire
-  # its gate while this holder is open. Open the holder barrier after
-  # team/alice's failure, then wait for the second counted barrier and allow
-  # team2's release. The third barrier stops immediately before team/alice's
-  # next release, making the cross-path pending assertion independent of
-  # scheduler timing.
+  owner_a="$(
+    SKILL_DIR="$TEST_SKILL_DIR"
+    source "$SCRIPTS/lib/actas-lock.sh"
+    agmsg_runtime_lock_owner "$resource_a"
+  )"
+  [ "$owner_a" = "$watcher" ]
   : > "$holder_release"
   wait "$holder_writer"
   wait "$holder"
-  if ! wait_for_file "$release_barrier.reached.2"; then
+  bash "$SCRIPTS/send.sh" team bob alice "path-key-successor-after-a" --force >/dev/null
+  if ! wait_for_file "$release_barrier.reached.3"; then
     _stop_watcher "$watcher"
     cat "$out" "$err" "$log" >&2
     false
   fi
-  : > "$release_barrier.release.2"
-  if ! AGMSG_TEST_WAIT_TIMEOUT_S=60 wait_for_file_contains "$out" "path-key-successor"; then
+  if ! AGMSG_TEST_WAIT_TIMEOUT_S=60 wait_for_file_contains "$out" "path-key-successor-after-a"; then
     _stop_watcher "$watcher"
     wait "$holder_writer" 2>/dev/null || true
     wait "$holder" 2>/dev/null || true
     cat "$out" "$err" "$log" >&2
     false
   fi
-  if ! wait_for_file "$release_barrier.reached.3"; then
-    _stop_watcher "$watcher"
-    cat "$out" "$err" "$log" >&2
-    false
-  fi
-  local owner_b="" tick
+  # The marker identifies B's event; the owner row proves that B is still
+  # held at the pre-release barrier. A must still be pending and unresolved.
+  owner_b="$(
+    SKILL_DIR="$TEST_SKILL_DIR"
+    source "$SCRIPTS/lib/actas-lock.sh"
+    agmsg_runtime_lock_owner "$resource_b"
+  )"
+  [ "$owner_b" = "$watcher" ]
+  run grep -Fq "team2/bob: ownership gate release resolved" "$log"
+  [ "$status" -ne 0 ]
+  : > "$release_barrier.release.3"
+  owner_b=""
   for tick in $(seq 1 100); do
     owner_b="$(
       SKILL_DIR="$TEST_SKILL_DIR"
@@ -865,19 +911,33 @@ _wait_for_file_contains() {
     sleep 0.1
   done
   [ -z "$owner_b" ]
-  run grep -Fq "team/alice: ownership gate release resolved" "$log"
+  run grep -Fq "team/alice: ownership gate release resolved; normal release resumed." "$log"
   [ "$status" -ne 0 ]
-  : > "$release_barrier.release.3"
+  run grep -Fq "team2/bob: ownership gate release resolved" "$log"
+  [ "$status" -ne 0 ]
+
+  if ! wait_for_file "$release_barrier.reached.4"; then
+    _stop_watcher "$watcher"
+    cat "$out" "$err" "$log" >&2
+    false
+  fi
+  owner_a="$(
+    SKILL_DIR="$TEST_SKILL_DIR"
+    source "$SCRIPTS/lib/actas-lock.sh"
+    agmsg_runtime_lock_owner "$resource_a"
+  )"
+  [ "$owner_a" = "$watcher" ]
+  : > "$release_barrier.release.4"
   if ! AGMSG_TEST_WAIT_TIMEOUT_S=30 wait_for_file_contains \
-      "$log" "team/alice: ownership gate release resolved; normal release resumed."; then
+      "$log" "team2/bob: ownership gate release resolved; normal release resumed."; then
     _stop_watcher "$watcher"
     cat "$out" "$err" "$log" >&2
     false
   fi
   _stop_watcher "$watcher"
 
-  [ "$(grep -Fc "team/alice: ownership gate release incomplete; holding continues to the next poll." "$log" || true)" -eq 1 ]
-  [ "$(grep -Fc "team/alice: ownership gate release resolved; normal release resumed." "$log" || true)" -eq 1 ]
+  [ "$(grep -Fc "team2/bob: ownership gate release incomplete; holding continues to the next poll." "$log" || true)" -eq 1 ]
+  [ "$(grep -Fc "team2/bob: ownership gate release resolved; normal release resumed." "$log" || true)" -eq 1 ]
   run grep -Fq "ownership gate release incomplete" "$out"
   [ "$status" -ne 0 ]
   run grep -Fq "ownership gate release resolved" "$out"
