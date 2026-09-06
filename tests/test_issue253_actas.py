@@ -76,6 +76,26 @@ class ActasControls(unittest.TestCase):
                                 for value in node.values for inner in ast.walk(value)):
                     self.fail(f"{path.name}:{node.lineno}: wait_for result disjoined to true")
 
+    def test_observation_results_reach_the_verdict(self):
+        # The default True on evaluate() is fail-open by design, so the guard has to be
+        # that the caller passes the observations. Checking the wait_for call shape alone
+        # does not: dropping the arguments, or passing literals, leaves that shape intact.
+        source = ast.parse((SCRIPTS / "issue253_actas.py").read_text())
+        observe = next(n for n in ast.walk(source)
+                       if isinstance(n, ast.FunctionDef) and n.name == "observe")
+        waited = {target.id for node in ast.walk(observe)
+                  if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
+                  and getattr(node.value.func, "id", None) == "wait_for"
+                  for target in node.targets if isinstance(target, ast.Name)}
+        calls = [n for n in ast.walk(observe)
+                 if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "evaluate"]
+        self.assertEqual(len(calls), 1, "expected exactly one evaluate() call in observe()")
+        self.assertEqual(len(calls[0].args), 4, f"evaluate() line {calls[0].lineno}: observations not passed")
+        for argument in calls[0].args[2:]:
+            self.assertIsInstance(argument, ast.Name, f"evaluate() line {calls[0].lineno}: literal observation")
+            self.assertIn(argument.id, waited,
+                          f"evaluate() line {calls[0].lineno}: {argument.id} is not bound from wait_for")
+
 
 if __name__ == "__main__":
     unittest.main()
