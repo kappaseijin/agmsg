@@ -36,7 +36,10 @@ def ownership(instances):
     return "pass"
 
 
-def evaluate(instances, correlation):
+def evaluate(instances, correlation, polled=True, observed=True):
+    # A missed observation window says nothing about the event; never report it as a verdict.
+    if not polled or not observed:
+        return "unknown"
     ids = correlation.get("ids", {})
     if correlation.get("status") != "pass" or len(ids) != 1 or not all(isinstance(value, str) and value for value in ids.values()):
         return "unknown"
@@ -76,12 +79,12 @@ def observe(source, root, same_sid):
                                  extra={"AGMSG_AGENT_PID": str(instance["host_pid"]),
                                         "AGMSG_TEST_RECEIVER_TAG": str(instance["host_pid"])})
                 watches.append((instance, handle))
-        wait_for(lambda: all((root / f"tmp/poll.{i['host_pid']}").exists() or h[0].poll() is not None for i, h in watches), seconds=10)
+        polled = wait_for(lambda: all((root / f"tmp/poll.{i['host_pid']}").exists() or h[0].poll() is not None for i, h in watches), seconds=10)
         for instance, handle in watches:
             ready = (root / f"tmp/poll.{instance['host_pid']}").exists()
             instance["boundary"] = "ready" if ready and handle[0].poll() is None else "start_failure" if handle[0].poll() is not None else "ready_missing"
         item = f.send("actas-same" if same_sid else "actas-different")
-        wait_for(lambda: any(item[0] in Path(str(h[2]) + ".stdout").read_text() for _, h in watches), seconds=5)
+        observed = wait_for(lambda: any(item[0] in Path(str(h[2]) + ".stdout").read_text() for _, h in watches), seconds=5)
         time.sleep(0.4)
         for instance, handle in watches:
             command = f.finish(handle, stop=True)
@@ -94,7 +97,8 @@ def observe(source, root, same_sid):
                          extra={"AGMSG_AGENT_PID": str(hosts[0].pid)})
         if claim_state(failure)[0] != "start_failure":
             raise RuntimeError("unregistered startup control was misclassified")
-        return {"role_ownership": ownership(instances), "role_path": evaluate(instances, correlation), "same_sid": same_sid,
+        return {"role_ownership": ownership(instances), "role_path": evaluate(instances, correlation, polled, observed),
+                "watch_poll_reached": polled, "handoff_observation_reached": observed, "same_sid": same_sid,
                 "instances": instances, "correlation": correlation, "startup_negative": failure,
                 "message_ack": "unknown", "message_status": "unknown", "recovery": "unknown",
                 "general_exclusion": "unknown", "post_handoff_window_seconds": 0.4}

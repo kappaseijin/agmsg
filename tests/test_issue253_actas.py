@@ -1,9 +1,11 @@
+import ast
 import copy
 from pathlib import Path
 import sys
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+sys.path.insert(0, str(SCRIPTS))
 from issue253_actas import claim_state, evaluate, ownership
 
 
@@ -49,6 +51,30 @@ class ActasControls(unittest.TestCase):
         for command in ({"rc": 1, "stdout": ""}, {"rc": 2, "stdout": "status=not_registered"},
                         {"rc": 0, "stdout": "status=held team=team owner=sid.10"}):
             self.assertEqual(claim_state(command)[0], "start_failure")
+
+    def test_missed_observation_window_is_unknown(self):
+        for polled, observed in ((False, True), (True, False), (False, False)):
+            self.assertEqual(evaluate(self.instances, self.correlation, polled, observed), "unknown")
+        self.assertEqual(evaluate(self.instances, self.correlation, True, True), "pass")
+
+    def test_no_wait_for_result_is_discarded(self):
+        # ast, not grep: a text match reads `wait_for(` inside comments and strings and
+        # misses a call wrapped across lines. ast.Expr is exactly a discarded value.
+        for path in (SCRIPTS / "issue253_actas.py", SCRIPTS / "issue253_public_path.py"):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) \
+                        and getattr(node.value.func, "id", None) == "wait_for":
+                    self.fail(f"{path.name}:{node.lineno}: wait_for result discarded")
+
+    def test_no_wait_for_result_is_forced_true(self):
+        # `x or wait_for(...)` short-circuits the wait away and pins the result true.
+        # `x and wait_for(...)` only narrows it, so conjunction stays allowed.
+        for path in (SCRIPTS / "issue253_actas.py", SCRIPTS / "issue253_public_path.py"):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or) \
+                        and any(isinstance(inner, ast.Call) and getattr(inner.func, "id", None) == "wait_for"
+                                for value in node.values for inner in ast.walk(value)):
+                    self.fail(f"{path.name}:{node.lineno}: wait_for result disjoined to true")
 
 
 if __name__ == "__main__":
