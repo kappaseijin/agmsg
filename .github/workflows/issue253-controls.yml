@@ -1,0 +1,21 @@
+name: issue253 evaluator controls
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - scripts/issue253_public_path.py
+      - tests/test_issue253_public_path.py
+      - tests/issue253_mutations.py
+      - .github/workflows/issue253-controls.yml
+permissions:
+  contents: read
+jobs:
+  evaluator-controls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Evaluator unit controls (not the fixed F/O helper comparison)
+        run: python3 -m unittest discover -s tests -p test_issue253_public_path.py -v
+      - name: Fail-open mutations must be killed
+        run: python3 tests/issue253_mutations.py
