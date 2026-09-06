@@ -4,12 +4,15 @@ import subprocess
 import tempfile
 import unittest
 from lifetime_adapter import instrument, bash_executable
+from lifetime_case import build_case
 
 SOURCE=Path(__file__).resolve().parents[1]/'test_codex_bridge_launcher.bats'
 
-def function(source,name):
-    start=source.index(name+'() {')
-    return source[start:source.index('\n}\n',start)+3]
+def case_env(**extra):
+    # The closure now carries the real diagnostic helpers, which append to
+    # AGMSG_WINDOWS_DIAG_* targets when set. Drop them so cases stay side-effect free.
+    env={k:v for k,v in __import__('os').environ.items() if not k.startswith('AGMSG_WINDOWS_DIAG_')}
+    env.update(extra); return env
 
 class AdapterTests(unittest.TestCase):
     def test_taskkill_failures_preserve_original_rc_and_output(self):
@@ -25,10 +28,10 @@ _windows_native_assert_no_bridge_processes() { return 0; }
 '''
         with tempfile.TemporaryDirectory() as temp:
             trace=Path(temp)/'trace'
-            env=dict(__import__('os').environ,TRACE=trace.as_posix())
+            env=case_env(TRACE=trace.as_posix())
             results=[]
             for text in (source,adapted):
-                code=prefix+function(text,'_windows_native_reap_bridge_root')+'\n_windows_native_reap_bridge_root root\n'
+                code=build_case(text,'_windows_native_reap_bridge_root',prefix,'\n_windows_native_reap_bridge_root root\n')
                 script=Path(temp)/'case.sh'
                 script.write_text(code,encoding='utf8',newline='\n')
                 results.append(subprocess.run([bash_executable(),script.as_posix()],env=env,capture_output=True,text=True))
@@ -50,8 +53,8 @@ _lifetime_end() { printf 'observed=%s\\n' "$1"; }
         with tempfile.TemporaryDirectory() as temp:
             for text in (source,adapted):
                 script=Path(temp)/'case.sh'
-                script.write_text(prefix+function(text,'cleanup_windows_native_processes')+'\ncleanup_windows_native_processes 11 22',encoding='utf8',newline='\n')
-                results.append(subprocess.run([bash_executable(),'-e',script.as_posix()],capture_output=True,text=True))
+                script.write_text(build_case(text,'cleanup_windows_native_processes',prefix,'\ncleanup_windows_native_processes 11 22'),encoding='utf8',newline='\n')
+                results.append(subprocess.run([bash_executable(),'-e',script.as_posix()],env=case_env(),capture_output=True,text=True))
         original,observed=results
         self.assertEqual(original.returncode,0,original.stderr)
         self.assertEqual(observed.returncode,0,observed.stderr)
