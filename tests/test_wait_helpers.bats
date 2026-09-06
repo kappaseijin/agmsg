@@ -67,22 +67,41 @@ setup() { load 'test_helper'; }
   [ "$wait_status" -eq 1 ]
 }
 
-@test "a wait lasts at least the timeout it was given (#291)" {
+@test "every wait lasts at least the timeout it was given (#291)" {
   # The upper bound is covered next door; this is the lower one, and nothing
   # asserted it before. `$SECONDS` steps on a boundary the caller did not
   # choose, so `start + timeout_s` used to expire after as little as
   # timeout_s - 1 real seconds -- a 2s wait that gave up at 1.02s, which is how
-  # #291 lost its margin. Five runs, because each one starts at a different
-  # offset into the second: the truncation shows up in whichever of them starts
-  # late in a tick, not reliably in the first.
-  local i elapsed
-  for i in 1 2 3 4 5; do
-    elapsed="$(AGMSG_TEST_WAIT_TIMEOUT_S=1 AGMSG_TEST_WAIT_POLL_S=0.05 \
-      python3 "$BATS_TEST_DIRNAME/wait_helper_elapsed.py" \
-      "$BATS_TEST_DIRNAME/test_helper.bash" "$BATS_TEST_TMPDIR/never")"
-    # Compared in hundredths: bats runs under bash, which has no floats.
-    [ "${elapsed}" -ge 100 ]
+  # #291 lost its margin.
+  #
+  # Every helper, not just the one #291 tripped over: they each derive their
+  # deadline the same way, so a fix to one of them says nothing about the rest.
+  # Three runs each, because a run only exposes the truncation if it happens to
+  # start late in a tick.
+  local present="$BATS_TEST_TMPDIR/present" missing="$BATS_TEST_TMPDIR/never"
+  : > "$present"
+  sleep 30 &
+  local live=$!
+  local i elapsed spec
+  for spec in "wait_for_file $missing" \
+              "wait_for_missing $present" \
+              "wait_for_file_contains $missing needle" \
+              "wait_for_file_is $missing content" \
+              "wait_for_pid_exit $live"; do
+    for i in 1 2 3; do
+      elapsed="$(AGMSG_TEST_WAIT_TIMEOUT_S=1 AGMSG_TEST_WAIT_POLL_S=0.05 \
+        python3 "$BATS_TEST_DIRNAME/wait_helper_elapsed.py" \
+        "$BATS_TEST_DIRNAME/test_helper.bash" $spec)"
+      # Hundredths: bats runs under bash, which has no floats.
+      [ "$elapsed" -ge 100 ] || {
+        echo "helper '$spec' returned after ${elapsed}/100s of a 1s timeout" >&2
+        kill "$live" 2>/dev/null || :
+        return 1
+      }
+    done
   done
+  kill "$live" 2>/dev/null || :
+  wait "$live" 2>/dev/null || :
 }
 
 @test "wait_for_file: timeout is a named real-time deadline" {

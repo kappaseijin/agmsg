@@ -63,7 +63,7 @@ _watch_stop_recover() {
   _watch_stop_log recovery-stop "result=$signal_rc"
   [ "$signal_rc" -eq 0 ] || return 1
   started=$SECONDS
-  deadline=$((started + $(_agmsg_test_wait_timeout_s)))
+  deadline="$(_agmsg_test_wait_deadline "$started" "$(_agmsg_test_wait_timeout_s)")"
   while [ "$SECONDS" -lt "$deadline" ]; do
     _watch_stop_root_matches || return 1
     stat="$(ps -o stat= -p "$_WATCH_STOP_PID" 2>/dev/null | tr -d ' ')"
