@@ -43,7 +43,7 @@ _reap_diag_exit() {
   local primary_rc="$1" cleanup_rc
   set +e
   _reap_diag_log body-result "$primary_rc"
-  cleanup
+  _cleanup
   cleanup_rc=$?
   _reap_diag_log cleanup-end "$cleanup_rc" "primary_rc=$primary_rc"
   exit "$primary_rc"

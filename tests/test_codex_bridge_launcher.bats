@@ -132,7 +132,7 @@ EOF
 # whose argv contains both LAUNCHER and PROJ, one line per pid. Not scoped to a
 # single role name -- teardown must reap every role's child a test spawned
 # (e.g. "the identity cache still sees a role added mid-loop" joins a second
-# role, "bob", mid-test), unlike count_child_launchers below, which measures
+# role, "bob", mid-test), unlike _count_child_launchers below, which measures
 # one specific role on purpose. This also does not dedupe transient
 # command-substitution subshells by parent pid -- for killing that distinction
 # does not matter, signaling and waiting on a subshell that has already
@@ -285,7 +285,7 @@ EOF
   (
     set -e
     parent=''; dispatcher=''; foreign=''; foreign_launcher=''
-    cleanup() {
+    _cleanup() {
       local pid rc
       for pid in "$dispatcher" "$parent" "$foreign" "$foreign_launcher"; do
         case "$pid" in
@@ -311,7 +311,7 @@ EOF
     _reap_diag_phase fixture-start
 
     export MOCK_BRIDGE_SLEEP=25
-    put_record team alice test-thread "$PROJ" codex
+    _put_record team alice test-thread "$PROJ" codex
     sleep 30 3>&- & parent=$!
     bash "$LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$parent" \
       >/dev/null 2>&1 3>&- & dispatcher=$!
@@ -404,7 +404,7 @@ EOF
     term_marker="$TEST_SKILL_DIR/reaper.term"
     holder="$TEST_SKILL_DIR/reaper-holder"
     owned_pid=''; reaper_pid=''
-    cleanup() {
+    _cleanup() {
       local pid
       for pid in "$reaper_pid" "$owned_pid"; do
         case "$pid" in
@@ -413,7 +413,7 @@ EOF
         esac
       done
     }
-    trap cleanup EXIT
+    trap _cleanup EXIT
 
     cat > "$holder" <<'EOF'
 #!/usr/bin/env bash
@@ -436,13 +436,13 @@ EOF
 }
 
 # Write a role-session record (team, agent) -> thread for a project.
-put_record() {
+_put_record() {
   SKILL_DIR="$TEST_SKILL_DIR" bash -c \
     'source "$1/lib/role-session.sh"; agmsg_role_session_record "$2" "$3" "$4" "$5" "$6"' \
     _ "$SCRIPTS" "$@"
 }
 
-write_request() {
+_write_request() {
   local thread="$1" hash
   hash=$(SKILL_DIR="$TEST_SKILL_DIR" bash -c \
     'source "$1/lib/hash.sh"; printf "%s" "$2" | agmsg_sha1' _ "$SCRIPTS" "$PROJ")
@@ -453,7 +453,7 @@ write_request() {
 # is closed on the backgrounded parent and the launcher so a stray descriptor
 # can't keep bats from exiting on macOS (#bats-fd3). Pass `no-capture` for a
 # negative test that proves no bridge was started.
-run_launcher() {
+_run_launcher() {
   local expectation="${1:-capture}"
   sleep 6 3>&- & local p=$!
   bash "$LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$p" >/dev/null 2>&1 3>&- || true
@@ -473,7 +473,7 @@ run_launcher() {
 # Record the launch points that matter to the native-Windows lifecycle test.
 # The dispatcher and role child are both detached from the Bats process, so a
 # failure needs their first observed PIDs rather than a final process listing.
-record_windows_native_events() {
+_record_windows_native_events() {
   local event_file="$1" dispatcher_pid="$2" parent_pid="$3" child
   if ! grep -q '^dispatcher-start ' "$event_file" 2>/dev/null; then
     printf 'dispatcher-start pid=%s parent=%s\n' "$dispatcher_pid" "$parent_pid" >> "$event_file"
@@ -486,7 +486,7 @@ record_windows_native_events() {
   done
 }
 
-windows_native_diagnostics() {
+_windows_native_diagnostics() {
   local parent_pid="$1" dispatcher_pid="$2" event_file="$3" snapshot
   echo "windows-native diagnostics:"
   echo "capture path: $CAPTURE"
@@ -721,7 +721,7 @@ _windows_native_diag_record_taskkill() {
     "event=taskkill stage=$stage root=$root_key pid=$pid rc=$rc output=$output"
 }
 
-cleanup_windows_native_processes() {
+_cleanup_windows_native_processes() {
   local dispatcher_pid="$1" parent_pid="$2" kill_rc
   # Signal both direct children before waiting for either. Waiting on the
   # dispatcher first can hold the parent alive until its full test timer when a
@@ -1013,8 +1013,8 @@ _windows_native_wait_bridge_pid() {
 }
 
 @test "launcher: binds the recorded thread when the record's project matches (#350)" {
-  put_record team alice rec-thread-1 "$PROJ" codex
-  run_launcher
+  _put_record team alice rec-thread-1 "$PROJ" codex
+  _run_launcher
   [ -f "$CAPTURE" ]
   grep -q -- "--thread rec-thread-1" "$CAPTURE"
   ! grep -q -- "--thread loaded" "$CAPTURE"
@@ -1035,9 +1035,9 @@ exec bash "$real_init" "\$@"
 SH
   chmod +x "$SKILL_DIR/scripts/internal/init-db.sh"
   export AGMSG_STORAGE_PATH="$fresh_store"
-  put_record team alice fresh-thread "$PROJ" codex
+  _put_record team alice fresh-thread "$PROJ" codex
 
-  run_launcher
+  _run_launcher
 
   [ "$(cat "$init_count")" -eq 1 ]
   [ "$(sqlite3 "$fresh_store/messages.db" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='locks';")" -eq 1 ]
@@ -1045,8 +1045,8 @@ SH
 
 @test "launcher: waits for a delayed bridge start beyond the legacy poll window" {
   export MOCK_BRIDGE_CAPTURE_DELAY=10
-  put_record team alice delayed-thread "$PROJ" codex
-  run_launcher
+  _put_record team alice delayed-thread "$PROJ" codex
+  _run_launcher
 
   [ -f "$CAPTURE" ]
   grep -q -- "--thread delayed-thread" "$CAPTURE"
@@ -1054,35 +1054,35 @@ SH
 
 @test "launcher: passes the active storage override as a workspace root" {
   export AGMSG_STORAGE_PATH="$TEST_SKILL_DIR/custom-store"
-  put_record team alice rec-thread-1 "$PROJ" codex
-  run_launcher
+  _put_record team alice rec-thread-1 "$PROJ" codex
+  _run_launcher
 
   grep -q -- "--workspace-root $AGMSG_STORAGE_PATH" "$CAPTURE"
   ! grep -q -- "--workspace-root $TEST_SKILL_DIR/db" "$CAPTURE"
 }
 
 @test "launcher: leaves a role without a recorded live thread unsubscribed (#150)" {
-  run_launcher no-capture
+  _run_launcher no-capture
   [ ! -f "$CAPTURE" ]
 }
 
 @test "launcher: leaves a role with a foreign-project record unsubscribed (#150)" {
-  put_record team alice other-thread "/some/other/project" codex
-  run_launcher no-capture
+  _put_record team alice other-thread "/some/other/project" codex
+  _run_launcher no-capture
   [ ! -f "$CAPTURE" ]
 }
 
 @test "launcher: writes the bound-thread file so a later launcher can rebind (#350)" {
-  put_record team alice rec-thread-1 "$PROJ" codex
-  run_launcher
+  _put_record team alice rec-thread-1 "$PROJ" codex
+  _run_launcher
   [ "$(cat "$RUN_DIR/codex-bridge.team.alice.thread" 2>/dev/null)" = "rec-thread-1" ]
 }
 
 @test "launcher: replaces a stale role pidfile with the spawned bridge pid" {
-  put_record team alice rec-thread-1 "$PROJ" codex
+  _put_record team alice rec-thread-1 "$PROJ" codex
   export MOCK_BRIDGE_SLEEP=3
   printf '%s\n' 99999999 > "$RUN_DIR/codex-bridge.team.alice.pid"
-  run_launcher 3>&- & local driver_pid=$!
+  _run_launcher 3>&- & local driver_pid=$!
 
   local i recorded=""
   for i in {1..50}; do
@@ -1099,9 +1099,9 @@ SH
 
 @test "launcher: starts one bridge per recorded role and thread (#150 phase 2)" {
   bash "$SCRIPTS/join.sh" team bob codex "$PROJ" >/dev/null
-  put_record team alice thread-alice "$PROJ" codex
-  put_record team bob thread-bob "$PROJ" codex
-  run_launcher
+  _put_record team alice thread-alice "$PROJ" codex
+  _put_record team bob thread-bob "$PROJ" codex
+  _run_launcher
 
   local i lines=0
   for i in {1..30}; do
@@ -1117,7 +1117,7 @@ SH
 }
 
 @test "launcher: only one dispatcher runs per project" {
-  put_record team alice thread-alice "$PROJ" codex
+  _put_record team alice thread-alice "$PROJ" codex
   export MOCK_BRIDGE_SLEEP=8
   sleep 10 3>&- & local parent_a=$!
   sleep 10 3>&- & local parent_b=$!
@@ -1142,7 +1142,7 @@ SH
 }
 
 @test "launcher: stale dispatcher reclamation remains singleton under contention" {
-  put_record team alice thread-alice "$PROJ" codex
+  _put_record team alice thread-alice "$PROJ" codex
   export MOCK_BRIDGE_SLEEP=8
   local hash lock_db
   hash=$(printf '%s' "$PROJ" | bash -c 'source "$1"; agmsg_sha1' _ "$SCRIPTS/lib/hash.sh")
@@ -1176,10 +1176,10 @@ SH
 
 @test "launcher: project request thread never overrides per-role recorded threads (#150 phase 2)" {
   bash "$SCRIPTS/join.sh" team bob codex "$PROJ" >/dev/null
-  put_record team alice thread-alice "$PROJ" codex
-  put_record team bob thread-bob "$PROJ" codex
-  write_request thread-bob
-  run_launcher
+  _put_record team alice thread-alice "$PROJ" codex
+  _put_record team bob thread-bob "$PROJ" codex
+  _write_request thread-bob
+  _run_launcher
 
   grep -q -- $'--pair team\talice --thread thread-alice' "$CAPTURE"
   grep -q -- $'--pair team\tbob --thread thread-bob' "$CAPTURE"
@@ -1187,7 +1187,7 @@ SH
 }
 
 @test "launcher: role record update keeps child scoped to the same pair" {
-  put_record team alice thread-before "$PROJ" codex
+  _put_record team alice thread-before "$PROJ" codex
   sleep 6 3>&- & local p=$!
   bash "$LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$p" $'team\talice' >/dev/null 2>&1 3>&- &
   local launcher_pid=$!
@@ -1197,7 +1197,7 @@ SH
     sleep 0.1
   done
   grep -q -- $'--pair team\talice --thread thread-before' "$CAPTURE"
-  put_record team alice thread-after "$PROJ" codex
+  _put_record team alice thread-after "$PROJ" codex
   wait "$launcher_pid" 2>/dev/null || true
   wait "$p" 2>/dev/null || true
 
@@ -1240,7 +1240,7 @@ _count_root_lines() {
   fi
 }
 
-count_child_launchers() {
+_count_child_launchers() {
   ps -Ao pid=,ppid=,args= 2>/dev/null \
     | grep -F "$LAUNCHER" \
     | grep -F "$PROJ" \
@@ -1251,13 +1251,13 @@ count_child_launchers() {
 
 # Block until the child count settles on <n>, then return it. Spawn and exit are
 # both asynchronous, so sampling on the first sighting races the transition.
-wait_for_child_count() {
+_wait_for_child_count() {
   local want="$1" i
   for i in {1..100}; do
-    [ "$(count_child_launchers)" -eq "$want" ] && break
+    [ "$(_count_child_launchers)" -eq "$want" ] && break
     sleep 0.1
   done
-  count_child_launchers
+  _count_child_launchers
 }
 
 # Observe a count and its root identities over consecutive samples. The
@@ -1358,7 +1358,7 @@ _diagnose_485_failure() {
 }
 
 @test "launcher: a replacement dispatcher does not double the role children (#485)" {
-  put_record team alice thread-alice "$PROJ" codex
+  _put_record team alice thread-alice "$PROJ" codex
   export MOCK_BRIDGE_SLEEP=12
   local settle_seconds=10 stable_samples=4 parent_lifetime=25
   local tab project_hash role_hash role_pair
@@ -1414,7 +1414,7 @@ _diagnose_485_failure() {
 }
 
 @test "launcher: per-role lock disabled exposes two independent roots (#485)" {
-  put_record team alice thread-alice "$PROJ" codex
+  _put_record team alice thread-alice "$PROJ" codex
   export MOCK_BRIDGE_SLEEP=12
   local settle_seconds=10 stable_samples=4 parent_lifetime=25
   local tab project_hash role_hash role_pair
@@ -1465,27 +1465,27 @@ _diagnose_485_failure() {
 }
 
 @test "launcher: a re-registered role gets a fresh child after deregistration (#485)" {
-  put_record team alice thread-alice "$PROJ" codex
+  _put_record team alice thread-alice "$PROJ" codex
   # A custom bridge command is waited synchronously by its role launcher. Keep
-  # the mock lifetime below wait_for_child_count's 10-second ceiling so this
+  # the mock lifetime below _wait_for_child_count's 10-second ceiling so this
   # test measures deregistration, not the intentionally blocking test adapter.
   export MOCK_BRIDGE_SLEEP=2
   sleep 20 3>&- & local parent=$!
   bash "$LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$parent" >/dev/null 2>&1 3>&- &
   local dispatcher=$!
-  [ "$(wait_for_child_count 1)" -eq 1 ]
+  [ "$(_wait_for_child_count 1)" -eq 1 ]
 
   # Deregistering the role retires its child through the existing re-exec path.
   run bash "$SCRIPTS/leave.sh" team alice
   [ "$status" -eq 0 ]
-  [ "$(wait_for_child_count 0)" -eq 0 ]
+  [ "$(_wait_for_child_count 0)" -eq 0 ]
 
   # The dispatcher must have forgotten the pair. Otherwise known_pairs still
   # lists it, the re-spawn is suppressed, and the role silently never gets a
   # bridge again for the rest of the app-server's life.
   bash "$SCRIPTS/join.sh" team alice codex "$PROJ" >/dev/null
-  put_record team alice thread-alice "$PROJ" codex
-  [ "$(wait_for_child_count 1)" -eq 1 ]
+  _put_record team alice thread-alice "$PROJ" codex
+  [ "$(_wait_for_child_count 1)" -eq 1 ]
 
   kill "$dispatcher" 2>/dev/null || true
   wait "$dispatcher" 2>/dev/null || true
@@ -1498,7 +1498,7 @@ _diagnose_485_failure() {
   # guarded on the team configs' mtimes. This is the test that fails if that
   # guard never invalidates: a role joined while the dispatcher is already
   # looping has to be picked up anyway.
-  put_record team alice thread-alice "$PROJ" codex
+  _put_record team alice thread-alice "$PROJ" codex
   export MOCK_BRIDGE_SLEEP=20
   sleep 25 3>&- & local parent=$!
   bash "$LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$parent" >/dev/null 2>&1 3>&- &
@@ -1515,7 +1515,7 @@ _diagnose_485_failure() {
   # loop that happened to still be resolving every tick.
   sleep 3
   bash "$SCRIPTS/join.sh" team bob codex "$PROJ" >/dev/null
-  put_record team bob thread-bob "$PROJ" codex
+  _put_record team bob thread-bob "$PROJ" codex
   for i in {1..100}; do
     grep -q -- $'--pair team\tbob' "$CAPTURE" 2>/dev/null && break
     sleep 0.1
@@ -1544,7 +1544,7 @@ _diagnose_485_failure() {
   printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$stubdir/tasklist"
   chmod +x "$stubdir/tasklist"
 
-  put_record team alice thread-msys "$PROJ" codex
+  _put_record team alice thread-msys "$PROJ" codex
   export MSYSTEM=MINGW64 PATH="$stubdir:$PATH"
   export MOCK_BRIDGE_EVENTS="$TEST_SKILL_DIR/native-bridge-events.log"
   local lifecycle_events="$TEST_SKILL_DIR/native-launcher-events.log"
@@ -1555,23 +1555,23 @@ _diagnose_485_failure() {
   sleep 30 3>&- & local p=$!
   bash "$LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$p" >/dev/null 2>&1 3>&- &
   local dispatcher=$!
-  record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
+  _record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
   local i
   for i in {1..150}; do
-    record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
+    _record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
     [ -f "$CAPTURE" ] && break
     sleep 0.1
   done
-  record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
+  _record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
 
   # A bridge was launched at all -- this is what the whole class costs on Windows.
   if [ ! -f "$CAPTURE" ]; then
-    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
-    cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    _cleanup_windows_native_processes "$dispatcher" "$p"
     _windows_native_reap_bridge_root "$TEST_SKILL_DIR" || true
     false
   fi
-  cleanup_windows_native_processes "$dispatcher" "$p"
+  _cleanup_windows_native_processes "$dispatcher" "$p"
   grep -q -- '--thread thread-msys' "$CAPTURE"
 }
 
@@ -1640,7 +1640,7 @@ _diagnose_485_failure() {
   # at :291 and :381 are asking tasklist about an MSYS pid -- false on the first
   # evaluation, which means neither loop turns over and no bridge is ever
   # started. Real tasklist, no stub.
-  put_record team alice thread-win "$PROJ" codex
+  _put_record team alice thread-win "$PROJ" codex
   export MOCK_BRIDGE_EVENTS="$TEST_SKILL_DIR/native-bridge-events.log"
   export AGMSG_WINDOWS_DIAG_FILE="$TEST_SKILL_DIR/native-cleanup-diagnostic.log"
   export AGMSG_WINDOWS_DIAG_PID_FILE="$TEST_SKILL_DIR/native-cleanup-diagnostic-pids.log"
@@ -1661,46 +1661,46 @@ _diagnose_485_failure() {
   export MOCK_BRIDGE_SLEEP=0
   bash "$LAUNCHER" codex "$PROJ" "ws://127.0.0.1:1" "$p" >/dev/null 2>&1 3>&- &
   local dispatcher=$!
-  record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
+  _record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
   if ! wait_for_file "$short_child_barrier.reached"; then
-    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
-    cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    _cleanup_windows_native_processes "$dispatcher" "$p"
     _windows_native_reap_bridge_root "$AGMSG_WINDOWS_DIAG_TARGET_ROOT" || true
     false
   fi
   _windows_native_diag_snapshot short-child-before-release "$AGMSG_WINDOWS_DIAG_TARGET_ROOT"
   : > "$short_child_barrier.release"
   if ! wait_for_file "$short_child_barrier.exited"; then
-    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
-    cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    _cleanup_windows_native_processes "$dispatcher" "$p"
     _windows_native_reap_bridge_root "$AGMSG_WINDOWS_DIAG_TARGET_ROOT" || true
     false
   fi
   _windows_native_diag_snapshot short-child-after-release "$AGMSG_WINDOWS_DIAG_TARGET_ROOT"
   if ! wait_for_file "$target_ready_barrier.reached"; then
-    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
-    cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    _cleanup_windows_native_processes "$dispatcher" "$p"
     _windows_native_reap_bridge_root "$AGMSG_WINDOWS_DIAG_TARGET_ROOT" || true
     false
   fi
   : > "$target_ready_barrier.release"
   if ! wait_for_file_contains "$MOCK_BRIDGE_EVENTS" 'live'; then
-    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
-    cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    _cleanup_windows_native_processes "$dispatcher" "$p"
     _windows_native_reap_bridge_root "$AGMSG_WINDOWS_DIAG_TARGET_ROOT" || true
     false
   fi
   if ! wait_for_file "$target_hold_barrier.reached"; then
-    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
-    cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    _cleanup_windows_native_processes "$dispatcher" "$p"
     _windows_native_reap_bridge_root "$AGMSG_WINDOWS_DIAG_TARGET_ROOT" || true
     false
   fi
-  record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
+  _record_windows_native_events "$lifecycle_events" "$dispatcher" "$p"
 
   if [ ! -f "$CAPTURE" ]; then
-    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
-    cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    _cleanup_windows_native_processes "$dispatcher" "$p"
     _windows_native_reap_bridge_root "$TEST_SKILL_DIR" || true
     false
   fi
@@ -1722,8 +1722,8 @@ _diagnose_485_failure() {
     bash "$ended_bridge" --project "$ended_root" --pair $'team\tended' \
       >/dev/null 2>&1 3>&- & local ended_pid=$!
   if ! wait_for_file "$ended_barrier.reached"; then
-    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
-    cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    _cleanup_windows_native_processes "$dispatcher" "$p"
     _windows_native_reap_bridge_root "$AGMSG_WINDOWS_DIAG_TARGET_ROOT" || true
     false
   fi
@@ -1753,8 +1753,8 @@ EOF
   FOREIGN_BARRIER="$foreign_barrier" bash "$foreign_bridge" >/dev/null 2>&1 3>&- & local foreign_pid=$!
   TEST_LAUNCHER_EXTRA_PIDS="$foreign_pid"
   if ! wait_for_file "$foreign_barrier.reached"; then
-    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
-    cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    _cleanup_windows_native_processes "$dispatcher" "$p"
     _windows_native_reap_bridge_root "$AGMSG_WINDOWS_DIAG_TARGET_ROOT" || true
     _windows_native_reap_bridge_root "$foreign_root" || true
     TEST_LAUNCHER_EXTRA_PIDS=''
@@ -1762,8 +1762,8 @@ EOF
   fi
   : > "$foreign_barrier.release"
   if ! _windows_native_wait_bridge_pid "$foreign_root" >/dev/null; then
-    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
-    cleanup_windows_native_processes "$dispatcher" "$p"
+    _windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    _cleanup_windows_native_processes "$dispatcher" "$p"
     _windows_native_reap_bridge_root "$AGMSG_WINDOWS_DIAG_TARGET_ROOT" || true
     _windows_native_reap_bridge_root "$foreign_root" || true
     TEST_LAUNCHER_EXTRA_PIDS=''
@@ -1771,7 +1771,7 @@ EOF
   fi
   _windows_native_diag_snapshot foreign-control-before-target-reap "$foreign_root"
 
-  cleanup_windows_native_processes "$dispatcher" "$p"
+  _cleanup_windows_native_processes "$dispatcher" "$p"
   local target_cleanup_rc=0 foreign_control_rc=0 foreign_cleanup_rc=0
   if ! _windows_native_reap_bridge_root "$TEST_SKILL_DIR"; then
     target_cleanup_rc=1
@@ -1791,7 +1791,7 @@ EOF
   TEST_LAUNCHER_EXTRA_PIDS=''
   if [ "$target_cleanup_rc" -ne 0 ] || [ "$foreign_control_rc" -ne 0 ] || \
     [ "$foreign_cleanup_rc" -ne 0 ]; then
-    windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
+    _windows_native_diagnostics "$p" "$dispatcher" "$lifecycle_events"
     false
   fi
   grep -q -- '--thread thread-win' "$CAPTURE"
@@ -1859,7 +1859,7 @@ _snapshot_role_identity() {
   startsrc="$(_lease_value startsrc "$lease")"
   start="$(_lease_value start "$lease")"
   [ -n "$startsrc" ] && [ -n "$start" ] || return 1
-  live_start="$(_937_start_token "$pid")" || return 1
+  live_start="$(_start_token_937 "$pid")" || return 1
   [ "$live_start" = "$(printf '%s\t%s' "$startsrc" "$start")" ] || return 1
   SNAPSHOT_PID="$pid"
   SNAPSHOT_LEASE="$lease"
@@ -1867,7 +1867,7 @@ _snapshot_role_identity() {
   SNAPSHOT_START="$start"
 }
 
-_937_start_token() {
+_start_token_937() {
   local pid="$1" s r tok
   local -a fields
   if [ -r "/proc/$pid/stat" ]; then
@@ -2042,7 +2042,7 @@ _diagnose_937_failure() {
 }
 
 @test "launcher: reaps a same-(project,role) orphan the pidfile lost, converging to one (#937)" {
-  put_record team alice thread-alice "$PROJ" codex
+  _put_record team alice thread-alice "$PROJ" codex
   export MOCK_BRIDGE_SLEEP=25
   export MOCK_BRIDGE_EVENTS="$TEST_SKILL_DIR/bridge-events"
   : > "$MOCK_BRIDGE_EVENTS"
@@ -2091,7 +2091,7 @@ _diagnose_937_failure() {
 }
 
 @test "launcher: a reap for one role leaves a same-project OTHER role alive (#937)" {
-  put_record team alice thread-alice "$PROJ" codex
+  _put_record team alice thread-alice "$PROJ" codex
   export MOCK_BRIDGE_SLEEP=25
   export MOCK_BRIDGE_EVENTS="$TEST_SKILL_DIR/bridge-events"
   : > "$MOCK_BRIDGE_EVENTS"
@@ -2127,7 +2127,7 @@ _diagnose_937_failure() {
 }
 
 @test "launcher: a reap for one project leaves the SAME role in another project alive (#937)" {
-  put_record team alice thread-alice "$PROJ" codex
+  _put_record team alice thread-alice "$PROJ" codex
   export MOCK_BRIDGE_SLEEP=25
   export MOCK_BRIDGE_EVENTS="$TEST_SKILL_DIR/bridge-events"
   : > "$MOCK_BRIDGE_EVENTS"
@@ -2163,7 +2163,7 @@ _diagnose_937_failure() {
 }
 
 @test "launcher: a reap for role 'alice' does not sweep the prefix-colliding 'alice2' (#937)" {
-  put_record team alice thread-alice "$PROJ" codex
+  _put_record team alice thread-alice "$PROJ" codex
   export MOCK_BRIDGE_SLEEP=25
   export MOCK_BRIDGE_EVENTS="$TEST_SKILL_DIR/bridge-events"
   : > "$MOCK_BRIDGE_EVENTS"
@@ -2199,7 +2199,7 @@ _diagnose_937_failure() {
 }
 
 @test "launcher: an alice reaper does not kill a bridge that also serves bob (pair superset) (#937)" {
-  put_record team alice thread-alice "$PROJ" codex
+  _put_record team alice thread-alice "$PROJ" codex
   export MOCK_BRIDGE_SLEEP=25
   export MOCK_BRIDGE_EVENTS="$TEST_SKILL_DIR/bridge-events"
   : > "$MOCK_BRIDGE_EVENTS"
@@ -2236,7 +2236,7 @@ _diagnose_937_failure() {
 }
 
 @test "launcher: a live bridge with no lease (legacy) is left alone, not killed (#937)" {
-  put_record team alice thread-alice "$PROJ" codex
+  _put_record team alice thread-alice "$PROJ" codex
   export MOCK_BRIDGE_SLEEP=25
   local tab; tab=$(printf '\t')
   # A same-(project,role) process that never published a lease -- an older bridge
@@ -2262,7 +2262,7 @@ _fake_alice_lease() { # sets FAKE_PID once its lease file exists
 }
 
 @test "launcher: a truncated lease (missing fields) is not killed, fail-closed (#937)" {
-  put_record team alice thread-alice "$PROJ" codex
+  _put_record team alice thread-alice "$PROJ" codex
   export MOCK_BRIDGE_SLEEP=25
   _fake_alice_lease; local victim=$FAKE_PID lease="$RUN_DIR/codex-bridge-lease.$FAKE_PID"
   head -3 "$lease" > "$lease.x"; mv "$lease.x" "$lease"
@@ -2274,7 +2274,7 @@ _fake_alice_lease() { # sets FAKE_PID once its lease file exists
 }
 
 @test "launcher: a lease with a foreign host is not killed, fail-closed (#937)" {
-  put_record team alice thread-alice "$PROJ" codex
+  _put_record team alice thread-alice "$PROJ" codex
   export MOCK_BRIDGE_SLEEP=25
   _fake_alice_lease; local victim=$FAKE_PID lease="$RUN_DIR/codex-bridge-lease.$FAKE_PID"
   awk '{ if ($0 ~ /^host=/) print "host=some-other-host.invalid"; else print }' "$lease" > "$lease.x"; mv "$lease.x" "$lease"
@@ -2286,7 +2286,7 @@ _fake_alice_lease() { # sets FAKE_PID once its lease file exists
 }
 
 @test "launcher: a lease with an unknown extra key is not killed, fail-closed (#937)" {
-  put_record team alice thread-alice "$PROJ" codex
+  _put_record team alice thread-alice "$PROJ" codex
   export MOCK_BRIDGE_SLEEP=25
   _fake_alice_lease; local victim=$FAKE_PID lease="$RUN_DIR/codex-bridge-lease.$FAKE_PID"
   { cat "$lease"; printf 'rogue=1\n'; } > "$lease.x"; mv "$lease.x" "$lease"
@@ -2298,7 +2298,7 @@ _fake_alice_lease() { # sets FAKE_PID once its lease file exists
 }
 
 @test "launcher: a lease with a duplicated key is not killed, fail-closed (#937)" {
-  put_record team alice thread-alice "$PROJ" codex
+  _put_record team alice thread-alice "$PROJ" codex
   export MOCK_BRIDGE_SLEEP=25
   _fake_alice_lease; local victim=$FAKE_PID lease="$RUN_DIR/codex-bridge-lease.$FAKE_PID"
   { cat "$lease"; printf 'pid=99999\n'; } > "$lease.x"; mv "$lease.x" "$lease"
@@ -2314,7 +2314,7 @@ _fake_alice_lease() { # sets FAKE_PID once its lease file exists
   # than the lease records (a recycled pid, an unrelated bridge), killing it would
   # be a wrong-kill. The token must PROVE the live process is the leased one, or
   # nothing happens. Same identity as the launcher, so only the token spares it.
-  put_record team alice thread-alice "$PROJ" codex
+  _put_record team alice thread-alice "$PROJ" codex
   export MOCK_BRIDGE_SLEEP=25
   _fake_alice_lease; local victim=$FAKE_PID lease="$RUN_DIR/codex-bridge-lease.$FAKE_PID"
   # Rewrite start= to a value that cannot equal the live process's actual token

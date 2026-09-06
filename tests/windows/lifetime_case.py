@@ -17,6 +17,12 @@ EXTERNAL_SOURCES=('tests/test_helper*.bash','scripts/lib/*.sh','lib/*.sh',
                   'tests/windows/lifetime-adapter.sh')
 
 
+SHADOWED=frozenset({'setup','teardown','taskkill'})
+# Names that must NOT be renamed, and cannot be derived: bats calls `setup` and
+# `teardown` by name, and `taskkill` deliberately shadows the external command.
+CONFORMING=re.compile(r'_[a-z][a-z0-9_]*')
+
+
 class UnresolvedReference(ValueError):
     """Raised before any case script is written, never at rc=127 runtime."""
 
@@ -38,6 +44,18 @@ def definition_names(source):
     return {match.group(1) for match in DEF.finditer(source)}
 
 
+def nonconforming_definitions(source):
+    """Fixture-defined names that break the `_[a-z]` convention HELPER assumes.
+
+    HELPER only sees `_[a-z]...`, so a helper named otherwise is invisible to the
+    unresolved-reference scan. Refusing the definition closes the road to that hole
+    instead of trying to widen the scan (which leaves false positives; see the
+    design note for the measurement).
+    """
+    return {name for name in definition_names(source)
+            if name not in SHADOWED and not CONFORMING.fullmatch(name)}
+
+
 def helper_refs(text):
     return {match.group(1) for match in HELPER.finditer(text)}
 
@@ -53,6 +71,8 @@ def external_helpers(root=ROOT):
 
 def build_case(source, entry, stubs='', tail='', root=ROOT):
     """Return the case script text. Never writes a file; raises before that can happen."""
+    bad=nonconforming_definitions(source)
+    if bad: raise UnresolvedReference('fixture defines non-conforming names: '+', '.join(sorted(bad)))
     defs=definitions(source)
     if entry not in defs: raise UnresolvedReference('entry not defined: '+entry)
     stubbed=definition_names(stubs)
