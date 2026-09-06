@@ -248,12 +248,16 @@ jobs:
       # parallelises. ubuntu has no such observed ceiling.
       matrix:
         os: [ubuntu-latest, macos-latest]
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         exclude:
-          - os: macos-latest
-            shard: 5
-          - os: macos-latest
-            shard: 6
+          - os: ubuntu-latest
+            shard: 7
+          - os: ubuntu-latest
+            shard: 8
+          - os: ubuntu-latest
+            shard: 9
+          - os: ubuntu-latest
+            shard: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -270,7 +274,7 @@ jobs:
           # surplus shard starts with a total that does not cover it and the
           # guard below fails it loudly instead of silently running a partition
           # nobody asked for.
-          SHARD_TOTAL: ${{ matrix.os == 'macos-latest' && 4 || 6 }}
+          SHARD_TOTAL: ${{ matrix.os == 'macos-latest' && 10 || 6 }}
         run: |
           set -euo pipefail
           if [ "$SHARD" -gt "$SHARD_TOTAL" ]; then
