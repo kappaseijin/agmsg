@@ -1,10 +1,12 @@
 [CmdletBinding()]
 param(
-  [ValidateSet('preflight', 'evaluate')]
+  [ValidateSet('preflight', 'evaluate', 'collect')]
   [string]$Mode = 'preflight',
   [Parameter(Mandatory = $true)]
   [string]$PacketPath,
   [string]$Root,
+  [string]$ControlDirectory,
+  [string]$RunManifestPath,
   [switch]$DropStopEvent
 )
 
@@ -83,6 +85,22 @@ function Write-ProcessTraceRecord {
   )
 
   $pidText = [string]$EventObject.ProcessID
+  if ($Mode -eq 'collect') {
+    $time = Convert-TimeCreated $EventObject.TIME_CREATED
+    Write-PacketRecord @{
+      record_type = "process-$TraceType"
+      process_id = $pidText
+      parent_process_id = [string]$EventObject.ParentProcessID
+      process_name = [string]$EventObject.ProcessName
+      event_time_created_raw = $time.raw
+      event_generated_time_utc = $time.utc
+      event_received_time_utc = [DateTime]::UtcNow.ToString('o')
+      event_clock_quality = $time.quality
+      generation_quality = 'pending-offline-evaluation'
+      scope = 'pending-root-registration'
+    }
+    return
+  }
   if ($pidText -ne [string]$script:TargetPid) { return }
 
   $time = Convert-TimeCreated $EventObject.TIME_CREATED
@@ -297,117 +315,44 @@ function Parse-Utc {
 
 function New-UnknownSummary {
   param([string]$Reason)
+  # Failure reporting never inherits the producer's generation/clock claims.
   return [ordered]@{
+    evaluation_schema_version = 3
+    evaluator_revision = (& git -C $PSScriptRoot rev-parse HEAD)
+    source_packet_sha256 = if (Test-Path -LiteralPath $PacketPath -PathType Leaf) {
+      (Get-FileHash -LiteralPath $PacketPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    } else { $null }
+    source_packet_schema = 'unknown'
     collector_run_id = $script:RunId
     comparison = 'unknown'
-    reason = $Reason
+    comparison_gate = 'blocked'
+    collector_quality = 'unknown'
+    notification_capture_quality = 'unknown'
+    clock_format_quality = 'unknown'
+    process_time_quality = 'unknown'
+    process_generation_quality = 'unknown'
+    reasons = @($Reason, 'process-time-unproven', 'process-generation-unproven', 'scope-unproven')
+    reason_details = @(@{ reason = $Reason; record_ids = @(); target = 'packet' })
     lifetime_ms = $null
     hold_ms = $null
     reaper_judgment = 'unknown'
     termination_actor = 'not-determined'
-    event_coverage = 'unknown'
     uncaptured = 'unknown'
   }
 }
 
 function Evaluate-Records {
-  param(
-    [Parameter(Mandatory = $true)] [object[]]$Records,
-    [switch]$DropOneStop
-  )
-
-  $ready = @($Records | Where-Object {
-      (Get-Field $_ 'record_type') -eq 'subscription-ready' -and
-      (Get-Field $_ 'subscription_status') -eq 'ready'
-    })
-  if ($ready.Count -eq 0) { return New-UnknownSummary 'subscription-not-ready' }
-
-  $ended = @($Records | Where-Object {
-      (Get-Field $_ 'record_type') -eq 'subscription-ended'
-    } | Select-Object -Last 1)
-  if ($ended.Count -eq 0 -or (Get-Field $ended[0] 'subscription_end_confirmed') -ne $true) {
-    return New-UnknownSummary 'subscription-end-unconfirmed'
-  }
-
-  $quality = @($Records | Where-Object { (Get-Field $_ 'record_type') -eq 'quality' })
-  if ($quality.Count -gt 0) {
-    $reason = [string](Get-Field $quality[0] 'reason')
-    if ([string]::IsNullOrEmpty($reason)) { $reason = 'collector-quality-unknown' }
-    return New-UnknownSummary $reason
-  }
-
-  $starts = @($Records | Where-Object {
-      (Get-Field $_ 'record_type') -eq 'process-start' -and
-      (Get-Field $_ 'scope') -eq 'fixture-owned-target'
-    })
-  $stops = @($Records | Where-Object {
-      (Get-Field $_ 'record_type') -eq 'process-stop' -and
-      (Get-Field $_ 'scope') -eq 'fixture-owned-target'
-    })
-  if ($DropOneStop -and $stops.Count -gt 0) {
-    $stops = @($stops | Select-Object -Skip 1)
-  }
-  if ($starts.Count -eq 0) { return New-UnknownSummary 'missing-start-event' }
-  if ($stops.Count -eq 0) { return New-UnknownSummary 'missing-stop-event' }
-
-  $start = $starts[0]
-  $stop = $stops[0]
-  $startGeneration = [string](Get-Field $start 'generation')
-  $stopGeneration = [string](Get-Field $stop 'generation')
-  if ([string]::IsNullOrEmpty($startGeneration) -or
-      $startGeneration -eq 'unknown' -or
-      [string](Get-Field $start 'generation_quality') -ne 'known' -or
-      $stopGeneration -ne $startGeneration -or
-      [string](Get-Field $stop 'generation_quality') -ne 'known') {
-    return New-UnknownSummary 'generation-unknown'
-  }
-  if ([string](Get-Field $start 'event_clock_quality') -ne 'known' -or
-      [string](Get-Field $stop 'event_clock_quality') -ne 'known') {
-    return New-UnknownSummary 'clock-correspondence-unknown'
-  }
-
-  $startTime = Parse-Utc (Get-Field $start 'event_generated_time_utc')
-  $stopTime = Parse-Utc (Get-Field $stop 'event_generated_time_utc')
-  if ($null -eq $startTime -or $null -eq $stopTime -or $stopTime -lt $startTime) {
-    return New-UnknownSummary 'clock-correspondence-unknown'
-  }
-
-  $taskkills = @($Records | Where-Object {
-      (Get-Field $_ 'record_type') -eq 'taskkill' -and
-      [string](Get-Field $_ 'process_id') -eq [string](Get-Field $start 'process_id')
-    })
-  $taskkill = if ($taskkills.Count -gt 0) { $taskkills[0] } else { $null }
-  if ($null -eq $taskkill) { return New-UnknownSummary 'taskkill-operation-unrecorded' }
-  if ([string](Get-Field $taskkill 'generation') -ne $startGeneration -or
-      [string](Get-Field $taskkill 'generation_quality') -ne 'known') {
-    return New-UnknownSummary 'generation-unknown'
-  }
-  $actorTime = Parse-Utc (Get-Field $taskkill 'actor_time_utc')
-  if ($null -eq $actorTime) { return New-UnknownSummary 'clock-correspondence-unknown' }
-
-  $rcText = [string](Get-Field $taskkill 'rc')
-  $reaperJudgment = 'target-stopped-before-taskkill'
-  if ($stopTime -ge $actorTime) {
-    if ($rcText -eq '0') {
-      $reaperJudgment = 'stop-observed-after-taskkill'
-    } else {
-      $reaperJudgment = 'taskkill-failed-stop-observed'
-    }
-  }
-
-  return [ordered]@{
-    collector_run_id = $script:RunId
-    comparison = 'known'
-    reason = 'target-start-and-stop-observed'
-    process_id = [string](Get-Field $start 'process_id')
-    generation = $startGeneration
-    lifetime_ms = [Math]::Round(($stopTime - $startTime).TotalMilliseconds, 3)
-    hold_ms = [Math]::Round(($actorTime - $startTime).TotalMilliseconds, 3)
-    reaper_judgment = $reaperJudgment
-    termination_actor = 'not-determined'
-    event_coverage = 'target-only'
-    uncaptured = 'unknown'
-  }
+  param([object[]]$Records, [switch]$DropOneStop, [switch]$AsJson)
+  if ($DropOneStop) { throw 'v3 controls require an explicitly modified packet copy' }
+  # Evaluate the original bytes, not reserialized Records: provenance is the
+  # input file hash. This shared evaluator handles both legacy and v2 packets.
+  $json = & python (Join-Path $PSScriptRoot 'lifetime_packet.py') $PacketPath
+  if ($LASTEXITCODE -ne 0) { throw 'offline v3 evaluation failed' }
+  if ($AsJson) { return $json }
+  $value = $json | ConvertFrom-Json
+  $summary = [ordered]@{}
+  foreach ($property in $value.PSObject.Properties) { $summary[$property.Name] = $property.Value }
+  return $summary
 }
 
 function Read-Packet {
@@ -438,6 +383,12 @@ function Write-Summary {
   Write-Output $json
 }
 
+if ($Mode -eq 'collect') {
+  . (Join-Path $PSScriptRoot 'lifetime-collect.ps1')
+  $collectExit = Invoke-LifetimeCollection -ControlDirectory $ControlDirectory -RunManifestPath $RunManifestPath
+  exit $collectExit
+}
+
 if ($Mode -eq 'evaluate') {
   if (-not (Test-Path -LiteralPath $PacketPath -PathType Leaf)) {
     $summary = New-UnknownSummary 'packet-unavailable'
@@ -445,12 +396,11 @@ if ($Mode -eq 'evaluate') {
     exit 0
   }
   $records = Read-Packet $PacketPath
-  $summary = Evaluate-Records -Records $records -DropOneStop:$DropStopEvent
-  Write-Output ($summary | ConvertTo-Json -Compress -Depth 10)
+  Evaluate-Records -Records $records -DropOneStop:$DropStopEvent -AsJson
   exit 0
 }
 
-$summaryPath = "$PacketPath.summary.json"
+$summaryPath = [IO.Path]::ChangeExtension($PacketPath, 'evaluation-v3.json')
 $preflightExit = 1
 $subscriptionReady = $false
 $taskkillResult = $null
@@ -548,12 +498,8 @@ if (-not (Test-Path -LiteralPath $PacketPath -PathType Leaf)) {
 }
 
 $records = Read-Packet $PacketPath
-if ($null -ne $script:CollectorReason) {
-  $summary = New-UnknownSummary ([string]$script:CollectorReason)
-} else {
-  $summary = Evaluate-Records -Records $records
-}
-Write-Summary -Summary $summary -Path $summaryPath | Out-Null
+$summary = Evaluate-Records -Records $records
+# Evaluate-Records already saved the distinct v3 file without overwriting evidence.
 if ([string](Get-Field ([pscustomobject]$summary) 'comparison') -eq 'known') {
   $preflightExit = 0
 }

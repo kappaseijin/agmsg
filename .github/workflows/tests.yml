@@ -1081,3 +1081,15 @@ jobs:
       # "we check the shapes" and "nobody configured anything".
       - name: Check the shapes we publish (unshaped names are checked before push)
         run: AGMSG_PRIVATE_NAMES=none node scripts/check-private-names.mjs
+
+  lifetime-semantics:
+    name: Windows offline lifetime semantics
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Legacy and v2 evaluator controls (no WMI collection)
+        run: python -m unittest discover -s tests/windows -p 'test_lifetime_*.py' -v
