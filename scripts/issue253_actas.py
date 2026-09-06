@@ -10,6 +10,37 @@ import time
 
 from issue253_public_path import CUTOFFS, Fixture, correlate, wait_for
 
+_TOKEN = object()
+
+
+class Observation:
+    """A named bounded-wait result. Only observe_until constructs it."""
+    __slots__ = ("label", "reached")
+
+    def __init__(self, label, reached, _key=None):
+        if _key is not _TOKEN:
+            raise TypeError("Observation is constructed by observe_until only")
+        self.label = label
+        self.reached = reached
+
+    def __bool__(self):
+        return self.reached
+
+
+def observe_until(label, predicate, seconds):
+    """Wrap wait_for so the outcome cannot reach a verdict as a bare bool."""
+    return Observation(label, wait_for(predicate, seconds=seconds), _TOKEN)
+
+
+def require(observation, label):
+    """Unwrap the named observation, or refuse. No default, no coercion."""
+    if not isinstance(observation, Observation):
+        raise TypeError(f"{label}: expected Observation from observe_until, "
+                        f"got {type(observation).__name__}")
+    if observation.label != label:
+        raise TypeError(f"expected observation {label!r}, got {observation.label!r}")
+    return observation.reached
+
 
 def claim_state(command):
     fields = dict(part.split("=", 1) for part in command["stdout"].split() if "=" in part)
@@ -36,7 +67,10 @@ def ownership(instances):
     return "pass"
 
 
-def evaluate(instances, correlation):
+def evaluate(instances, correlation, polled, observed):
+    # A missed observation window says nothing about the event; never report it as a verdict.
+    if not require(polled, "watch_poll") or not require(observed, "handoff"):
+        return "unknown"
     ids = correlation.get("ids", {})
     if correlation.get("status") != "pass" or len(ids) != 1 or not all(isinstance(value, str) and value for value in ids.values()):
         return "unknown"
@@ -76,12 +110,12 @@ def observe(source, root, same_sid):
                                  extra={"AGMSG_AGENT_PID": str(instance["host_pid"]),
                                         "AGMSG_TEST_RECEIVER_TAG": str(instance["host_pid"])})
                 watches.append((instance, handle))
-        wait_for(lambda: all((root / f"tmp/poll.{i['host_pid']}").exists() or h[0].poll() is not None for i, h in watches), seconds=10)
+        polled = observe_until("watch_poll", lambda: all((root / f"tmp/poll.{i['host_pid']}").exists() or h[0].poll() is not None for i, h in watches), 10)
         for instance, handle in watches:
             ready = (root / f"tmp/poll.{instance['host_pid']}").exists()
             instance["boundary"] = "ready" if ready and handle[0].poll() is None else "start_failure" if handle[0].poll() is not None else "ready_missing"
         item = f.send("actas-same" if same_sid else "actas-different")
-        wait_for(lambda: any(item[0] in Path(str(h[2]) + ".stdout").read_text() for _, h in watches), seconds=5)
+        observed = observe_until("handoff", lambda: any(item[0] in Path(str(h[2]) + ".stdout").read_text() for _, h in watches), 5)
         time.sleep(0.4)
         for instance, handle in watches:
             command = f.finish(handle, stop=True)
@@ -94,7 +128,8 @@ def observe(source, root, same_sid):
                          extra={"AGMSG_AGENT_PID": str(hosts[0].pid)})
         if claim_state(failure)[0] != "start_failure":
             raise RuntimeError("unregistered startup control was misclassified")
-        return {"role_ownership": ownership(instances), "role_path": evaluate(instances, correlation), "same_sid": same_sid,
+        return {"role_ownership": ownership(instances), "role_path": evaluate(instances, correlation, polled, observed),
+                "watch_poll_reached": polled.reached, "handoff_observation_reached": observed.reached, "same_sid": same_sid,
                 "instances": instances, "correlation": correlation, "startup_negative": failure,
                 "message_ack": "unknown", "message_status": "unknown", "recovery": "unknown",
                 "general_exclusion": "unknown", "post_handoff_window_seconds": 0.4}
