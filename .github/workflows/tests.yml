@@ -56,9 +56,12 @@ permissions:
 
 # A PR run whose head has moved is dead weight: its verdict can be used for
 # nothing, and it keeps holding the runner slots -- four macOS shards per run,
-# and the account runs at most five macOS jobs at once (measured 2026-08-21:
-# 35 runs that day, 140 macOS jobs, queue waits of 0-50 min, one PR's shard
-# waiting 50 min behind runs whose heads had already been replaced). So a new
+# and the account runs at most five macOS jobs at once (measured 2026-09-06,
+# runs 34053751199 and 34059939177: a ten-way macOS split never exceeded five
+# concurrent macOS jobs, and each queued job started 3-11s after another
+# finished. Earlier evidence, 2026-08-21: 35 runs that day, 140 macOS jobs,
+# queue waits of 0-50 min, one PR's shard waiting 50 min behind runs whose
+# heads had already been replaced). So a new
 # run for the same PR cancels the one before it. A push to main is never
 # cancelled: its group is its own run id, and that run is what a release reads
 # (#848).
@@ -242,10 +245,20 @@ jobs:
       # one, so a broken `changes` job cannot take the whole suite down with an
       # unevaluatable dynamic matrix.
       #
-      # ubuntu 6, macOS 4 (#293). macOS stays at 4 until its concurrency
-      # ceiling is measured: the account has been observed running at most five
-      # macOS jobs at once, and past that a finer split queues rather than
-      # parallelises. ubuntu has no such observed ceiling.
+      # ubuntu 6, macOS 4 (#293). macOS stays at 4 because its concurrency
+      # ceiling is five and that ceiling is now measured, not inferred: a
+      # ten-way macOS split (runs 34053751199 and 34059939177, 2026-09-06)
+      # never had more than five macOS jobs running at once, and each queued
+      # job started 3-11s after another finished -- a five-slot semaphore, not
+      # a slow start. The slots are shared by every macOS job in the run, not
+      # just the bats shards: in both runs one slot went to `storage contract
+      # (jsonl, macos-latest)`, so bats had four until it finished.
+      #
+      # Splitting past the ceiling does not pay. The macOS leg took 955s and
+      # 1146s at ten shards against 971s at four (run 34037049929): the extra
+      # shards queue behind the ceiling and each one pays checkout and the
+      # bats install again. The last shard of the ten-way runs did not start
+      # until ten minutes in. ubuntu has no such observed ceiling.
       matrix:
         os: [ubuntu-latest, macos-latest]
         shard: [1, 2, 3, 4, 5, 6]
