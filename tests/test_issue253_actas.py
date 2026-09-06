@@ -1,10 +1,13 @@
 import copy
+import inspect
 import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import issue253_actas
 from issue253_actas import Observation, claim_state, evaluate, observe_until, ownership
 
 
@@ -66,6 +69,17 @@ class ActasControls(unittest.TestCase):
         with self.assertRaises(TypeError):
             evaluate(self.instances, self.correlation)
 
+    def test_evaluate_cannot_be_made_callable_without_the_observations(self):
+        # Detects a change that makes the observations optional, which is the fail-open
+        # default this design exists to remove. Reads the live function object rather than
+        # the source text. Deliberate circumvention, such as rewriting this test, is out
+        # of scope; the tests above already cover a caller passing the wrong thing.
+        parameters = inspect.signature(evaluate).parameters
+        self.assertEqual(list(parameters), ["instances", "correlation", "polled", "observed"])
+        for name in ("polled", "observed"):
+            self.assertIs(parameters[name].default, inspect.Parameter.empty,
+                          f"{name} became optional; a caller can now omit the observation")
+
     def test_a_bare_bool_is_not_an_observation(self):
         for polled, observed in ((True, reached("handoff")), (reached("watch_poll"), True)):
             with self.assertRaises(TypeError) as raised:
@@ -94,6 +108,47 @@ class ActasControls(unittest.TestCase):
             json.dumps({"watch_poll_reached": reached("watch_poll")})
         self.assertEqual(json.dumps({"watch_poll_reached": reached("watch_poll").reached}),
                          '{"watch_poll_reached": true}')
+
+class ObserveWiring(unittest.TestCase):
+    """observe() is otherwise only reached from the harness, so nothing in CI runs it."""
+
+    def run_observe(self):
+        with tempfile.TemporaryDirectory() as temp:
+            return issue253_actas.observe(Path(__file__).resolve().parents[1], Path(temp) / "run", True)
+
+    def test_observe_passes_real_observations_to_the_verdict(self):
+        report = self.run_observe()
+        # The window may or may not be reached on a loaded machine, so assert the wiring
+        # rather than the outcome: both observations are recorded, and the verdict is one
+        # of the values evaluate() can return once require() has accepted them.
+        for key in ("watch_poll_reached", "handoff_observation_reached"):
+            self.assertIsInstance(report[key], bool, key)
+        self.assertIn(report["role_path"], ("pass", "unknown", "incompatible"))
+        json.dumps(report)
+
+    def test_observe_reports_each_observation_under_its_own_name(self):
+        # Pin the two outcomes to different values so reporting one as the other, or
+        # hard-coding either, changes the report. Left to a real run the two often agree
+        # and the difference stays invisible.
+        outcomes = iter((False, True))
+        original = issue253_actas.wait_for
+        issue253_actas.wait_for = lambda predicate, seconds=8: next(outcomes)
+        try:
+            report = self.run_observe()
+        finally:
+            issue253_actas.wait_for = original
+        self.assertEqual((report["watch_poll_reached"], report["handoff_observation_reached"]), (False, True))
+        self.assertEqual(report["role_path"], "unknown")
+
+    def test_observe_refuses_a_bare_bool_reaching_the_verdict(self):
+        original = issue253_actas.observe_until
+        issue253_actas.observe_until = lambda label, predicate, seconds: original(label, predicate, seconds).reached
+        try:
+            with self.assertRaises(TypeError) as raised:
+                self.run_observe()
+        finally:
+            issue253_actas.observe_until = original
+        self.assertIn("expected Observation from observe_until", str(raised.exception))
 
 
 if __name__ == "__main__":
