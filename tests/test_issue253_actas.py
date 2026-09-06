@@ -95,6 +95,21 @@ class ActasControls(unittest.TestCase):
             self.assertIsInstance(argument, ast.Name, f"evaluate() line {calls[0].lineno}: literal observation")
             self.assertIn(argument.id, waited,
                           f"evaluate() line {calls[0].lineno}: {argument.id} is not bound from wait_for")
+        # The report fields are the evidence for that verdict, so they carry the same
+        # requirement: a literal there would claim an observation that never happened.
+        reported = {key.value: value for node in ast.walk(observe) if isinstance(node, ast.Dict)
+                    for key, value in zip(node.keys, node.values)
+                    if isinstance(key, ast.Constant) and key.value in
+                    ("watch_poll_reached", "handoff_observation_reached")}
+        self.assertEqual(set(reported), {"watch_poll_reached", "handoff_observation_reached"})
+        for key, value in sorted(reported.items()):
+            self.assertIsInstance(value, ast.Name, f"{key}: literal evidence")
+            self.assertIn(value.id, waited, f"{key}: {value.id} is not bound from wait_for")
+        # Pin the pairing to evaluate()'s argument positions rather than to the variable
+        # names, so a rename stays legal but reporting one observation as the other does not.
+        self.assertEqual([reported["watch_poll_reached"].id, reported["handoff_observation_reached"].id],
+                         [argument.id for argument in calls[0].args[2:]],
+                         "evidence fields do not match the observations passed to evaluate()")
 
 
 if __name__ == "__main__":
