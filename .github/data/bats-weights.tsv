@@ -1,0 +1,137 @@
+# Per-file bats runtime in whole seconds, used by .github/scripts/shard-tests.sh
+# to balance the shards.
+#
+# Measured on macOS (the slower of the two userlands, so the weights bound both)
+# from a green main run: run 34037049929, head b2530572, 2026-09-06. Method: each
+# `ok N <desc>` line's own GitHub Actions timestamp minus the previous one,
+# attributed to the file whose `@test` block carries that description. 2179 of
+# 2198 ok-lines attributed; 3568s of the 3697s the four shards actually spent.
+#
+# This table goes stale as the suite changes, and nothing here checks that it
+# has. That is deliberate: the worst case of a stale weight is an unevenly
+# filled shard, never a missing file -- coverage is asserted separately by
+# tests/test_ci_sharding.bats and by tests.yml's manifest comparison. A file
+# absent from this table gets the table's median rather than zero, so a newly
+# added file is treated as ordinary instead of being free to pile onto one
+# shard.
+#
+# Regenerate by re-running the method above against a green run's macOS shard
+# logs. Format: <basename>\t<seconds>, tab-separated, one file per line.
+test_actas_integration.bats	122
+test_actas_lock.bats	21
+test_api.bats	34
+test_api_actas_owner.bats	17
+test_api_registrations.bats	9
+test_app_release_signing.bats	0
+test_bin_agmsg.bats	1
+test_binding_mode.bats	5
+test_boot_command.bats	5
+test_bump_app_version.bats	0
+test_bundle_core.bats	1
+test_ci_forensics.bats	0
+test_ci_sharding.bats	64
+test_ci_workflow.bats	0
+test_claims.bats	15
+test_claude_template.bats	0
+test_close_fds.bats	0
+test_cmdline_path_match.bats	2
+test_codex_bridge.bats	86
+test_codex_bridge_launcher.bats	249
+test_codex_monitor.bats	14
+test_codex_resume.bats	18
+test_codex_shim.bats	11
+test_codex_watch_failure.bats	5
+test_compat.bats	3
+test_compat_posix.bats	3
+test_config.bats	3
+test_cut_release.bats	3
+test_delivery.bats	197
+test_despawn.bats	31
+test_dispatch.bats	36
+test_doctor.bats	67
+test_endpoint_scheme.bats	1
+test_endpoint_table_node.bats	0
+test_enforced_assertions.bats	1
+test_engine_inherited_fds.bats	0
+test_export.bats	23
+test_fixture_helpers.bats	4
+test_g4_audit.bats	95
+test_g4_bootstrap.bats	19
+test_g4_ledger.bats	4
+test_g4_transition.bats	49
+test_gh_write_owner_guard.bats	32
+test_git_push_owner_guard.bats	15
+test_hash.bats	6
+test_identities.bats	6
+test_identity_path_forms.bats	6
+test_inbox.bats	27
+test_install.bats	133
+test_instance_id.bats	32
+test_jsonl_remote_sync.bats	41
+test_key.bats	47
+test_legacy_mirror.bats	7
+test_local_quoting.bats	1
+test_local_team_ids.bats	6
+test_messaging.bats	87
+test_migrate_team_store.bats	73
+test_node_resolve.bats	0
+test_pane_liveness.bats	3
+test_perf_harness.bats	13
+test_plugin_registry.bats	4
+test_pm_broker_fixture.bats	22
+test_pm_pretool_guard.bats	25
+test_printed_command_paths.bats	7
+test_reap_phase_pid.bats	0
+test_refute.bats	0
+test_registry_lock.bats	10
+test_release_ci_skip.bats	1
+test_release_dist_tag.bats	0
+test_remote.bats	272
+test_remote_curl_config_paths.bats	5
+test_remote_curl_stderr.bats	5
+test_remote_curl_stderr_get.bats	5
+test_remote_engine_start_refusal.bats	99
+test_remote_forget.bats	10
+test_remote_header_sink.bats	3
+test_remote_ready_deadline.bats	4
+test_remote_refusal.bats	11
+test_remote_setup_doc.bats	9
+test_remote_status_liveness.bats	93
+test_remote_sync.bats	94
+test_remote_sync_ca_bundle.bats	2
+test_remote_sync_driver_input.bats	1
+test_remote_sync_engine.bats	12
+test_repair_invalid_utf8.bats	17
+test_require_python3.bats	5
+test_reset.bats	2
+test_resolve_project.bats	42
+test_resurrect_panes.bats	8
+test_role_session.bats	16
+test_roster_journal.bats	82
+test_safe_dir_sync.bats	15
+test_setup.bats	1
+test_shquote.bats	0
+test_spawn.bats	265
+test_spawn_fd_guard.bats	0
+test_spawn_options.bats	15
+test_sqlite_sync_jq_binary.bats	6
+test_storage.bats	23
+test_storage_contract.bats	25
+test_sync_autostart.bats	18
+test_sync_cipher.bats	7
+test_team.bats	103
+test_team_list.bats	24
+test_team_work.bats	25
+test_team_work_audit.bats	35
+test_team_work_dispatch_migration.bats	3
+test_team_work_reconciler.bats	51
+test_team_work_state.bats	27
+test_transcript_exists.bats	2
+test_type_registry.bats	11
+test_wait_helpers.bats	30
+test_watch.bats	190
+test_watch_install_changed.bats	13
+test_watch_once.bats	33
+test_watch_ownership_log.bats	23
+test_watch_stop.bats	8
+test_windows_process_lifetime_collector.bats	0

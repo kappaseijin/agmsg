@@ -67,9 +67,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # Number of parallel bats shards per OS. The matrix and the shard helper must
-  # stay in lockstep; the stable summary job below verifies that they do.
-  SHARD_TOTAL: 4
   # The Windows legs' sqlite3, pinned three ways (#824).
   #
   # This comment used to end "one trip to chocolatey, which is the only time
@@ -204,7 +201,11 @@ jobs:
           echo "contracts_needed=$contracts_needed" >> "$GITHUB_OUTPUT"
 
   bats-shard:
-    name: bats (${{ matrix.os }} ${{ matrix.shard }}/4)
+    # No shard total in the name: the two OSes no longer split the same number
+    # of ways, so any fixed number here would be wrong for one of them. The
+    # REQUIRED check is the `bats` summary job below, not these, so renaming
+    # them costs nothing (#293).
+    name: bats (${{ matrix.os }} shard ${{ matrix.shard }})
     needs: changes
     # Run even if `changes` somehow failed/was skipped — fail open to the full
     # suite rather than leaving this REQUIRED check unreported (which would
@@ -236,9 +237,23 @@ jobs:
       # Cover both GNU (Linux) and BSD (macOS) userlands — the scripts shell out
       # to sed/stat/mktemp/ps etc. whose flags differ between them.
       fail-fast: false
+      # Shard counts differ per OS, so the matrix lists the larger one and
+      # excludes the surplus from the smaller. A literal list, not a computed
+      # one, so a broken `changes` job cannot take the whole suite down with an
+      # unevaluatable dynamic matrix.
+      #
+      # ubuntu 6, macOS 4 (#293). macOS stays at 4 until its concurrency
+      # ceiling is measured: the account has been observed running at most five
+      # macOS jobs at once, and past that a finer split queues rather than
+      # parallelises. ubuntu has no such observed ceiling.
       matrix:
         os: [ubuntu-latest, macos-latest]
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
+        exclude:
+          - os: macos-latest
+            shard: 5
+          - os: macos-latest
+            shard: 6
     steps:
       - uses: actions/checkout@v4
 
@@ -250,6 +265,12 @@ jobs:
         if: needs.changes.outputs.docs_only != 'true'
         env:
           SHARD: ${{ matrix.shard }}
+          # Resolved here rather than as a global env, so there is one place
+          # that knows each OS's total. If an `exclude` above goes missing, the
+          # surplus shard starts with a total that does not cover it and the
+          # guard below fails it loudly instead of silently running a partition
+          # nobody asked for.
+          SHARD_TOTAL: ${{ matrix.os == 'macos-latest' && 4 || 6 }}
         run: |
           set -euo pipefail
           if [ "$SHARD" -gt "$SHARD_TOTAL" ]; then
