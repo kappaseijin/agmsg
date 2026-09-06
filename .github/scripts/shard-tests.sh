@@ -12,24 +12,30 @@
 # the directory is assigned to exactly one shard, so the union of all shards is
 # always the whole suite (asserted by tests/test_ci_sharding.bats).
 #
-# Balancing is by @test count, greedy longest-processing-time first, rather
-# than by file count: the suite's files differ by more than an order of
-# magnitude in size, so splitting on names alone would leave one shard doing
-# most of the work and cap the speedup at whatever that shard costs.
+# Balancing is by measured per-file runtime in seconds, greedy longest-
+# processing-time first, rather than by file count: the suite's files differ by
+# more than an order of magnitude in cost, so splitting on names alone would
+# leave one shard doing most of the work and cap the speedup at whatever that
+# shard costs.
 #
-# Test count is a proxy for runtime, and a loose one — measured on macOS, the
-# whole suite is 860s and the count-balanced quarters (197/196/197/197 tests)
-# come out at 125s/298s/366s/71s. Per-test cost varies from ~0.0s to ~8s
-# depending on how much a file forks or waits. So the real speedup here is
-# 860s -> 366s (~2.4x), not 4x.
+# The weights live in .github/data/bats-weights.tsv (see its header for how they
+# were measured). They replace the @test count this script used through #293.
+# Count was a loose proxy for runtime -- per-test cost across the suite runs
+# ~0.0s to ~8s depending on how much a file forks or waits -- and the looseness
+# grows with the shard count, because a finer partition has less room to average
+# the error out. Projected from one green run (34037049929): at 10 shards the
+# count weight leaves 68% spread between the longest and shortest shard, and the
+# second weight leaves 0%.
 #
-# It is still the right weight to ship first. The alternative, a checked-in
-# table of measured per-file seconds, buys ~150s more but goes stale silently:
-# it would be wrong the moment the fixed `sleep`s in the suite are replaced by
-# condition polling, which is the very next CI change queued. Weights are worth
-# revisiting once runtimes stop moving. Note the floor either way is the
-# slowest single file (test_spawn.bats, 199s) — no split beats that, so the
-# ceiling on this approach is ~4.5x, not 4x-and-then-some.
+# This script's own header used to reject exactly this change, on the grounds
+# that a checked-in table "goes stale silently". The objection is real and is
+# accepted rather than answered: nothing here checks the table's freshness. What
+# makes it affordable is stated below -- a bad weight costs balance, never
+# coverage -- and the count weight was already badly balanced, so staleness is a
+# regression from nothing.
+#
+# The floor either way is the slowest single file (test_remote.bats, 272s on
+# macOS) — no split beats that.
 #
 # Whatever the weights, the property that matters is coverage, not balance: the
 # worst case of a bad weight is an unevenly filled shard, never a missing file.
@@ -127,12 +133,39 @@ case "$total" in ''|*[!0-9]*) usage ;; esac
 files="$(find "$dir" -maxdepth 1 -name '*.bats' | LC_ALL=C sort)"
 [ -n "$files" ] || { echo "${0##*/}: no .bats files under $dir" >&2; exit 1; }
 
-# Weight each file by its number of test cases. `grep -c` exits 1 on no match
-# after printing 0, which set -e would otherwise treat as fatal.
+# Measured seconds per file, keyed by basename so the lookup still resolves when
+# this script is invoked against a different tests-dir (as several of its own
+# tests do). Comment and blank lines are dropped here, once, so the per-file
+# lookup below is a plain field match.
+WEIGHTS_FILE="${BATS_WEIGHTS_FILE:-$(dirname "$0")/../data/bats-weights.tsv}"
+weights=""
+if [ -f "$WEIGHTS_FILE" ]; then
+  weights="$(grep -v '^[[:space:]]*#' "$WEIGHTS_FILE" | grep -v '^[[:space:]]*$' || true)"
+fi
+
+# The default for a file the table does not name. Median, not zero: zero would
+# let every newly added file look free and pile onto one shard. Median, not
+# mean, because the distribution is long-tailed (a handful of files carry
+# minutes while most carry seconds) and the mean would overstate a typical new
+# file by ~3x. With an even number of entries this takes the upper of the two
+# middle values, which keeps the choice deterministic without needing decimals.
+default_weight=1
+if [ -n "$weights" ]; then
+  default_weight="$(printf '%s\n' "$weights" | cut -f2 | LC_ALL=C sort -n | \
+    awk '{v[NR]=$1} END {if (NR) print v[int(NR/2)+1]; else print 1}')"
+  [ -n "$default_weight" ] || default_weight=1
+fi
+
 file_weight() {
-  local n
-  n="$(grep -c '^[[:space:]]*@test' "$1" || true)"
-  [ -n "$n" ] || n=0
+  local base n
+  base="$(basename "$1")"
+  n=""
+  if [ -n "$weights" ]; then
+    n="$(printf '%s\n' "$weights" | awk -F'\t' -v f="$base" '$1==f {print $2; exit}')"
+  fi
+  case "$n" in
+    ''|*[!0-9]*) n="$default_weight" ;;
+  esac
   printf '%s' "$n"
 }
 
