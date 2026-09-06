@@ -1,0 +1,19 @@
+name: issue253 actas evaluator controls
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - scripts/issue253_actas.py
+      - scripts/issue253_public_path.py
+      - tests/test_issue253_actas.py
+      - .github/workflows/issue253-actas-controls.yml
+permissions:
+  contents: read
+jobs:
+  actas-controls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Role boundary controls (not the fixed F/O experiment)
+        run: python3 -m unittest discover -s tests -p test_issue253_actas.py -v
