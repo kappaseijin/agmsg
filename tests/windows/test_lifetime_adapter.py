@@ -53,7 +53,7 @@ _lifetime_end() { printf 'observed=%s\\n' "$1"; }
         with tempfile.TemporaryDirectory() as temp:
             for text in (source,adapted):
                 script=Path(temp)/'case.sh'
-                script.write_text(build_case(text,'cleanup_windows_native_processes',prefix,'\ncleanup_windows_native_processes 11 22'),encoding='utf8',newline='\n')
+                script.write_text(build_case(text,'_cleanup_windows_native_processes',prefix,'\n_cleanup_windows_native_processes 11 22'),encoding='utf8',newline='\n')
                 results.append(subprocess.run([bash_executable(),'-e',script.as_posix()],env=case_env(),capture_output=True,text=True))
         original,observed=results
         self.assertEqual(original.returncode,0,original.stderr)

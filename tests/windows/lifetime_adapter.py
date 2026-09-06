@@ -59,7 +59,7 @@ def instrument(source):
     replace(wait_end,wait_end+'\n    _lifetime_end "$wait_rc" ""')
     # Restrict built-in instrumentation to the cleanup function, preserving
     # original protection/suppression and every original signal/wait command.
-    start=source.index('cleanup_windows_native_processes() {')
+    start=source.index('_cleanup_windows_native_processes() {')
     finish=source.index('\n}\n',start)+3
     block=source[start:finish]
     for variable in ('dispatcher_pid','parent_pid'):
