@@ -1,7 +1,7 @@
 ---
 type: Implementation
 title: Issue 261 explicit failure phase and parent status
-status: fixed-head-diagnostic-pending
+status: pid-correction-ci-pending
 timestamp: 2026-09-06T08:50:00+09:00
 ---
 
@@ -22,3 +22,11 @@ The parent reads the unique body's result from the packet and records the same p
 Local control packets and Bats output: `/tmp/agmsg261-controls-second/`; command log: `/tmp/agmsg261-controls-second.log`. The local version is Bash5.3.12/Bats1.14.0, so this is not the required original-version confirmation. The dedicated job must first assert Bash5.2.21/Bats1.13.0 and pass all six controls before its target/neighbour observation. No WMI/Windows collector or #262 change is included.
 
 All six local controls passed with matching parent/body phases and statuses (helper37, snapshot1, foreign-exclusion1, reap39, exit-wait41, positive0). Bash helper syntax, Python syntax and assertion baseline718 passed. Required pinned-version Ubuntu observation remains pending.
+
+## PR 267 review correction
+
+The review of `590d8b020839b7647803aef0782c66a48caf7345` identified a diagnostic-induced macOS failure: Bash 3.2 has no BASHPID and its subshell dollar-dollar value remains the parent's PID. The packet therefore failed to match the actual child returned by the parent's asynchronous launch. The earlier Ubuntu success does not establish macOS compatibility.
+
+The logger now starts a direct child `sh` and records that child's PPID as the calling shell identity. It does not use command substitution: a local Bash 3.2 control showed that `$(sh -c 'printf "%s" "$PPID"')` can observe the command-substitution shell instead. Actor and body-result identities are emitted by the same direct-child operation. A subsequent shell command preserves the caller rather than allowing final-command exec replacement.
+
+`tests/test_reap_phase_pid.bats` compares the real asynchronous PID returned by the parent with the logged actor and body identity. It runs in the normal platform shards and in the pinned Ubuntu diagnostic job. Local Bash 3.2 control command: `PATH=/tmp/agmsg267-bash32-bin:$PATH bats tests/test_reap_phase_pid.bats`; the directory contains only a `bash` symlink to `/bin/bash`. The six original phase/failure controls also run with that PATH, writing `/tmp/agmsg267-bash32-controls/`. Fixed-HEAD CI and renewed independent review remain required. Production reaper, fixture lifetime, deadlines and original-cause uncertainty are unchanged.

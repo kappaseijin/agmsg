@@ -7,6 +7,7 @@ on:
       - tests/test_codex_bridge_launcher.bats
       - tests/reap_phase_helper.bash
       - tests/reap_phase_controls.py
+      - tests/test_reap_phase_pid.bats
       - .github/workflows/issue261-diagnostic.yml
 
 permissions:
@@ -44,6 +45,8 @@ jobs:
           test "$(.ci-bats/bin/bats --version)" = 'Bats 1.13.0'
       - name: Establish failure attribution controls first
         run: python3 tests/reap_phase_controls.py --bats "$GITHUB_WORKSPACE/.ci-bats/bin/bats" --out "$RUNNER_TEMP/issue261/controls"
+      - name: Async body PID must match the parent wait identity
+        run: .ci-bats/bin/bats --tap tests/test_reap_phase_pid.bats
       - name: One target and neighbour observation after controls pass
         run: |
           set +e

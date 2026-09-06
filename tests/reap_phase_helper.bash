@@ -1,7 +1,15 @@
 # Diagnostic-only trace for the single owned/foreign launcher test (#261).
 _reap_diag_log() {
-  printf 'event=%s phase=%s rc=%s actor_pid=%s %s\n' \
-    "$1" "${_REAP_PHASE:-entry}" "$2" "${BASHPID:-$$}" "${3:-}" >> "$_REAP_PACKET"
+  # A direct child sees the actual calling shell as PPID, including Bash 3.2
+  # asynchronous bodies. Command substitution would insert another shell.
+  local log_rc
+  sh -c '
+    printf "event=%s phase=%s rc=%s actor_pid=%s %s" "$1" "$2" "$3" "$PPID" "$4"
+    if [ "$1" = body-result ]; then printf " body_pid=%s" "$PPID"; fi
+    printf "\n"
+  ' _ "$1" "${_REAP_PHASE:-entry}" "$2" "${3:-}" >> "$_REAP_PACKET"
+  log_rc=$?
+  return "$log_rc"
 }
 
 _reap_diag_phase() {
@@ -34,7 +42,7 @@ _reap_diag_helper_failed() {
 _reap_diag_exit() {
   local primary_rc="$1" cleanup_rc
   set +e
-  _reap_diag_log body-result "$primary_rc" "body_pid=${BASHPID:-$$}"
+  _reap_diag_log body-result "$primary_rc"
   cleanup
   cleanup_rc=$?
   _reap_diag_log cleanup-end "$cleanup_rc" "primary_rc=$primary_rc"
