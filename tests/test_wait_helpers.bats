@@ -67,6 +67,24 @@ setup() { load 'test_helper'; }
   [ "$wait_status" -eq 1 ]
 }
 
+@test "a wait lasts at least the timeout it was given (#291)" {
+  # The upper bound is covered next door; this is the lower one, and nothing
+  # asserted it before. `$SECONDS` steps on a boundary the caller did not
+  # choose, so `start + timeout_s` used to expire after as little as
+  # timeout_s - 1 real seconds -- a 2s wait that gave up at 1.02s, which is how
+  # #291 lost its margin. Five runs, because each one starts at a different
+  # offset into the second: the truncation shows up in whichever of them starts
+  # late in a tick, not reliably in the first.
+  local i elapsed
+  for i in 1 2 3 4 5; do
+    elapsed="$(AGMSG_TEST_WAIT_TIMEOUT_S=1 AGMSG_TEST_WAIT_POLL_S=0.05 \
+      python3 "$BATS_TEST_DIRNAME/wait_helper_elapsed.py" \
+      "$BATS_TEST_DIRNAME/test_helper.bash" "$BATS_TEST_TMPDIR/never")"
+    # Compared in hundredths: bats runs under bash, which has no floats.
+    [ "${elapsed}" -ge 100 ]
+  done
+}
+
 @test "wait_for_file: timeout is a named real-time deadline" {
   local missing="$BATS_TEST_TMPDIR/never"
   local error="$BATS_TEST_TMPDIR/wait.err" target watchdog started elapsed target_status=0
