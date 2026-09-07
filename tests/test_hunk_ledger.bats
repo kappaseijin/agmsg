@@ -384,6 +384,68 @@ mechanical_ledger() {
   grep -Eq -- "	tests/test_api_actas_owner\.bats	official" <<<"$output"
 }
 
+# A ledger of exactly the rows a test needs, written by hand. The real one is
+# 734 rows and its contents move as classification proceeds; these cases are
+# about the inheritance rule, not about any particular file's owner.
+tiny_ledger() {  # $1=out $2..=owner for each actas-lock hunk, in order
+  local out="$1"; shift
+  printf '# tiny fixture\n' > "$out"
+  local i=0 owner
+  for owner in "$@"; do
+    i=$((i + 1))
+    local disposition=port
+    [ "$owner" = official ] && disposition=adopt
+    printf 'aaaaaaaaaaaaaa%02d\tscripts/lib/actas-lock.sh\t%s\t%s\tjudged for this fixture\tnone\tneeded\tno\tarchitect\tclassified\n' \
+      "$i" "$owner" "$disposition" >> "$out"
+  done
+  printf 'bbbbbbbbbbbbbb01\ttests/test_actas_lock.bats\t\t\t\t\t\t\t\tunclassified\n' >> "$out"
+}
+
+@test "a test does not inherit from an implementation whose hunks disagree" {
+  # `owner` is decided per hunk, and a file's hunks routinely disagree --
+  # scripts/lib/actas-lock.sh carries 19 agguild and 2 official in the real
+  # ledger. Reading one owner per path keeps whichever hunk sorts last, so this
+  # test inherited `official` from two hunks out of twenty-one.
+  #
+  # The check did not notice: the rule and the check read the same collapsed
+  # value and agreed with each other. Comparing two things says whether they
+  # match, never whether either is right.
+  local ledger="$BATS_TEST_TMPDIR/disagree.tsv"
+  tiny_ledger "$ledger" agguild agguild official
+
+  run python3 "$LEDGER_TOOL" --classify-mechanical "$ledger"
+  [ "$status" -eq 0 ]
+  refute grep -Eq "	tests/test_actas_lock\.bats	(official|agguild)" <<<"$output"
+  # Named, so that "did not inherit" can be told from "no rule reached it".
+  grep -Fq -- "not inherited: scripts/lib/actas-lock.sh carries agguild/official" <<<"$output"
+}
+
+@test "a test inherits when every hunk of its implementation agrees" {
+  # The positive control for the test above: disagreement has to be what stops
+  # the inheritance, not the inheritance having stopped working.
+  local ledger="$BATS_TEST_TMPDIR/agree.tsv"
+  tiny_ledger "$ledger" agguild agguild agguild
+
+  run python3 "$LEDGER_TOOL" --classify-mechanical "$ledger"
+  [ "$status" -eq 0 ]
+  grep -Fq -- "	tests/test_actas_lock.bats	agguild	port	test follows the implementation" <<<"$output"
+  refute grep -Fq -- "not inherited" <<<"$output"
+}
+
+@test "reordering the rows does not change what is classified" {
+  # The property, not the instance. The first version of the inheritance rule
+  # read one owner per path and kept whichever hunk sorted last, so the same
+  # facts in a different order produced a different answer -- the same shape as
+  # the batch ordering that had to be corrected earlier. Pinning one wrong
+  # inheritance would leave the shape free to come back somewhere else.
+  local ledger="$BATS_TEST_TMPDIR/order.tsv"
+  tiny_ledger "$ledger" agguild agguild official
+
+  run python3 "$BATS_TEST_DIRNAME/ledger_order_property.py" "$LEDGER_TOOL" "$ledger"
+  [ "$status" -eq 0 ]
+  [ "$output" = "1" ]
+}
+
 @test "the correspondence the design counted is the one the code finds" {
   # 44 files / 211 hunks. Pinned because the number moves with the reading:
   # searching only scripts/ gives 42, and skipping the -/_ normalisation gives
