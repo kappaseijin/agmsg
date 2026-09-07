@@ -305,21 +305,36 @@ def visible_files(path, known_paths, repo, revision, cache):
     return seen, unresolved
 
 
-def _defined_at_base(name, path, repo, base_merge, cache):
-    """Whether the name already exists at the merge base, so nobody added it."""
-    text = _file_at(path, repo, base_merge, cache)
+def _defined_at_base(name, paths, repo, base_merge, cache):
+    """Whether the name already exists at the merge base, so nobody added it.
+
+    Across every file the caller can reach, not just its own. A test stubbing
+    `storage_init` defines a name that upstream already provides in
+    drivers/storage/*.sh; looking only at the stub's own file makes the stub
+    look like the origin of the name and the caller look dependent on it.
+
+    This is the general form of the shadowed-command list: there, the thing
+    being covered is an external command and cannot be read from the tree; here
+    it is an upstream function and can, so it is read rather than listed.
+    """
     quoted = re.escape(name)
-    return re.search(r'(?m)^\s*(?:function\s+)?' + quoted + r'\s*\(\)'
-                     r'|^\s*(?:export\s+|readonly\s+)?' + quoted + '=', text) is not None
+    pattern = re.compile(r'(?m)^\s*(?:function\s+)?' + quoted + r'\s*\(\)'
+                         r'|^\s*(?:export\s+|readonly\s+)?' + quoted + '=')
+    return any(pattern.search(_file_at(candidate, repo, base_merge, cache))
+               for candidate in paths)
 
 
 def depends_on_agguild(hunks, owners_by_id, repo='.', base_merge=BASE_MERGE,
                        base_fork=BASE_FORK):
     """official hunks that use a name only agguild hunks introduce.
 
-    The invariant is that the official hunks have to be applicable upstream as a
-    set: if one of them needs a name that exists only because of an agguild
-    hunk, the set does not stand on its own.
+    NOT a decision procedure for the invariant it serves. The invariant is that
+    an official hunk must not depend on an agguild one; what this finds is the
+    subset of those dependencies that show up as a name. A hunk can carry a
+    fork-only subject without borrowing a single name -- a 475-line hunk whose
+    body is a fork feature's tests reads as independent here -- so a clean run
+    means "no dependency of this shape", never "no dependency". Reading the
+    official hunks by hand stays necessary.
 
     Four narrowings, each measured against the ledger rather than reasoned about:
 
@@ -360,6 +375,14 @@ def depends_on_agguild(hunks, owners_by_id, repo='.', base_merge=BASE_MERGE,
                 unresolved.add(path)
                 reach[path] = known
         for name in sorted(used_names(body)):
+            # Only names this file could see. Environment variables are a gap:
+            # `env FOO=bar cmd` reaches a child that sourced nothing, so a
+            # cross-file variable dependency is invisible here. Modelling it was
+            # measured rather than assumed -- matching variables across files
+            # adds two false positives on the current ledger (BATS_TEST_DIRNAME,
+            # which bats itself sets) and finds nothing real, because the case
+            # that prompted it is an agguild hunk and outside this verdict.
+            # Left unmodelled, and recorded as a gap rather than closed badly.
             for definers in (functions.get(name, set()), globals_.get((path, name), set())):
                 others = definers - {hunk_id}
                 if not others or {owners_by_id.get(o) for o in others} != {'agguild'}:
@@ -378,7 +401,7 @@ def depends_on_agguild(hunks, owners_by_id, repo='.', base_merge=BASE_MERGE,
                 if name in SHADOWED_COMMANDS and all(
                         files[o].startswith('tests/') for o in others):
                     continue
-                if _defined_at_base(name, path, repo, base_merge, cache):
+                if _defined_at_base(name, reach.get(path, {path}), repo, base_merge, cache):
                     continue
                 found.append((hunk_id, path, name, sorted(others)))
                 break

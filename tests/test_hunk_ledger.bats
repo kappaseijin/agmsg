@@ -580,7 +580,7 @@ tiny_ledger() {  # $1=out $2..=owner for each actas-lock hunk, in order
 
   run $run_case no-shadow-list
   [ "$status" -eq 0 ]
-  [ "$output" = "8 mktemp,rm" ]
+  [ "$output" = "10 mktemp,rm" ]
 
   run $run_case product-shadow
   [ "$status" -eq 0 ]
@@ -605,7 +605,7 @@ tiny_ledger() {  # $1=out $2..=owner for each actas-lock hunk, in order
 
   run $run_case no-local-wins
   [ "$status" -eq 0 ]
-  [ "$output" = "1 usage" ]
+  [ "$output" = "1 json_value" ]
 }
 
 @test "the ledger, once present, covers every hunk and classifies each one" {
