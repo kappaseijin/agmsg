@@ -469,7 +469,7 @@ b777fea728fe180f	tests/test_actas_integration.bats	agguild	port	lock を直接�
 407a9982198543ed	tests/test_actas_integration.bats	agguild	port	watcher が gate を保持する間 writer が進まない旨の説明。gate 固有	none	needed	no	agmsg_architect_claude	classified
 29be27cc6aba50ca	tests/test_actas_integration.bats	agguild	port	gate の barrier の解放と強制中断の分岐。gate 固有	none	needed	no	agmsg_architect_claude	classified
 e8bf9b250ddecd05	tests/test_actas_integration.bats	agguild	port	引き継ぎ後の送信の確認。gate 試験の一部	none	needed	no	agmsg_architect_claude	classified
-68d952228373bafb	tests/test_actas_integration.bats	official	adopt	assertion 中断が子を刈り取ることの試験。一般の試験衛生	none	needed	no	agmsg_architect_claude	classified
+68d952228373bafb	tests/test_actas_integration.bats	agguild	port	assertion 中断で子を刈り取る試験。hunk の先頭 2 行が gate 試験の末尾（untrack と閉じ括弧）であり、gate の hunk 無しには適用できない	none	needed	no	agmsg_architect_claude	classified
 8b067f31a1317c9d	tests/test_actas_lock.bats								unclassified
 5d42d7cac7972617	tests/test_actas_lock.bats								unclassified
 0057991895d50013	tests/test_actas_lock.bats								unclassified
