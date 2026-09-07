@@ -452,9 +452,9 @@ b83d838477205b33	tests/fixtures/team-work-audit/open-two.json	agguild	port	fork 
 bfbb27c136873a9c	tests/fixtures/team-work-audit/open.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
 5ff26632d572dfc1	tests/helpers/g4-fixtures.bash	agguild	port	g4 の fixture ヘルパ。g4 は fork 固有の機構	none	needed	no	agmsg_architect_claude	classified
 66f85ff3a5ad01f6	tests/isolated/test_pm_pretool_guard_real_cli.sh								unclassified
-610c88653724da2e	tests/test_actas_integration.bats	official	adopt	子プロセス追跡のための試験用の継ぎ目。assertion 中断時の刈り取りは一般の試験衛生	none	needed	no	agmsg_architect_claude	classified
-efb4b50a0472388b	tests/test_actas_integration.bats	official	adopt	継ぎ目を setup が消さない理由の説明。一般の試験衛生	none	needed	no	agmsg_architect_claude	classified
-c8906bdceecd44bc	tests/test_actas_integration.bats	official	adopt	子プロセスの追跡ヘルパの定義。assertion 中断時の刈り取りのため	none	needed	no	agmsg_architect_claude	classified
+610c88653724da2e	tests/test_actas_integration.bats	agguild	port	#199 の入れ子の子プロセス用の継ぎ目を setup で受け取る。継ぎ目を使う唯一の試験（68d95）が agguild なので、上流へ出すと呼び手の無いコードになる	none	needed	no	agmsg_architect_claude	classified
+efb4b50a0472388b	tests/test_actas_integration.bats	agguild	port	同じ継ぎ目を setup で再 export する。使う試験が agguild なので上流では死んだコードになる	none	needed	no	agmsg_architect_claude	classified
+c8906bdceecd44bc	tests/test_actas_integration.bats	agguild	port	_actas_test_run_abort_child の定義。唯一の呼び手が 68d95（agguild）であり、上流へ出しても呼ばれない	none	needed	no	agmsg_architect_claude	classified
 79fdbde443fc3a21	tests/test_actas_integration.bats	agguild	port	actas-claim が初回 claim の前に runtime store を初期化する試験。gate の exit 3 契約	none	needed	no	agmsg_architect_claude	classified
 fdd5d330f21d23a7	tests/test_actas_integration.bats	agguild	port	delivery gate が unavailable のとき lock を触らない試験。gate 固有	none	needed	no	agmsg_architect_claude	classified
 d7528f17999f8f33	tests/test_actas_integration.bats	official	adopt	message DB を開けない旨のエラーが出ないことの表明。一般の表明	none	needed	no	agmsg_architect_claude	classified
