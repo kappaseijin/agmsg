@@ -565,7 +565,7 @@ de15e0f19821cbc6	tests/test_delivery.bats	official	adopt	上流の試験の後�
 669670890d35e781	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
 617cc12aab75665a	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
 44b045e353da7be7	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
-168db2d689995474	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
+168db2d689995474	tests/test_delivery.bats	agguild	port	475 行の hunk で、team-work dispatch の試験を含む。AGMSG_TEAM_WORK_DELIVERY_BIN と classificationBasis はいずれも定義が agguild	none	needed	no	agmsg_architect_claude	classified
 631178d3c7205668	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
 a52884c4ad6d82e9	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
 42fcfefc498f36d3	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
@@ -685,8 +685,8 @@ d84ae3bb80450d98	tests/test_sqlite_sync_jq_binary.bats	official	adopt	SKILL_DIR 
 51c236cdc64f16b9	tests/test_storage.bats	official	adopt	上流の試験の継ぎ目と診断の改善。runtime lock の初期化契約の確認	none	needed	no	agmsg_architect_claude	classified
 0ffd1cc21220e797	tests/test_storage.bats	official	adopt	上流の試験の継ぎ目と診断の改善。runtime lock の初期化契約の確認	none	needed	no	agmsg_architect_claude	classified
 1d293e3deec4bfa3	tests/test_storage.bats	official	adopt	上流の試験の継ぎ目と診断の改善。runtime lock の初期化契約の確認	none	needed	no	agmsg_architect_claude	classified
-100a9e6b37cc4fbe	tests/test_storage.bats	official	adopt	上流の試験の継ぎ目と診断の改善。runtime lock の初期化契約の確認	none	needed	no	agmsg_architect_claude	classified
-ce35ea4080e50c20	tests/test_storage.bats	official	adopt	上流の試験の継ぎ目と診断の改善。runtime lock の初期化契約の確認	none	needed	no	agmsg_architect_claude	classified
+100a9e6b37cc4fbe	tests/test_storage.bats	agguild	port	runtime lock の各入口が未初期化ストアを拒む試験。agmsg_runtime_lock_release_owned は上流に 0 件で、定義する storage.sh の hunk は agguild	none	needed	no	agmsg_architect_claude	classified
+ce35ea4080e50c20	tests/test_storage.bats	agguild	port	runtime locks スキーマと移行失敗時の停止の試験。agmsg_runtime_lock_release_owned に依存し、その定義は agguild	none	needed	no	agmsg_architect_claude	classified
 d0eed7941590f43c	tests/test_storage.bats	official	adopt	上流の試験の継ぎ目と診断の改善。runtime lock の初期化契約の確認	none	needed	no	agmsg_architect_claude	classified
 0ebeb9b321b397c0	tests/test_storage.bats	official	adopt	上流の試験の継ぎ目と診断の改善。runtime lock の初期化契約の確認	none	needed	no	agmsg_architect_claude	classified
 de2a5843a9e12550	tests/test_storage_contract.bats	official	adopt	SKILL_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
