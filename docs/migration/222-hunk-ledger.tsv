@@ -55,16 +55,16 @@ bc8c5d429535fa99	SKILL.md								unclassified
 347fd96241c5e0cd	SKILL.md								unclassified
 770990f4230f8250	app/README.md								unclassified
 947f0879b6937804	app/scripts/bundle-core.sh								unclassified
-6df64886ccde3dd6	docs/actas.md								unclassified
-fd4d849c1818cfb7	docs/actas.md								unclassified
-dc0f382789e91879	docs/actas.md								unclassified
-fe741d7ad82448d9	docs/actas.md								unclassified
-5e4c5c933df38e1b	docs/actas.md								unclassified
-523ee448986f2bdc	docs/actas.md								unclassified
+6df64886ccde3dd6	docs/actas.md	agguild	port	全登録 (team, name) の pair ごとに排他ロックを取る旨の説明。fork の全チーム pair 解決	none	needed	no	agmsg_architect_claude	classified
+fd4d849c1818cfb7	docs/actas.md	agguild	port	active-name watcher が全チームの pair 集合を使う旨の説明。fork の全チーム pair 解決	none	needed	no	agmsg_architect_claude	classified
+dc0f382789e91879	docs/actas.md	agguild	port	drop が残る全チームのロックを解放する旨の説明。fork の全チーム pair 解決	none	needed	no	agmsg_architect_claude	classified
+fe741d7ad82448d9	docs/actas.md	agguild	port	actas 後に全登録チームの同名へ絞られる旨の説明。fork の全チーム pair 解決	none	needed	no	agmsg_architect_claude	classified
+5e4c5c933df38e1b	docs/actas.md	agguild	port	Codex では全チームロックを取らない旨の説明。fork の全チーム pair 解決の適用範囲	none	needed	no	agmsg_architect_claude	classified
+523ee448986f2bdc	docs/actas.md	agguild	port	watch-once.sh --name が同じ全チーム解決を使う旨の説明。fork の全チーム pair 解決	none	needed	no	agmsg_architect_claude	classified
 711c79c432511638	docs/adr/0005-safe-scripts-dir-sync-for-install.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
-6d55a2cb08f6cfff	docs/building-on-agmsg.md								unclassified
-22e63511df135b71	docs/building-on-agmsg.md								unclassified
-b0a25e7d3d0fd09d	docs/building-on-agmsg.md								unclassified
+6d55a2cb08f6cfff	docs/building-on-agmsg.md	agguild	port	registrations resource の呼び出し例。fork の api 契約	none	needed	no	agmsg_architect_claude	classified
+22e63511df135b71	docs/building-on-agmsg.md	agguild	port	registrations が登録ごとに 1 レコードを返す旨の説明。fork の api 契約	none	needed	no	agmsg_architect_claude	classified
+b0a25e7d3d0fd09d	docs/building-on-agmsg.md	agguild	port	resource 名に registrations を足す。fork の api 契約	none	needed	no	agmsg_architect_claude	classified
 54995afacd88e329	docs/decisions/2026-08-11T121328_git-push-owner-guard.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
 3e2352994722e41a	docs/decisions/2026-08-11T124253_required-role-overlay-and-codex-profile-validation.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
 fab7b1052566e078	docs/decisions/2026-08-11T124720_scale-exporter-work-queue-boundary.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
