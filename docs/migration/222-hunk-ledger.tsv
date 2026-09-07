@@ -192,16 +192,16 @@ dfc2318680b893f5	scripts/despawn.sh								unclassified
 845ce8375f7abe3b	scripts/despawn.sh								unclassified
 e15ce555a28f6b00	scripts/despawn.sh								unclassified
 c55af21598cbef20	scripts/despawn.sh								unclassified
-6535593211f6fbe8	scripts/drivers/storage/sqlite.sh								unclassified
-250dbea6081ce1b4	scripts/drivers/storage/sqlite.sh								unclassified
-afd249817803acf9	scripts/drivers/storage/sqlite.sh								unclassified
-a0b5b84bdc42b706	scripts/drivers/storage/sqlite.sh								unclassified
-ea1f4f2b66ad37a3	scripts/drivers/storage/sqlite.sh								unclassified
-5d29bab60dfa7632	scripts/drivers/storage/sqlite.sh								unclassified
-a84a549ae8976404	scripts/drivers/storage/sqlite.sh								unclassified
-4db40bbfe92d7bef	scripts/drivers/storage/sqlite.sh								unclassified
-e088c1698d413ca3	scripts/drivers/storage/sqlite.sh								unclassified
-fc13b7aebfe35211	scripts/drivers/storage/sqlite.sh								unclassified
+6535593211f6fbe8	scripts/drivers/storage/sqlite.sh	agguild	port	lib/utf8.sh の読み込み。同ファイルと agmsg_sanitize_utf8 は上流に無い	none	needed	no	agmsg_architect_claude	classified
+250dbea6081ce1b4	scripts/drivers/storage/sqlite.sh	official	adopt	LC_ALL=C が要る理由の説明。BSD tr が不正バイト列で落ちる一般の不具合について	none	needed	no	agmsg_architect_claude	classified
+afd249817803acf9	scripts/drivers/storage/sqlite.sh	official	adopt	tr -d に LC_ALL=C を付ける。BSD tr が不正な UTF-8 で異常終了する不具合の修正	none	needed	no	agmsg_architect_claude	classified
+a0b5b84bdc42b706	scripts/drivers/storage/sqlite.sh	agguild	port	LC_ALL=C の付与と _sqlite_display_data の追加。同関数は agmsg_sanitize_utf8 を呼び単独適用不可	none	needed	no	agmsg_architect_claude	classified
+ea1f4f2b66ad37a3	scripts/drivers/storage/sqlite.sh	agguild	port	message_receipts / message_claims の作成。delivery gate 用で上流に無い	none	needed	no	agmsg_architect_claude	classified
+5d29bab60dfa7632	scripts/drivers/storage/sqlite.sh	official	adopt	初回 insert の 2>&1 を外し SQLite の stderr を原因報告へ残す。一般の正しさ	none	needed	no	agmsg_architect_claude	classified
+a84a549ae8976404	scripts/drivers/storage/sqlite.sh	agguild	port	_sqlite_data を _sqlite_display_data へ。呼び先が fork 追加で単独適用不可	none	needed	no	agmsg_architect_claude	classified
+4db40bbfe92d7bef	scripts/drivers/storage/sqlite.sh	agguild	port	storage_record_receipts の追加。delivery gate の受領記録で上流に無い	none	needed	no	agmsg_architect_claude	classified
+e088c1698d413ca3	scripts/drivers/storage/sqlite.sh	agguild	port	_sqlite_data を _sqlite_display_data へ。呼び先が fork 追加で単独適用不可	none	needed	no	agmsg_architect_claude	classified
+fc13b7aebfe35211	scripts/drivers/storage/sqlite.sh	official	adopt	JSON 抽出の tr にも LC_ALL=C を付ける。同じ不具合の残りの箇所	none	needed	no	agmsg_architect_claude	classified
 805e459ab008657d	scripts/drivers/types/claude-code/template.md								unclassified
 766f019868735fc3	scripts/drivers/types/claude-code/template.md								unclassified
 bea58ce3724ea6aa	scripts/drivers/types/claude-code/template.md								unclassified
@@ -210,16 +210,16 @@ c975d0db59ead7d3	scripts/drivers/types/claude-code/template.md								unclassifi
 df818afe46a97f47	scripts/drivers/types/claude-code/type.conf								unclassified
 bd980f8217911943	scripts/drivers/types/codex/_session-start.sh								unclassified
 97b5504ba295ce74	scripts/drivers/types/codex/codex-bridge-launcher.sh								unclassified
-0181557af436c6a9	scripts/drivers/types/codex/codex-bridge.js								unclassified
-1548e15e0c9571ee	scripts/drivers/types/codex/codex-bridge.js								unclassified
-beb0f9719d74d730	scripts/drivers/types/codex/codex-bridge.js								unclassified
-9389a9bb95cb2beb	scripts/drivers/types/codex/codex-bridge.js								unclassified
-dc0b26f5777cf569	scripts/drivers/types/codex/codex-bridge.js								unclassified
-bdba912671e40906	scripts/drivers/types/codex/codex-bridge.js								unclassified
-d9f9ae4079addfa2	scripts/drivers/types/codex/codex-bridge.js								unclassified
-4d5dee0be793891f	scripts/drivers/types/codex/codex-bridge.js								unclassified
-ae4086b9a57da4dc	scripts/drivers/types/codex/codex-bridge.js								unclassified
-95767800b43222b0	scripts/drivers/types/codex/codex-bridge.js								unclassified
+0181557af436c6a9	scripts/drivers/types/codex/codex-bridge.js	agguild	port	inlineClaims の宣言。delivery gate の inline claim で上流に無い	none	needed	no	agmsg_architect_claude	classified
+1548e15e0c9571ee	scripts/drivers/types/codex/codex-bridge.js	agguild	port	inlineClaims の受け取り。同上	none	needed	no	agmsg_architect_claude	classified
+beb0f9719d74d730	scripts/drivers/types/codex/codex-bridge.js	agguild	port	inlineClaims / releaseInlineClaims の呼び出し。上流に無い	none	needed	no	agmsg_architect_claude	classified
+9389a9bb95cb2beb	scripts/drivers/types/codex/codex-bridge.js	agguild	port	inlineClaims / releaseInlineClaims の呼び出し。上流に無い	none	needed	no	agmsg_architect_claude	classified
+dc0b26f5777cf569	scripts/drivers/types/codex/codex-bridge.js	agguild	port	ackInlineClaims の呼び出し。上流に無い	none	needed	no	agmsg_architect_claude	classified
+bdba912671e40906	scripts/drivers/types/codex/codex-bridge.js	agguild	port	inlineClaims / releaseInlineClaims の呼び出し。上流に無い	none	needed	no	agmsg_architect_claude	classified
+d9f9ae4079addfa2	scripts/drivers/types/codex/codex-bridge.js	agguild	port	戻り値を {text, claims} へ変更。claims は inline claim で単独適用不可	none	needed	no	agmsg_architect_claude	classified
+4d5dee0be793891f	scripts/drivers/types/codex/codex-bridge.js	agguild	port	ownerPrefix と claims の初期化。inline claim の所有者識別で上流に無い	none	needed	no	agmsg_architect_claude	classified
+ae4086b9a57da4dc	scripts/drivers/types/codex/codex-bridge.js	agguild	port	ackInlineClaims / releaseInlineClaims / codex_inline_turn_start。いずれも上流に無い	none	needed	no	agmsg_architect_claude	classified
+95767800b43222b0	scripts/drivers/types/codex/codex-bridge.js	agguild	port	戻り値の組み立てを {text, claims} 側へ移したことによる削除。単独適用不可	none	needed	no	agmsg_architect_claude	classified
 d0338e606834cf2c	scripts/drivers/types/codex/template.md								unclassified
 4629e4184a39560c	scripts/drivers/types/codex/type.conf								unclassified
 2236df315549c181	scripts/drivers/types/codex/type.conf								unclassified
@@ -293,16 +293,16 @@ b9674251fdd6dc04	scripts/lib/delivery-capability.sh								unclassified
 d9f0f11f6479e680	scripts/lib/g4-contract.js								unclassified
 3454953d9fd1aaff	scripts/lib/g4-ledger.js								unclassified
 23f7645245c1fd1a	scripts/lib/pm-claim.js								unclassified
-59cf5bdb2885591b	scripts/lib/registry-lock.sh								unclassified
-c7a8f3cd4fe2ccf0	scripts/lib/registry-lock.sh								unclassified
-8ed2a3266cdf9531	scripts/lib/registry-lock.sh								unclassified
-688bcd6555469a9e	scripts/lib/registry-lock.sh								unclassified
-0bea98196efec491	scripts/lib/registry-lock.sh								unclassified
-1b6d75030d937420	scripts/lib/registry-lock.sh								unclassified
-f80e83ae3d23f09c	scripts/lib/registry-lock.sh								unclassified
-4685289e9dbf5a7f	scripts/lib/registry-lock.sh								unclassified
-7eca2189f1bd18fb	scripts/lib/registry-lock.sh								unclassified
-371eb2cb3e89eb99	scripts/lib/registry-lock.sh								unclassified
+59cf5bdb2885591b	scripts/lib/registry-lock.sh	official	adopt	待ち時間の budget が holder の進捗で測られる旨の説明。参照する状態は上流の .holder のみ	none	needed	no	agmsg_architect_claude	classified
+c7a8f3cd4fe2ccf0	scripts/lib/registry-lock.sh	official	adopt	budget を待ち行列の経過時間から holder の世代進捗へ変える理由の説明。一般の正しさ	none	needed	no	agmsg_architect_claude	classified
+8ed2a3266cdf9531	scripts/lib/registry-lock.sh	official	adopt	AGMSG_LOCK_TRIES を試験専用の制御と位置づける説明。上流も試験からのみ設定していた	none	needed	no	agmsg_architect_claude	classified
+688bcd6555469a9e	scripts/lib/registry-lock.sh	official	adopt	AGMSG_LOCK_TRIES の既定 1000 を外し進捗計測用の局所変数を宣言。単独適用可	none	needed	no	agmsg_architect_claude	classified
+0bea98196efec491	scripts/lib/registry-lock.sh	official	adopt	progress_started の初期化。前 hunk の宣言と対で上流の started のみ参照	none	needed	no	agmsg_architect_claude	classified
+1b6d75030d937420	scripts/lib/registry-lock.sh	official	adopt	上流が acquire 時に書く .holder の token を読み世代の変化を進捗とする。読めない場合は進捗としない	none	needed	no	agmsg_architect_claude	classified
+f80e83ae3d23f09c	scripts/lib/registry-lock.sh	official	adopt	経過を progress_started 起点にし、max が未設定なら試行数で打ち切らない。一般の正しさ	none	needed	no	agmsg_architect_claude	classified
+4685289e9dbf5a7f	scripts/lib/registry-lock.sh	official	adopt	時間切れの理由を「holder の世代が進まなかった」と明示する。診断の改善	none	needed	no	agmsg_architect_claude	classified
+7eca2189f1bd18fb	scripts/lib/registry-lock.sh	official	adopt	試行数での打ち切りが明示的な試験制御である旨をメッセージへ足す。診断の改善	none	needed	no	agmsg_architect_claude	classified
+371eb2cb3e89eb99	scripts/lib/registry-lock.sh	official	adopt	holder の世代を読めなかった理由を stderr へ出す。握りつぶしの解消で単独適用可	none	needed	no	agmsg_architect_claude	classified
 7b0e5394db77801d	scripts/lib/resolve-project.sh								unclassified
 18d18408f3d906a9	scripts/lib/roster-contract.sh								unclassified
 d476828cede2d8f3	scripts/lib/safe-dir-sync.sh								unclassified
@@ -374,16 +374,16 @@ c5c1e0ae19bc0899	scripts/send.sh								unclassified
 26c9abebc2b405e8	scripts/session-identity.sh								unclassified
 e76cc30525e6742a	scripts/session-start.sh								unclassified
 82eb7cae71c6a1aa	scripts/session-start.sh								unclassified
-3b4eed3353661482	scripts/spawn.sh								unclassified
-fd64cbce362aee51	scripts/spawn.sh								unclassified
-bfc74431222026fa	scripts/spawn.sh								unclassified
-9e9e538175df603c	scripts/spawn.sh								unclassified
-72b2d3198b5a270a	scripts/spawn.sh								unclassified
-5cca39ffc6b0bdd7	scripts/spawn.sh								unclassified
-2fca389d7a105642	scripts/spawn.sh								unclassified
-c1c40e74e86a2e3d	scripts/spawn.sh								unclassified
-bf9149090774e23e	scripts/spawn.sh								unclassified
-66d7d02ce85d23ff	scripts/spawn.sh								unclassified
+3b4eed3353661482	scripts/spawn.sh	agguild	port	--role の usage 行。上流に --role は無い	none	needed	no	agmsg_architect_claude	classified
+fd64cbce362aee51	scripts/spawn.sh	agguild	port	ROLE / ROLE_EXPLICIT の宣言。上流に無い識別子	none	needed	no	agmsg_architect_claude	classified
+bfc74431222026fa	scripts/spawn.sh	agguild	port	--role の引数解析。上流に無いオプション	none	needed	no	agmsg_architect_claude	classified
+9e9e538175df603c	scripts/spawn.sh	agguild	port	derive_spawn_role / is_declared_vendor / is_safe_spawn_role の追加。いずれも上流に 0 件	none	needed	no	agmsg_architect_claude	classified
+72b2d3198b5a270a	scripts/spawn.sh	agguild	port	required role overlay の検証と SPAWN_PROFILE_HOME。参照する関数も環境変数も上流に 0 件	none	needed	no	agmsg_architect_claude	classified
+5cca39ffc6b0bdd7	scripts/spawn.sh	agguild	port	agmsg_spawn_options_tokens へ ROLE を渡す。ROLE は fork 追加で単独適用不可	none	needed	no	agmsg_architect_claude	classified
+2fca389d7a105642	scripts/spawn.sh	agguild	port	SPAWN_PROFILE_HOME を子プロセスへ export。同変数は上流に 0 件	none	needed	no	agmsg_architect_claude	classified
+c1c40e74e86a2e3d	scripts/spawn.sh	agguild	port	herdr で常にタブを作る分岐と label への ROLE 参照。ROLE は fork 追加	none	needed	no	agmsg_architect_claude	classified
+bf9149090774e23e	scripts/spawn.sh	agguild	port	タブを作れない場合の警告の移動。前 hunk の分岐変更に従属し単独適用不可	none	needed	no	agmsg_architect_claude	classified
+66d7d02ce85d23ff	scripts/spawn.sh	agguild	port	pane 名を label へ。label は前 hunk が導入した fork 側の変数	none	needed	no	agmsg_architect_claude	classified
 11b94ffd8dcd5644	scripts/team-work.sh								unclassified
 a5919c6a81a0b776	scripts/team.sh								unclassified
 699435d54e770773	scripts/team.sh								unclassified
