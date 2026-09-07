@@ -422,54 +422,54 @@ eac1fec1301458ba	scripts/watch.sh	agguild	port	上流に無い識別子 placed_i
 39b2292a73ffd028	scripts/whoami.sh								unclassified
 b485eafe159ececf	scripts/whoami.sh								unclassified
 847bde44ac348242	scripts/whoami.sh								unclassified
-b31a12d0fdb79d5c	tests/fixtures/g4-audit/duplicate.json								unclassified
-1f28b26644640e1d	tests/fixtures/g4-audit/empty.json								unclassified
-84222bed34599b30	tests/fixtures/g4-audit/error.json								unclassified
-5066f862aebaeebf	tests/fixtures/g4-audit/gh								unclassified
-118ef02afbd7a529	tests/fixtures/g4-audit/one-open.json								unclassified
-c4ba4fe3a54efeb9	tests/fixtures/g4-audit/pagination-failure.json								unclassified
-6bb81291ef87c2a6	tests/fixtures/g4-audit/predicate-gh-failure.json								unclassified
-5728bb8a9dba457a	tests/fixtures/g4-audit/predicate-negative.json								unclassified
-d12bda8f6273e6a8	tests/fixtures/g4-audit/predicate-positive.json								unclassified
-00d2308b98b7f94b	tests/fixtures/g4-audit/two-open-two-pages.json								unclassified
-774d2453f5feb312	tests/fixtures/g4-audit/two-open.json								unclassified
-6fb1b4264d02dcef	tests/fixtures/pane-liveness/crashed-pane.txt								unclassified
-9df8f63d7a6ea379	tests/fixtures/pane-liveness/queued-live-pane.txt								unclassified
-7ab7bcdc5f0c618c	tests/fixtures/pane-liveness/quiet-pane.txt								unclassified
-546a0f5711b56365	tests/fixtures/pane-liveness/quoted-crash-terms-pane.txt								unclassified
+b31a12d0fdb79d5c	tests/fixtures/g4-audit/duplicate.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+1f28b26644640e1d	tests/fixtures/g4-audit/empty.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+84222bed34599b30	tests/fixtures/g4-audit/error.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+5066f862aebaeebf	tests/fixtures/g4-audit/gh	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+118ef02afbd7a529	tests/fixtures/g4-audit/one-open.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+c4ba4fe3a54efeb9	tests/fixtures/g4-audit/pagination-failure.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+6bb81291ef87c2a6	tests/fixtures/g4-audit/predicate-gh-failure.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+5728bb8a9dba457a	tests/fixtures/g4-audit/predicate-negative.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+d12bda8f6273e6a8	tests/fixtures/g4-audit/predicate-positive.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+00d2308b98b7f94b	tests/fixtures/g4-audit/two-open-two-pages.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+774d2453f5feb312	tests/fixtures/g4-audit/two-open.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+6fb1b4264d02dcef	tests/fixtures/pane-liveness/crashed-pane.txt	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+9df8f63d7a6ea379	tests/fixtures/pane-liveness/queued-live-pane.txt	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+7ab7bcdc5f0c618c	tests/fixtures/pane-liveness/quiet-pane.txt	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+546a0f5711b56365	tests/fixtures/pane-liveness/quoted-crash-terms-pane.txt	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
 5bd4f78d0e3cda25	tests/fixtures/pm-broker/broker.js								unclassified
-e26486c2ada381f3	tests/fixtures/spawn_options_header_compat.yaml								unclassified
-a66b2b3146aadd07	tests/fixtures/spawn_options_header_compat_codex.tokens								unclassified
-4529d536880d7c45	tests/fixtures/spawn_options_legacy.yaml								unclassified
-0cef92b062defcee	tests/fixtures/spawn_options_legacy_claude-code.tokens								unclassified
-c9c24664b760ce47	tests/fixtures/spawn_options_legacy_codex.tokens								unclassified
+e26486c2ada381f3	tests/fixtures/spawn_options_header_compat.yaml	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+a66b2b3146aadd07	tests/fixtures/spawn_options_header_compat_codex.tokens	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+4529d536880d7c45	tests/fixtures/spawn_options_legacy.yaml	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+0cef92b062defcee	tests/fixtures/spawn_options_legacy_claude-code.tokens	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+c9c24664b760ce47	tests/fixtures/spawn_options_legacy_codex.tokens	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
 62d1041332ac5f98	tests/fixtures/team-work-audit/closed.json								unclassified
-af8aac96cae0be01	tests/fixtures/team-work-audit/complete-two-pages.json								unclassified
-90374ed9c648425a	tests/fixtures/team-work-audit/error.json								unclassified
-66f5cee74793c906	tests/fixtures/team-work-audit/gh								unclassified
-5f80f360bbb2f512	tests/fixtures/team-work-audit/incomplete-relation.json								unclassified
-b83d838477205b33	tests/fixtures/team-work-audit/open-two.json								unclassified
-bfbb27c136873a9c	tests/fixtures/team-work-audit/open.json								unclassified
-5ff26632d572dfc1	tests/helpers/g4-fixtures.bash								unclassified
+af8aac96cae0be01	tests/fixtures/team-work-audit/complete-two-pages.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+90374ed9c648425a	tests/fixtures/team-work-audit/error.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+66f5cee74793c906	tests/fixtures/team-work-audit/gh	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+5f80f360bbb2f512	tests/fixtures/team-work-audit/incomplete-relation.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+b83d838477205b33	tests/fixtures/team-work-audit/open-two.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+bfbb27c136873a9c	tests/fixtures/team-work-audit/open.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
+5ff26632d572dfc1	tests/helpers/g4-fixtures.bash	agguild	port	g4 の fixture ヘルパ。g4 は fork 固有の機構	none	needed	no	agmsg_architect_claude	classified
 66f85ff3a5ad01f6	tests/isolated/test_pm_pretool_guard_real_cli.sh								unclassified
-610c88653724da2e	tests/test_actas_integration.bats								unclassified
-efb4b50a0472388b	tests/test_actas_integration.bats								unclassified
-c8906bdceecd44bc	tests/test_actas_integration.bats								unclassified
-79fdbde443fc3a21	tests/test_actas_integration.bats								unclassified
-fdd5d330f21d23a7	tests/test_actas_integration.bats								unclassified
-d7528f17999f8f33	tests/test_actas_integration.bats								unclassified
-778cdbb442491503	tests/test_actas_integration.bats								unclassified
-0a0522279334147f	tests/test_actas_integration.bats								unclassified
-85ea9ef291940317	tests/test_actas_integration.bats								unclassified
-0b3406cc11b50eef	tests/test_actas_integration.bats								unclassified
-ca9218dd461779ae	tests/test_actas_integration.bats								unclassified
-1f78cff4446ad04c	tests/test_actas_integration.bats								unclassified
-42d0e6c72f9922fa	tests/test_actas_integration.bats								unclassified
-b777fea728fe180f	tests/test_actas_integration.bats								unclassified
-407a9982198543ed	tests/test_actas_integration.bats								unclassified
-29be27cc6aba50ca	tests/test_actas_integration.bats								unclassified
-e8bf9b250ddecd05	tests/test_actas_integration.bats								unclassified
-68d952228373bafb	tests/test_actas_integration.bats								unclassified
+610c88653724da2e	tests/test_actas_integration.bats	official	adopt	子プロセス追跡のための試験用の継ぎ目。assertion 中断時の刈り取りは一般の試験衛生	none	needed	no	agmsg_architect_claude	classified
+efb4b50a0472388b	tests/test_actas_integration.bats	official	adopt	継ぎ目を setup が消さない理由の説明。一般の試験衛生	none	needed	no	agmsg_architect_claude	classified
+c8906bdceecd44bc	tests/test_actas_integration.bats	official	adopt	子プロセスの追跡ヘルパの定義。assertion 中断時の刈り取りのため	none	needed	no	agmsg_architect_claude	classified
+79fdbde443fc3a21	tests/test_actas_integration.bats	agguild	port	actas-claim が初回 claim の前に runtime store を初期化する試験。gate の exit 3 契約	none	needed	no	agmsg_architect_claude	classified
+fdd5d330f21d23a7	tests/test_actas_integration.bats	agguild	port	delivery gate が unavailable のとき lock を触らない試験。gate 固有	none	needed	no	agmsg_architect_claude	classified
+d7528f17999f8f33	tests/test_actas_integration.bats	official	adopt	message DB を開けない旨のエラーが出ないことの表明。一般の表明	none	needed	no	agmsg_architect_claude	classified
+778cdbb442491503	tests/test_actas_integration.bats	agguild	port	共有 subscription resolver と全チーム health check を待つ旨の説明。fork の全チーム解決	none	needed	no	agmsg_architect_claude	classified
+0a0522279334147f	tests/test_actas_integration.bats	official	adopt	watch の stderr に DB を開けない旨のエラーが出ないことの表明。一般の表明	none	needed	no	agmsg_architect_claude	classified
+85ea9ef291940317	tests/test_actas_integration.bats	agguild	port	writer の引き継ぎが delivery gate を待つ試験。gate 固有	none	needed	no	agmsg_architect_claude	classified
+0b3406cc11b50eef	tests/test_actas_integration.bats	agguild	port	delivery gate の barrier 用の変数。gate 固有	none	needed	no	agmsg_architect_claude	classified
+ca9218dd461779ae	tests/test_actas_integration.bats	agguild	port	gate の barrier 到達を待つ。gate 固有	none	needed	no	agmsg_architect_claude	classified
+1f78cff4446ad04c	tests/test_actas_integration.bats	agguild	port	第2セッションの旧設定の削除。gate 試験への作り替えに伴う	none	needed	no	agmsg_architect_claude	classified
+42d0e6c72f9922fa	tests/test_actas_integration.bats	agguild	port	gate 試験の子プロセスの追跡。gate 固有	none	needed	no	agmsg_architect_claude	classified
+b777fea728fe180f	tests/test_actas_integration.bats	agguild	port	lock を直接書く旧設定の削除。gate 試験への作り替えに伴う	none	needed	no	agmsg_architect_claude	classified
+407a9982198543ed	tests/test_actas_integration.bats	agguild	port	watcher が gate を保持する間 writer が進まない旨の説明。gate 固有	none	needed	no	agmsg_architect_claude	classified
+29be27cc6aba50ca	tests/test_actas_integration.bats	agguild	port	gate の barrier の解放と強制中断の分岐。gate 固有	none	needed	no	agmsg_architect_claude	classified
+e8bf9b250ddecd05	tests/test_actas_integration.bats	agguild	port	引き継ぎ後の送信の確認。gate 試験の一部	none	needed	no	agmsg_architect_claude	classified
+68d952228373bafb	tests/test_actas_integration.bats	official	adopt	assertion 中断が子を刈り取ることの試験。一般の試験衛生	none	needed	no	agmsg_architect_claude	classified
 8b067f31a1317c9d	tests/test_actas_lock.bats								unclassified
 5d42d7cac7972617	tests/test_actas_lock.bats								unclassified
 0057991895d50013	tests/test_actas_lock.bats								unclassified
@@ -479,13 +479,13 @@ e259257277842e00	tests/test_actas_lock.bats								unclassified
 aa67f00e36e485fd	tests/test_api.bats								unclassified
 e4e7d8708d9ecd0b	tests/test_api_actas_owner.bats								unclassified
 04cd96a35cad875b	tests/test_api_registrations.bats								unclassified
-86080652faab9963	tests/test_binding_mode.bats								unclassified
-dacf29b58aebdca1	tests/test_boot_command.bats								unclassified
+86080652faab9963	tests/test_binding_mode.bats	official	adopt	SKILL_DIR の明示 export の削除。共有 setup が export するようになったことに伴う整理	none	needed	no	agmsg_architect_claude	classified
+dacf29b58aebdca1	tests/test_boot_command.bats	official	adopt	SKILL_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
 d25d3c377e4a4f3e	tests/test_bundle_core.bats								unclassified
 8fdf738b6fa675f4	tests/test_claims.bats								unclassified
-ccc29534465cc0ac	tests/test_claude_template.bats								unclassified
-c203dfa92afa71b2	tests/test_claude_template.bats								unclassified
-23de0fb8ead5854d	tests/test_claude_template.bats								unclassified
+ccc29534465cc0ac	tests/test_claude_template.bats	official	adopt	unknown と off を黙って同一視しない旨をテンプレートが述べている試験	none	needed	no	agmsg_architect_claude	classified
+c203dfa92afa71b2	tests/test_claude_template.bats	official	adopt	テンプレート内の unknown の記述の件数の確認	none	needed	no	agmsg_architect_claude	classified
+23de0fb8ead5854d	tests/test_claude_template.bats	official	adopt	unknown の記述が 2 箇所あることの診断つき確認	none	needed	no	agmsg_architect_claude	classified
 218aafe9b6879083	tests/test_codex_bridge.bats								unclassified
 7b158139ed0d5e4e	tests/test_codex_bridge.bats								unclassified
 e30bfa2a76001986	tests/test_codex_bridge.bats								unclassified
@@ -545,19 +545,19 @@ f0da4ac075eb567a	tests/test_codex_bridge_launcher.bats								unclassified
 9d401a4d1047c7fa	tests/test_codex_bridge_launcher.bats								unclassified
 353a39f4275b00e4	tests/test_codex_bridge_launcher.bats								unclassified
 29b81ad795920ff9	tests/test_codex_bridge_launcher.bats								unclassified
-047fab9fcdc7b6b7	tests/test_codex_monitor.bats								unclassified
-7fcbdc1ad7d00e3a	tests/test_codex_monitor.bats								unclassified
-f66ca546df31bc46	tests/test_codex_monitor.bats								unclassified
-0b6b8ec590f1d176	tests/test_codex_monitor.bats								unclassified
-225db530d88aae5a	tests/test_codex_monitor.bats								unclassified
-786a904a6477e5b1	tests/test_codex_monitor.bats								unclassified
-3ac6973830a2c368	tests/test_codex_resume.bats								unclassified
-9e2c135551d0a9ba	tests/test_codex_watch_failure.bats								unclassified
-7b3af6e6b84d47a5	tests/test_cut_release.bats								unclassified
-6beced1841231780	tests/test_cut_release.bats								unclassified
-6905bcc2b990990d	tests/test_cut_release.bats								unclassified
-2fc20b6e66d21647	tests/test_cut_release.bats								unclassified
-26f46703bdf548d2	tests/test_cut_release.bats								unclassified
+047fab9fcdc7b6b7	tests/test_codex_monitor.bats	official	adopt	fake codex を保留させる試験用の継ぎ目。一般の試験制御	none	needed	no	agmsg_architect_claude	classified
+7fcbdc1ad7d00e3a	tests/test_codex_monitor.bats	official	adopt	argv と pidfile の検査が妥当な POSIX 環境だけで成功させる。MSYS での一般の差異	none	needed	no	agmsg_architect_claude	classified
+f66ca546df31bc46	tests/test_codex_monitor.bats	official	adopt	中断された試験の TERM trap を解放する後始末。一般の試験衛生	none	needed	no	agmsg_architect_claude	classified
+0b6b8ec590f1d176	tests/test_codex_monitor.bats	official	adopt	pidfile から取り出した pid の検証。一般の後始末	none	needed	no	agmsg_architect_claude	classified
+225db530d88aae5a	tests/test_codex_monitor.bats	official	adopt	旧 wait_for_pid_exit 呼び出しの削除。新しい後始末と対	none	needed	no	agmsg_architect_claude	classified
+786a904a6477e5b1	tests/test_codex_monitor.bats	official	adopt	子プロセスの終了と一時ディレクトリの削除の失敗を検出する。一般の試験衛生	none	needed	no	agmsg_architect_claude	classified
+3ac6973830a2c368	tests/test_codex_resume.bats	official	adopt	SKILL_DIR と RUN_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
+9e2c135551d0a9ba	tests/test_codex_watch_failure.bats	official	adopt	watch-once の未読照会の失敗の報告の試験。対応する watch-once.sh の修正は official	none	needed	no	agmsg_architect_claude	classified
+7b3af6e6b84d47a5	tests/test_cut_release.bats	agguild	port	実 git を得るヘルパの利用。fork の push owner guard を迂回するために要る	none	needed	no	agmsg_architect_claude	classified
+6beced1841231780	tests/test_cut_release.bats	agguild	port	push を実 git で行う。fork の push owner guard の迂回	none	needed	no	agmsg_architect_claude	classified
+6905bcc2b990990d	tests/test_cut_release.bats	agguild	port	push を実 git で行う。fork の push owner guard の迂回	none	needed	no	agmsg_architect_claude	classified
+2fc20b6e66d21647	tests/test_cut_release.bats	agguild	port	PATH へ実 git のディレクトリを足す。fork の push owner guard の迂回	none	needed	no	agmsg_architect_claude	classified
+26f46703bdf548d2	tests/test_cut_release.bats	agguild	port	push を実 git で行う。fork の push owner guard の迂回	none	needed	no	agmsg_architect_claude	classified
 2b3b1a29fa419233	tests/test_delivery.bats								unclassified
 5c44c95b8f1b73ed	tests/test_delivery.bats								unclassified
 6bfb8c64908a65ba	tests/test_delivery.bats								unclassified
@@ -593,57 +593,57 @@ b1ee4a34037ac0a7	tests/test_despawn.bats								unclassified
 578ba2a4c122901b	tests/test_despawn.bats								unclassified
 29932d0b60704f66	tests/test_despawn.bats								unclassified
 c69ccec817c8d16a	tests/test_despawn.bats								unclassified
-e8ecd489fe334b16	tests/test_doctor.bats								unclassified
-1e4ab99604485f43	tests/test_doctor.bats								unclassified
-3eadf882fdd9fe1f	tests/test_doctor.bats								unclassified
-0839f4f3be26cdfa	tests/test_doctor.bats								unclassified
-1c693fb0d0145039	tests/test_fixture_helpers.bats								unclassified
+e8ecd489fe334b16	tests/test_doctor.bats	official	adopt	AGMSG_AGENT_PID の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
+1e4ab99604485f43	tests/test_doctor.bats	official	adopt	delivery.sh が unknown を報告する旨の説明。official な修正に対応	none	needed	no	agmsg_architect_claude	classified
+3eadf882fdd9fe1f	tests/test_doctor.bats	official	adopt	off と unknown が別の主張である旨の説明。official な修正に対応	none	needed	no	agmsg_architect_claude	classified
+0839f4f3be26cdfa	tests/test_doctor.bats	official	adopt	unknown の出力の確認。official な修正に対応	none	needed	no	agmsg_architect_claude	classified
+1c693fb0d0145039	tests/test_fixture_helpers.bats	agguild	port	agmsg の Git launcher を避ける fixture ヘルパの試験。fork のアカウント分離	none	needed	no	agmsg_architect_claude	classified
 dd9467975722bf87	tests/test_g4_audit.bats								unclassified
-b1ab46926e9e45ec	tests/test_g4_bootstrap.bats								unclassified
+b1ab46926e9e45ec	tests/test_g4_bootstrap.bats	agguild	port	g4 bootstrap の試験。g4 は fork 固有の機構	none	needed	no	agmsg_architect_claude	classified
 8fe1f0dd4c2b609f	tests/test_g4_ledger.bats								unclassified
-4659d94ae41f9c85	tests/test_g4_transition.bats								unclassified
+4659d94ae41f9c85	tests/test_g4_transition.bats	agguild	port	g4 transition の試験。g4 は fork 固有の機構	none	needed	no	agmsg_architect_claude	classified
 6aa2cff5b47a970a	tests/test_gh_write_owner_guard.bats								unclassified
 00925b780c695c52	tests/test_git_push_owner_guard.bats								unclassified
-7e76b1b42c162ea5	tests/test_helper.bash								unclassified
-631e34dfb69c673b	tests/test_helper.bash								unclassified
-aaa85989c76039d6	tests/test_helper.bash								unclassified
-1bbd434773c4766e	tests/test_helper.bash								unclassified
-4e50ae3bdcc62efa	tests/test_helper.bash								unclassified
-5f3e6311057504ef	tests/test_helper.bash								unclassified
-fd8fb39cd581a0ba	tests/test_helper.bash								unclassified
-9807cb47b5947388	tests/test_helper.bash								unclassified
-3b40c9f59184f745	tests/test_helper.bash								unclassified
-201aabc1433ba222	tests/test_helper.bash								unclassified
-727f6e74604df830	tests/test_helper.bash								unclassified
-f3c7ab093ce4eee2	tests/test_helper.bash								unclassified
-c718d40dad2acb92	tests/test_helper.bash								unclassified
-01180c24f310c4be	tests/test_helper.bash								unclassified
-000c7695dfcfff18	tests/test_helper.bash								unclassified
-bca8a7047c372b00	tests/test_helper.bash								unclassified
-72adc6eb38c97494	tests/test_helper.bash								unclassified
-d11442f7c06ade7f	tests/test_helper.bash								unclassified
-c414b7e9704745ff	tests/test_helper.bash								unclassified
-00eb495a9f543fcd	tests/test_helper.bash								unclassified
-561db1999a537a50	tests/test_helper.bash								unclassified
-6aa1f5ceb7ee1fa8	tests/test_helper.bash								unclassified
-0271af7ec7c68f52	tests/test_helper.bash								unclassified
+7e76b1b42c162ea5	tests/test_helper.bash	agguild	port	push owner guard の launcher を迂回して実 git を得るヘルパ。fork のアカウント分離	none	needed	no	agmsg_architect_claude	classified
+631e34dfb69c673b	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+aaa85989c76039d6	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+1bbd434773c4766e	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+4e50ae3bdcc62efa	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+5f3e6311057504ef	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+fd8fb39cd581a0ba	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+9807cb47b5947388	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+3b40c9f59184f745	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+201aabc1433ba222	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+727f6e74604df830	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+f3c7ab093ce4eee2	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+c718d40dad2acb92	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+01180c24f310c4be	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+000c7695dfcfff18	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+bca8a7047c372b00	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+72adc6eb38c97494	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+d11442f7c06ade7f	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+c414b7e9704745ff	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+00eb495a9f543fcd	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+561db1999a537a50	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+6aa1f5ceb7ee1fa8	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
+0271af7ec7c68f52	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
 0e4092e15db4f0c9	tests/test_identities.bats								unclassified
-61d9b63626251b76	tests/test_identity_path_forms.bats								unclassified
+61d9b63626251b76	tests/test_identity_path_forms.bats	official	adopt	SKILL_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
 83695b547607498c	tests/test_inbox.bats								unclassified
 a858e66c998079ee	tests/test_inbox.bats								unclassified
 5581c6cf8601206b	tests/test_inbox.bats								unclassified
 c7ada161abe6f7e5	tests/test_install.bats								unclassified
 6130b863daf4628d	tests/test_install.bats								unclassified
-349aa7254d79b953	tests/test_instance_id.bats								unclassified
-0a181bf215d99a78	tests/test_jsonl_remote_sync.bats								unclassified
-b7b6908dada6f187	tests/test_messaging.bats								unclassified
-d0fa53d42a93708e	tests/test_messaging.bats								unclassified
-b41ec2769198460d	tests/test_messaging.bats								unclassified
-93a7637a8c9d0711	tests/test_messaging.bats								unclassified
-2961a5eea5868ab2	tests/test_messaging.bats								unclassified
-e0690e1f56336b4c	tests/test_messaging.bats								unclassified
-6af0d97f1e3f4423	tests/test_messaging.bats								unclassified
-f3eb404e90fa6c3f	tests/test_migrate_team_store.bats								unclassified
+349aa7254d79b953	tests/test_instance_id.bats	official	adopt	SKILL_DIR と RUN_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
+0a181bf215d99a78	tests/test_jsonl_remote_sync.bats	official	adopt	SKILL_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
+b7b6908dada6f187	tests/test_messaging.bats	official	adopt	不正 UTF-8 の表示用イベントを仕込むヘルパ。UTF-8 の一般の不具合の試験	none	needed	no	agmsg_architect_claude	classified
+d0fa53d42a93708e	tests/test_messaging.bats	agguild	port	Queued message と未確認の表示の試験。gate の語彙	none	needed	no	agmsg_architect_claude	classified
+b41ec2769198460d	tests/test_messaging.bats	official	adopt	storage 初期化の前に不正 UTF-8 の本文を弾く試験。一般の入力検証	none	needed	no	agmsg_architect_claude	classified
+93a7637a8c9d0711	tests/test_messaging.bats	agguild	port	Queued message の表示の試験。gate の語彙	none	needed	no	agmsg_architect_claude	classified
+2961a5eea5868ab2	tests/test_messaging.bats	agguild	port	--force を前後中央のどこに置いてもよい試験。cli-options は上流に無い	none	needed	no	agmsg_architect_claude	classified
+e0690e1f56336b4c	tests/test_messaging.bats	agguild	port	message-status の JSON の試験。同コマンドは上流に無い	none	needed	no	agmsg_architect_claude	classified
+6af0d97f1e3f4423	tests/test_messaging.bats	agguild	port	receipt の無い旧 read marker を unknown とする試験。gate の receipt	none	needed	no	agmsg_architect_claude	classified
+f3eb404e90fa6c3f	tests/test_migrate_team_store.bats	official	adopt	SKILL_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
 88bb7d095f24a349	tests/test_pane_liveness.bats								unclassified
 e8e0415989ff7a63	tests/test_pm_broker_fixture.bats								unclassified
 167b2945408d8df6	tests/test_pm_pretool_guard.bats								unclassified
@@ -656,8 +656,8 @@ c64bf25c8632d354	tests/test_remote_ready_deadline.bats								unclassified
 84cb05f63431e49e	tests/test_reset.bats								unclassified
 f402311272037fa0	tests/test_resolve_project.bats								unclassified
 913650af97760b0e	tests/test_resolve_project.bats								unclassified
-95ee1053547c2b39	tests/test_resurrect_panes.bats								unclassified
-bcee95171ced4922	tests/test_role_session.bats								unclassified
+95ee1053547c2b39	tests/test_resurrect_panes.bats	official	adopt	SKILL_DIR と RUN_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
+bcee95171ced4922	tests/test_role_session.bats	official	adopt	instance-id の keying を固定する注記の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
 3e7a8fef1f04140c	tests/test_safe_dir_sync.bats								unclassified
 e1520fd7e82a6e91	tests/test_spawn.bats								unclassified
 16bf8ee911de1e5a	tests/test_spawn.bats								unclassified
@@ -690,8 +690,8 @@ ce35ea4080e50c20	tests/test_storage.bats								unclassified
 d0eed7941590f43c	tests/test_storage.bats								unclassified
 0ebeb9b321b397c0	tests/test_storage.bats								unclassified
 de2a5843a9e12550	tests/test_storage_contract.bats								unclassified
-918a728372a6b92b	tests/test_sync_autostart.bats								unclassified
-b30876199f0ec402	tests/test_sync_cipher.bats								unclassified
+918a728372a6b92b	tests/test_sync_autostart.bats	official	adopt	SKILL_DIR と RUN_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
+b30876199f0ec402	tests/test_sync_cipher.bats	official	adopt	SKILL_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
 77e99abc960bf600	tests/test_team.bats								unclassified
 4076e4431b6faa40	tests/test_team.bats								unclassified
 6f8791823e621b5a	tests/test_team.bats								unclassified
@@ -708,8 +708,8 @@ ef3cd0cfbc3f690b	tests/test_team_work.bats								unclassified
 1219e92a0d521c3d	tests/test_team_work_dispatch_migration.bats								unclassified
 2972da4e92cd3b04	tests/test_team_work_reconciler.bats								unclassified
 ee24e09701983bd1	tests/test_team_work_state.bats								unclassified
-abe318d7caecff7c	tests/test_wait_helpers.bats								unclassified
-1f16cdacfd21c699	tests/test_wait_helpers.bats								unclassified
+abe318d7caecff7c	tests/test_wait_helpers.bats	official	adopt	wait_for_pid_exit の timeout の試験。上流の待機ヘルパへの改善に対応	none	needed	no	agmsg_architect_claude	classified
+1f16cdacfd21c699	tests/test_wait_helpers.bats	official	adopt	wait_for_file の timeout が実時間の期限である試験。上流の待機ヘルパへの改善に対応	none	needed	no	agmsg_architect_claude	classified
 b8b7ac74576d64ff	tests/test_watch.bats								unclassified
 2652d2fbd89c8b6c	tests/test_watch.bats								unclassified
 ad4ee9a2f2fd1991	tests/test_watch.bats								unclassified
