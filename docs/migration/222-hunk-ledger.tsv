@@ -451,7 +451,7 @@ af8aac96cae0be01	tests/fixtures/team-work-audit/complete-two-pages.json	agguild	
 b83d838477205b33	tests/fixtures/team-work-audit/open-two.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
 bfbb27c136873a9c	tests/fixtures/team-work-audit/open.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
 5ff26632d572dfc1	tests/helpers/g4-fixtures.bash	agguild	port	g4 の fixture ヘルパ。g4 は fork 固有の機構	none	needed	no	agmsg_architect_claude	classified
-66f85ff3a5ad01f6	tests/isolated/test_pm_pretool_guard_real_cli.sh								unclassified
+66f85ff3a5ad01f6	tests/isolated/test_pm_pretool_guard_real_cli.sh	agguild	port	test follows the implementation it exercises: scripts/pm-pretool-guard					classified
 610c88653724da2e	tests/test_actas_integration.bats	agguild	port	#199 の入れ子の子プロセス用の継ぎ目を setup で受け取る。継ぎ目を使う唯一の試験（68d95）が agguild なので、上流へ出すと呼び手の無いコードになる	none	needed	no	agmsg_architect_claude	classified
 efb4b50a0472388b	tests/test_actas_integration.bats	agguild	port	同じ継ぎ目を setup で再 export する。使う試験が agguild なので上流では死んだコードになる	none	needed	no	agmsg_architect_claude	classified
 c8906bdceecd44bc	tests/test_actas_integration.bats	agguild	port	_actas_test_run_abort_child の定義。唯一の呼び手が 68d95（agguild）であり、上流へ出しても呼ばれない	none	needed	no	agmsg_architect_claude	classified
@@ -476,13 +476,13 @@ e8bf9b250ddecd05	tests/test_actas_integration.bats	agguild	port	引き継ぎ後�
 e259257277842e00	tests/test_actas_lock.bats								unclassified
 0ddc18257521ad77	tests/test_actas_lock.bats								unclassified
 980b47a20555bd96	tests/test_actas_lock.bats								unclassified
-aa67f00e36e485fd	tests/test_api.bats								unclassified
-e4e7d8708d9ecd0b	tests/test_api_actas_owner.bats								unclassified
-04cd96a35cad875b	tests/test_api_registrations.bats								unclassified
+aa67f00e36e485fd	tests/test_api.bats	agguild	port	test follows the implementation it exercises: scripts/api.sh, scripts/lib/api-actas-owner.sh, scripts/lib/api-registrations.sh					classified
+e4e7d8708d9ecd0b	tests/test_api_actas_owner.bats	agguild	port	test follows the implementation it exercises: scripts/api.sh, scripts/lib/api-actas-owner.sh					classified
+04cd96a35cad875b	tests/test_api_registrations.bats	agguild	port	test follows the implementation it exercises: scripts/api.sh, scripts/lib/api-registrations.sh					classified
 86080652faab9963	tests/test_binding_mode.bats	official	adopt	SKILL_DIR の明示 export の削除。共有 setup が export するようになったことに伴う整理	none	needed	no	agmsg_architect_claude	classified
 dacf29b58aebdca1	tests/test_boot_command.bats	official	adopt	SKILL_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
-d25d3c377e4a4f3e	tests/test_bundle_core.bats								unclassified
-8fdf738b6fa675f4	tests/test_claims.bats								unclassified
+d25d3c377e4a4f3e	tests/test_bundle_core.bats	agguild	port	test follows the implementation it exercises: app/scripts/bundle-core.sh					classified
+8fdf738b6fa675f4	tests/test_claims.bats	agguild	port	test follows the implementation it exercises: scripts/claim.sh, scripts/lib/claims.sh					classified
 ccc29534465cc0ac	tests/test_claude_template.bats	official	adopt	unknown と off を黙って同一視しない旨をテンプレートが述べている試験	none	needed	no	agmsg_architect_claude	classified
 c203dfa92afa71b2	tests/test_claude_template.bats	official	adopt	テンプレート内の unknown の記述の件数の確認	none	needed	no	agmsg_architect_claude	classified
 23de0fb8ead5854d	tests/test_claude_template.bats	official	adopt	unknown の記述が 2 箇所あることの診断つき確認	none	needed	no	agmsg_architect_claude	classified
@@ -585,25 +585,25 @@ f4f1bac4e33b4c7d	tests/test_delivery.bats								unclassified
 c28c83994206ce39	tests/test_delivery.bats								unclassified
 61e0dc11d08fe6cf	tests/test_delivery.bats								unclassified
 d88e934d4496691e	tests/test_delivery.bats								unclassified
-5031ed1d88bfab60	tests/test_despawn.bats								unclassified
-bed8059aa09e7a3d	tests/test_despawn.bats								unclassified
-1ab3340e32b874f1	tests/test_despawn.bats								unclassified
-dfd54f892efaa9ff	tests/test_despawn.bats								unclassified
-b1ee4a34037ac0a7	tests/test_despawn.bats								unclassified
-578ba2a4c122901b	tests/test_despawn.bats								unclassified
-29932d0b60704f66	tests/test_despawn.bats								unclassified
-c69ccec817c8d16a	tests/test_despawn.bats								unclassified
+5031ed1d88bfab60	tests/test_despawn.bats	official	adopt	test follows the implementation it exercises: scripts/despawn.sh					classified
+bed8059aa09e7a3d	tests/test_despawn.bats	official	adopt	test follows the implementation it exercises: scripts/despawn.sh					classified
+1ab3340e32b874f1	tests/test_despawn.bats	official	adopt	test follows the implementation it exercises: scripts/despawn.sh					classified
+dfd54f892efaa9ff	tests/test_despawn.bats	official	adopt	test follows the implementation it exercises: scripts/despawn.sh					classified
+b1ee4a34037ac0a7	tests/test_despawn.bats	official	adopt	test follows the implementation it exercises: scripts/despawn.sh					classified
+578ba2a4c122901b	tests/test_despawn.bats	official	adopt	test follows the implementation it exercises: scripts/despawn.sh					classified
+29932d0b60704f66	tests/test_despawn.bats	official	adopt	test follows the implementation it exercises: scripts/despawn.sh					classified
+c69ccec817c8d16a	tests/test_despawn.bats	official	adopt	test follows the implementation it exercises: scripts/despawn.sh					classified
 e8ecd489fe334b16	tests/test_doctor.bats	official	adopt	AGMSG_AGENT_PID の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
 1e4ab99604485f43	tests/test_doctor.bats	official	adopt	delivery.sh が unknown を報告する旨の説明。official な修正に対応	none	needed	no	agmsg_architect_claude	classified
 3eadf882fdd9fe1f	tests/test_doctor.bats	official	adopt	off と unknown が別の主張である旨の説明。official な修正に対応	none	needed	no	agmsg_architect_claude	classified
 0839f4f3be26cdfa	tests/test_doctor.bats	official	adopt	unknown の出力の確認。official な修正に対応	none	needed	no	agmsg_architect_claude	classified
 1c693fb0d0145039	tests/test_fixture_helpers.bats	agguild	port	agmsg の Git launcher を避ける fixture ヘルパの試験。fork のアカウント分離	none	needed	no	agmsg_architect_claude	classified
-dd9467975722bf87	tests/test_g4_audit.bats								unclassified
+dd9467975722bf87	tests/test_g4_audit.bats	agguild	port	test follows the implementation it exercises: scripts/lib/g4-audit.js					classified
 b1ab46926e9e45ec	tests/test_g4_bootstrap.bats	agguild	port	g4 bootstrap の試験。g4 は fork 固有の機構	none	needed	no	agmsg_architect_claude	classified
-8fe1f0dd4c2b609f	tests/test_g4_ledger.bats								unclassified
+8fe1f0dd4c2b609f	tests/test_g4_ledger.bats	agguild	port	test follows the implementation it exercises: scripts/lib/g4-ledger.js					classified
 4659d94ae41f9c85	tests/test_g4_transition.bats	agguild	port	g4 transition の試験。g4 は fork 固有の機構	none	needed	no	agmsg_architect_claude	classified
-6aa2cff5b47a970a	tests/test_gh_write_owner_guard.bats								unclassified
-00925b780c695c52	tests/test_git_push_owner_guard.bats								unclassified
+6aa2cff5b47a970a	tests/test_gh_write_owner_guard.bats	agguild	port	test follows the implementation it exercises: scripts/guards/gh-write-owner-guard-launcher.sh, scripts/guards/gh-write-owner-guard.sh					classified
+00925b780c695c52	tests/test_git_push_owner_guard.bats	agguild	port	test follows the implementation it exercises: scripts/guards/git-push-owner-guard-launcher.sh, scripts/guards/git-push-owner-guard.sh					classified
 7e76b1b42c162ea5	tests/test_helper.bash	agguild	port	push owner guard の launcher を迂回して実 git を得るヘルパ。fork のアカウント分離	none	needed	no	agmsg_architect_claude	classified
 631e34dfb69c673b	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
 aaa85989c76039d6	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
@@ -627,11 +627,11 @@ c414b7e9704745ff	tests/test_helper.bash	official	adopt	上流にも在る共有�
 561db1999a537a50	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
 6aa1f5ceb7ee1fa8	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
 0271af7ec7c68f52	tests/test_helper.bash	official	adopt	上流にも在る共有試験ヘルパへの改善。timeout と診断を足す一般の試験基盤	none	needed	no	agmsg_architect_claude	classified
-0e4092e15db4f0c9	tests/test_identities.bats								unclassified
+0e4092e15db4f0c9	tests/test_identities.bats	agguild	port	test follows the implementation it exercises: scripts/identities.sh					classified
 61d9b63626251b76	tests/test_identity_path_forms.bats	official	adopt	SKILL_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
-83695b547607498c	tests/test_inbox.bats								unclassified
-a858e66c998079ee	tests/test_inbox.bats								unclassified
-5581c6cf8601206b	tests/test_inbox.bats								unclassified
+83695b547607498c	tests/test_inbox.bats	agguild	port	test follows the implementation it exercises: scripts/inbox.sh					classified
+a858e66c998079ee	tests/test_inbox.bats	agguild	port	test follows the implementation it exercises: scripts/inbox.sh					classified
+5581c6cf8601206b	tests/test_inbox.bats	agguild	port	test follows the implementation it exercises: scripts/inbox.sh					classified
 c7ada161abe6f7e5	tests/test_install.bats								unclassified
 6130b863daf4628d	tests/test_install.bats								unclassified
 349aa7254d79b953	tests/test_instance_id.bats	official	adopt	SKILL_DIR と RUN_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
@@ -644,42 +644,42 @@ b41ec2769198460d	tests/test_messaging.bats	official	adopt	storage 初期化の�
 e0690e1f56336b4c	tests/test_messaging.bats	agguild	port	message-status の JSON の試験。同コマンドは上流に無い	none	needed	no	agmsg_architect_claude	classified
 6af0d97f1e3f4423	tests/test_messaging.bats	agguild	port	receipt の無い旧 read marker を unknown とする試験。gate の receipt	none	needed	no	agmsg_architect_claude	classified
 f3eb404e90fa6c3f	tests/test_migrate_team_store.bats	official	adopt	SKILL_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
-88bb7d095f24a349	tests/test_pane_liveness.bats								unclassified
-e8e0415989ff7a63	tests/test_pm_broker_fixture.bats								unclassified
-167b2945408d8df6	tests/test_pm_pretool_guard.bats								unclassified
-5477184cfbf1b746	tests/test_remote.bats								unclassified
-ad03e6e2239a0780	tests/test_remote.bats								unclassified
-cfe1339eb8f6f090	tests/test_remote_engine_start_refusal.bats								unclassified
-c64bf25c8632d354	tests/test_remote_ready_deadline.bats								unclassified
-149e771669cab067	tests/test_remote_sync.bats								unclassified
-9d20ac91c6cafcd0	tests/test_repair_invalid_utf8.bats								unclassified
-84cb05f63431e49e	tests/test_reset.bats								unclassified
-f402311272037fa0	tests/test_resolve_project.bats								unclassified
-913650af97760b0e	tests/test_resolve_project.bats								unclassified
+88bb7d095f24a349	tests/test_pane_liveness.bats	agguild	port	test follows the implementation it exercises: scripts/pane-liveness.sh					classified
+e8e0415989ff7a63	tests/test_pm_broker_fixture.bats	agguild	port	test follows the implementation it exercises: scripts/pm-broker.js, scripts/pm-broker.sh					classified
+167b2945408d8df6	tests/test_pm_pretool_guard.bats	agguild	port	test follows the implementation it exercises: scripts/pm-pretool-guard					classified
+5477184cfbf1b746	tests/test_remote.bats	official	adopt	test follows the implementation it exercises: scripts/internal/remote-sync.mjs, scripts/remote.sh					classified
+ad03e6e2239a0780	tests/test_remote.bats	official	adopt	test follows the implementation it exercises: scripts/internal/remote-sync.mjs, scripts/remote.sh					classified
+cfe1339eb8f6f090	tests/test_remote_engine_start_refusal.bats	official	adopt	test follows the implementation it exercises: scripts/remote.sh					classified
+c64bf25c8632d354	tests/test_remote_ready_deadline.bats	official	adopt	test follows the implementation it exercises: scripts/remote.sh					classified
+149e771669cab067	tests/test_remote_sync.bats	official	adopt	test follows the implementation it exercises: scripts/internal/remote-sync.mjs, scripts/remote.sh					classified
+9d20ac91c6cafcd0	tests/test_repair_invalid_utf8.bats	official	adopt	test follows the implementation it exercises: scripts/repair-invalid-utf8.sh					classified
+84cb05f63431e49e	tests/test_reset.bats	agguild	port	test follows the implementation it exercises: scripts/reset.sh					classified
+f402311272037fa0	tests/test_resolve_project.bats	agguild	port	test follows the implementation it exercises: scripts/lib/resolve-project.sh					classified
+913650af97760b0e	tests/test_resolve_project.bats	agguild	port	test follows the implementation it exercises: scripts/lib/resolve-project.sh					classified
 95ee1053547c2b39	tests/test_resurrect_panes.bats	official	adopt	SKILL_DIR と RUN_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
 bcee95171ced4922	tests/test_role_session.bats	official	adopt	instance-id の keying を固定する注記の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
-3e7a8fef1f04140c	tests/test_safe_dir_sync.bats								unclassified
-e1520fd7e82a6e91	tests/test_spawn.bats								unclassified
-16bf8ee911de1e5a	tests/test_spawn.bats								unclassified
-e21221c143dd541a	tests/test_spawn.bats								unclassified
-16e161085649e3a1	tests/test_spawn.bats								unclassified
-67b0ff5f00fe6183	tests/test_spawn.bats								unclassified
-5f8eac43331d892b	tests/test_spawn.bats								unclassified
-36d31c35aa232d29	tests/test_spawn.bats								unclassified
-2d93f0a5f0975aea	tests/test_spawn.bats								unclassified
-fea17e2e11ec8901	tests/test_spawn.bats								unclassified
-1276196db8fd293d	tests/test_spawn.bats								unclassified
-c551d4f2d5fa982c	tests/test_spawn.bats								unclassified
-e52c16a8f12b4709	tests/test_spawn.bats								unclassified
-3e342ebdd8339d1b	tests/test_spawn.bats								unclassified
-dcf3e52c9af35d18	tests/test_spawn.bats								unclassified
-613fe3962357025e	tests/test_spawn.bats								unclassified
-6f871d4ed1edc770	tests/test_spawn.bats								unclassified
-49e88e81c9aa279e	tests/test_spawn.bats								unclassified
-b718c71e3cc63a58	tests/test_spawn_options.bats								unclassified
-377a0ec2749534fb	tests/test_spawn_options.bats								unclassified
-46fd3ebfc722971e	tests/test_spawn_options.bats								unclassified
-90b75d9e95da5af3	tests/test_spawn_options.bats								unclassified
+3e7a8fef1f04140c	tests/test_safe_dir_sync.bats	official	adopt	test follows the implementation it exercises: scripts/lib/safe-dir-sync.sh					classified
+e1520fd7e82a6e91	tests/test_spawn.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+16bf8ee911de1e5a	tests/test_spawn.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+e21221c143dd541a	tests/test_spawn.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+16e161085649e3a1	tests/test_spawn.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+67b0ff5f00fe6183	tests/test_spawn.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+5f8eac43331d892b	tests/test_spawn.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+36d31c35aa232d29	tests/test_spawn.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+2d93f0a5f0975aea	tests/test_spawn.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+fea17e2e11ec8901	tests/test_spawn.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+1276196db8fd293d	tests/test_spawn.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+c551d4f2d5fa982c	tests/test_spawn.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+e52c16a8f12b4709	tests/test_spawn.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+3e342ebdd8339d1b	tests/test_spawn.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+dcf3e52c9af35d18	tests/test_spawn.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+613fe3962357025e	tests/test_spawn.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+6f871d4ed1edc770	tests/test_spawn.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+49e88e81c9aa279e	tests/test_spawn.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+b718c71e3cc63a58	tests/test_spawn_options.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+377a0ec2749534fb	tests/test_spawn_options.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+46fd3ebfc722971e	tests/test_spawn_options.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
+90b75d9e95da5af3	tests/test_spawn_options.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
 d84ae3bb80450d98	tests/test_sqlite_sync_jq_binary.bats								unclassified
 812a1f77190e5d3c	tests/test_storage.bats								unclassified
 51c236cdc64f16b9	tests/test_storage.bats								unclassified
@@ -692,22 +692,22 @@ d0eed7941590f43c	tests/test_storage.bats								unclassified
 de2a5843a9e12550	tests/test_storage_contract.bats								unclassified
 918a728372a6b92b	tests/test_sync_autostart.bats	official	adopt	SKILL_DIR と RUN_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
 b30876199f0ec402	tests/test_sync_cipher.bats	official	adopt	SKILL_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
-77e99abc960bf600	tests/test_team.bats								unclassified
-4076e4431b6faa40	tests/test_team.bats								unclassified
-6f8791823e621b5a	tests/test_team.bats								unclassified
-a498609fe816906a	tests/test_team.bats								unclassified
-e1f388a3b27336a5	tests/test_team.bats								unclassified
-095dba2152bc9729	tests/test_team.bats								unclassified
-46701fd513630a17	tests/test_team.bats								unclassified
-ae55705b0d0f9d0b	tests/test_team.bats								unclassified
-0726bb1eab4b2063	tests/test_team.bats								unclassified
-c69c2779e2cbc57e	tests/test_team.bats								unclassified
-68d04c4537c73772	tests/test_team.bats								unclassified
-ef3cd0cfbc3f690b	tests/test_team_work.bats								unclassified
-3d5d53eeb48f4323	tests/test_team_work_audit.bats								unclassified
-1219e92a0d521c3d	tests/test_team_work_dispatch_migration.bats								unclassified
-2972da4e92cd3b04	tests/test_team_work_reconciler.bats								unclassified
-ee24e09701983bd1	tests/test_team_work_state.bats								unclassified
+77e99abc960bf600	tests/test_team.bats	agguild	port	test follows the implementation it exercises: scripts/internal/team-work-dispatch-schema.sql, scripts/internal/team-work-dispatch-triggers.sql, scripts/lib/team-work-audit.js, scripts/lib/team-work-reconciler.js, scripts/lib/team-work.js, scripts/team-work.sh, scripts/team.sh					classified
+4076e4431b6faa40	tests/test_team.bats	agguild	port	test follows the implementation it exercises: scripts/internal/team-work-dispatch-schema.sql, scripts/internal/team-work-dispatch-triggers.sql, scripts/lib/team-work-audit.js, scripts/lib/team-work-reconciler.js, scripts/lib/team-work.js, scripts/team-work.sh, scripts/team.sh					classified
+6f8791823e621b5a	tests/test_team.bats	agguild	port	test follows the implementation it exercises: scripts/internal/team-work-dispatch-schema.sql, scripts/internal/team-work-dispatch-triggers.sql, scripts/lib/team-work-audit.js, scripts/lib/team-work-reconciler.js, scripts/lib/team-work.js, scripts/team-work.sh, scripts/team.sh					classified
+a498609fe816906a	tests/test_team.bats	agguild	port	test follows the implementation it exercises: scripts/internal/team-work-dispatch-schema.sql, scripts/internal/team-work-dispatch-triggers.sql, scripts/lib/team-work-audit.js, scripts/lib/team-work-reconciler.js, scripts/lib/team-work.js, scripts/team-work.sh, scripts/team.sh					classified
+e1f388a3b27336a5	tests/test_team.bats	agguild	port	test follows the implementation it exercises: scripts/internal/team-work-dispatch-schema.sql, scripts/internal/team-work-dispatch-triggers.sql, scripts/lib/team-work-audit.js, scripts/lib/team-work-reconciler.js, scripts/lib/team-work.js, scripts/team-work.sh, scripts/team.sh					classified
+095dba2152bc9729	tests/test_team.bats	agguild	port	test follows the implementation it exercises: scripts/internal/team-work-dispatch-schema.sql, scripts/internal/team-work-dispatch-triggers.sql, scripts/lib/team-work-audit.js, scripts/lib/team-work-reconciler.js, scripts/lib/team-work.js, scripts/team-work.sh, scripts/team.sh					classified
+46701fd513630a17	tests/test_team.bats	agguild	port	test follows the implementation it exercises: scripts/internal/team-work-dispatch-schema.sql, scripts/internal/team-work-dispatch-triggers.sql, scripts/lib/team-work-audit.js, scripts/lib/team-work-reconciler.js, scripts/lib/team-work.js, scripts/team-work.sh, scripts/team.sh					classified
+ae55705b0d0f9d0b	tests/test_team.bats	agguild	port	test follows the implementation it exercises: scripts/internal/team-work-dispatch-schema.sql, scripts/internal/team-work-dispatch-triggers.sql, scripts/lib/team-work-audit.js, scripts/lib/team-work-reconciler.js, scripts/lib/team-work.js, scripts/team-work.sh, scripts/team.sh					classified
+0726bb1eab4b2063	tests/test_team.bats	agguild	port	test follows the implementation it exercises: scripts/internal/team-work-dispatch-schema.sql, scripts/internal/team-work-dispatch-triggers.sql, scripts/lib/team-work-audit.js, scripts/lib/team-work-reconciler.js, scripts/lib/team-work.js, scripts/team-work.sh, scripts/team.sh					classified
+c69c2779e2cbc57e	tests/test_team.bats	agguild	port	test follows the implementation it exercises: scripts/internal/team-work-dispatch-schema.sql, scripts/internal/team-work-dispatch-triggers.sql, scripts/lib/team-work-audit.js, scripts/lib/team-work-reconciler.js, scripts/lib/team-work.js, scripts/team-work.sh, scripts/team.sh					classified
+68d04c4537c73772	tests/test_team.bats	agguild	port	test follows the implementation it exercises: scripts/internal/team-work-dispatch-schema.sql, scripts/internal/team-work-dispatch-triggers.sql, scripts/lib/team-work-audit.js, scripts/lib/team-work-reconciler.js, scripts/lib/team-work.js, scripts/team-work.sh, scripts/team.sh					classified
+ef3cd0cfbc3f690b	tests/test_team_work.bats	agguild	port	test follows the implementation it exercises: scripts/internal/team-work-dispatch-schema.sql, scripts/internal/team-work-dispatch-triggers.sql, scripts/lib/team-work-audit.js, scripts/lib/team-work-reconciler.js, scripts/lib/team-work.js, scripts/team-work.sh, scripts/team.sh					classified
+3d5d53eeb48f4323	tests/test_team_work_audit.bats	agguild	port	test follows the implementation it exercises: scripts/lib/team-work-audit.js, scripts/lib/team-work.js, scripts/team-work.sh, scripts/team.sh					classified
+1219e92a0d521c3d	tests/test_team_work_dispatch_migration.bats	agguild	port	test follows the implementation it exercises: scripts/lib/team-work.js, scripts/team-work.sh, scripts/team.sh					classified
+2972da4e92cd3b04	tests/test_team_work_reconciler.bats	agguild	port	test follows the implementation it exercises: scripts/lib/team-work-reconciler.js, scripts/lib/team-work.js, scripts/team-work.sh, scripts/team.sh					classified
+ee24e09701983bd1	tests/test_team_work_state.bats	agguild	port	test follows the implementation it exercises: scripts/lib/team-work.js, scripts/team-work.sh, scripts/team.sh					classified
 abe318d7caecff7c	tests/test_wait_helpers.bats	official	adopt	wait_for_pid_exit の timeout の試験。上流の待機ヘルパへの改善に対応	none	needed	no	agmsg_architect_claude	classified
 1f16cdacfd21c699	tests/test_wait_helpers.bats	official	adopt	wait_for_file の timeout が実時間の期限である試験。上流の待機ヘルパへの改善に対応	none	needed	no	agmsg_architect_claude	classified
 b8b7ac74576d64ff	tests/test_watch.bats								unclassified
