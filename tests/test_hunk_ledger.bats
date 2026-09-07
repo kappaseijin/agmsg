@@ -1,0 +1,226 @@
+#!/usr/bin/env bats
+# The Issue #254 ledger's coverage check, run here because 734 rows cannot be
+# confirmed by reading. Named test_*.bats so the shard partition picks it up:
+# a check outside the discovered set never runs at all (#293).
+load test_helper
+
+LEDGER_TOOL="$BATS_TEST_DIRNAME/../scripts/internal/hunk-ledger.py"
+LEDGER_FILE="$BATS_TEST_DIRNAME/../docs/migration/222-hunk-ledger.tsv"
+
+# The contract from the design note. Pinned here on purpose: this runs in a
+# different process from whatever wrote the ledger header, which is the only
+# arrangement in which the comparison means anything. Once the ledger exists,
+# `--check` compares the header against a fresh count too, so a drift between
+# these three shows up rather than hiding.
+EXPECTED_HUNKS=734
+EXPECTED_FILES=267
+EXPECTED_DIGEST=258a1e93df7db7fe06334c5d8bb70517e96221b0ea5be9b63bd09b93a42589f1
+QUOTED_PATH_HUNK=a75398923c524cca
+
+setup() {
+  command -v python3 >/dev/null || skip "python3 unavailable"
+  REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
+  if ! git -C "$REPO" cat-file -e 3d06318 2>/dev/null; then
+    # A skip here would be indistinguishable from a pass, and the whole check
+    # would quietly stop running the moment someone trimmed the checkout depth.
+    # Locally that is a fair skip; in CI it is the failure worth reporting.
+    if [ -n "${CI:-}" ]; then
+      echo "base commits absent: the checkout needs fetch-depth 0" >&2
+      return 1
+    fi
+    skip "base commits absent (shallow clone)"
+  fi
+}
+
+emit_header() { python3 "$LEDGER_TOOL" --repo "$REPO" --emit-header; }
+emit_rows() { python3 "$LEDGER_TOOL" --repo "$REPO" --emit-rows; }
+
+@test "the fixed bases still count the hunks the design note contracted for" {
+  run emit_header
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"expected-hunks: $EXPECTED_HUNKS"* ]]
+  [[ "$output" == *"expected-files: $EXPECTED_FILES"* ]]
+  [[ "$output" == *"expected-digest: $EXPECTED_DIGEST"* ]]
+}
+
+@test "the digest matches the shell one-liner the design note publishes" {
+  # A second implementation of the same byte-level spec. If the spec and the
+  # generator ever disagree, whoever recomputes by hand gets a different number
+  # than CI does, which is the failure this pins.
+  local shell_digest
+  shell_digest="$(emit_rows | cut -f1 | LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1)"
+  [ "$shell_digest" = "$EXPECTED_DIGEST" ]
+}
+
+@test "a non-ASCII path parses and keeps its known id" {
+  # core.quotePath=true would rewrite this path and change its id, so the
+  # canonical command pins the setting; this is the row that would notice.
+  run emit_rows
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$QUOTED_PATH_HUNK	docs/decisions/2026-08-17T060000_codex"* ]]
+}
+
+@test "rule 4.5 refuses a hunk whose body disagrees with its own header" {
+  # The rule exists because two independent implementations agreed on a wrong
+  # answer: both followed a spec that collected one line too many. Body length
+  # against the declared length needs no second implementation to check.
+  local bad="$BATS_TEST_TMPDIR/bad.diff"
+  printf 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -0,0 +1,2 @@\n+one\n' > "$bad"
+  run python3 - "$LEDGER_TOOL" "$bad" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('hl', sys.argv[1])
+hl = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(hl)
+try:
+    hl.enumerate_hunks(open(sys.argv[2]).read())
+except hl.LedgerError as error:
+    print(error)
+    sys.exit(3)
+sys.exit(0)
+PY
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"rule 4.5"* ]]
+  [[ "$output" == *"declares 2 lines, body has 1"* ]]
+}
+
+@test "rule 1 refuses a diff --git line it cannot take a path from" {
+  local bad="$BATS_TEST_TMPDIR/nopath.diff"
+  printf 'diff --git "a/x" "b/x"\n@@ -0,0 +1 @@\n+one\n' > "$bad"
+  run python3 - "$LEDGER_TOOL" "$bad" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('hl', sys.argv[1])
+hl = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(hl)
+try:
+    hl.enumerate_hunks(open(sys.argv[2]).read())
+except hl.LedgerError as error:
+    print(error)
+    sys.exit(3)
+sys.exit(0)
+PY
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"rule 1"* ]]
+}
+
+@test "rules the current bases never exercise are reported when they appear" {
+  # `\ No newline at end of file` and renames appear zero times at these bases,
+  # so the spec for them has never been run. Rather than trusting a note to be
+  # read later, their first appearance stops the check.
+  local sample="$BATS_TEST_TMPDIR/unexercised.diff"
+  printf 'diff --git a/x b/x\nrename from y\n@@ -0,0 +1 @@\n+one\n\\ No newline at end of file\n' > "$sample"
+  run python3 - "$LEDGER_TOOL" "$sample" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('hl', sys.argv[1])
+hl = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(hl)
+_, unexercised = hl.enumerate_hunks(open(sys.argv[2]).read())
+print(len(unexercised))
+PY
+  [ "$status" -eq 0 ]
+  [ "$output" = "2" ]
+}
+
+@test "an unpinned git setting moves the count rather than passing quietly" {
+  # The design note admits it cannot enumerate every setting that changes a
+  # partition, and argues the residue is absorbed: whatever the unknown key is,
+  # it moves the count or the digest, and the comparison fails. These two keys
+  # are the evidence for that argument, not a list of keys that are handled.
+  #
+  # GIT_CONFIG_COUNT is used rather than `git config` so nothing is written to a
+  # repository other tests are reading at the same time.
+  run env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.bigFileThreshold GIT_CONFIG_VALUE_0=1k \
+    python3 "$LEDGER_TOOL" --repo "$REPO" --emit-header
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"expected-hunks: $EXPECTED_HUNKS"* ]]
+  [[ "$output" != *"expected-digest: $EXPECTED_DIGEST"* ]]
+}
+
+@test "an attributes file that marks a tracked file binary moves the count too" {
+  local attrs="$BATS_TEST_TMPDIR/attributes"
+  printf 'uninstall.sh binary\n' > "$attrs"
+  run env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.attributesFile GIT_CONFIG_VALUE_0="$attrs" \
+    python3 "$LEDGER_TOOL" --repo "$REPO" --emit-header
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"expected-hunks: $EXPECTED_HUNKS"* ]]
+  [[ "$output" != *"expected-digest: $EXPECTED_DIGEST"* ]]
+}
+
+@test "a setting that breaks path parsing stops instead of guessing" {
+  # diff.noprefix removes the `a/`/`b/` prefixes the path rule reads. Rule 1
+  # refuses rather than carrying the previous path forward or using an empty
+  # one -- both of which two implementations actually did, producing two
+  # different digests from the same spec.
+  run env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.noprefix GIT_CONFIG_VALUE_0=true \
+    python3 "$LEDGER_TOOL" --repo "$REPO" --emit-header
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"rule 1"* ]]
+}
+
+# A complete, classified ledger built from the current bases. The real one is a
+# separate task (#254); these tests need something to mutate, and building it
+# here keeps them honest about what `--check` does before that lands.
+build_ledger() {
+  local out="$1"
+  emit_header > "$out"
+  emit_rows | awk -F'\t' 'BEGIN{OFS="\t"} {print $1,$2,"pool","port","placeholder","none","needed","no","worker","classified"}' >> "$out"
+}
+
+@test "a complete ledger passes, and each way of breaking it is named once" {
+  local ledger="$BATS_TEST_TMPDIR/ledger.tsv" broken="$BATS_TEST_TMPDIR/broken.tsv"
+  build_ledger "$ledger"
+
+  # Positive control first. A check that reported these mutations while also
+  # rejecting the intact ledger would be reporting nothing (the design note
+  # records exactly that happening to an earlier draft).
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$ledger"
+  [ "$status" -eq 0 ]
+
+  local first
+  first="$(grep -v '^#' "$ledger" | head -1 | cut -f1)"
+
+  grep -v "^$first	" "$ledger" > "$broken"
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"{'missing': 1}"* ]]
+  [[ "$output" == *"missing: $first"* ]]
+
+  cp "$ledger" "$broken"
+  printf 'deadbeefdeadbeef\tno/such/file\tpool\tport\tp\tnone\tneeded\tno\tworker\tclassified\n' >> "$broken"
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"{'stale': 1}"* ]]
+
+  awk -F'\t' -v id="$first" 'BEGIN{OFS="\t"} $1==id{$3=""} {print}' "$ledger" > "$broken"
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"{'unclassified': 1}"* ]]
+
+  awk -F'\t' -v id="$first" 'BEGIN{OFS="\t"} $1==id{$2="wrong/path"} {print}' "$ledger" > "$broken"
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"{'path-mismatch': 1}"* ]]
+
+  cp "$ledger" "$broken"
+  grep "^$first	" "$ledger" >> "$broken"
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"{'duplicate': 1}"* ]]
+}
+
+@test "a header that disagrees with a fresh count is rejected" {
+  # The reason the header is emitted rather than typed: a hand-edited header
+  # records what someone believed, and only a separate count disagrees with it.
+  local ledger="$BATS_TEST_TMPDIR/hdr.tsv" broken="$BATS_TEST_TMPDIR/hdr-broken.tsv"
+  build_ledger "$ledger"
+  sed 's/^# expected-hunks: .*/# expected-hunks: 484/' "$ledger" > "$broken"
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"{'header-mismatch': 1}"* ]]
+  [[ "$output" == *"expected-hunks"* ]]
+}
+
+@test "the ledger, once present, covers every hunk and classifies each one" {
+  [ -f "$LEDGER_FILE" ] || skip "ledger not generated yet (worker task, Issue #254)"
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$LEDGER_FILE"
+  [ "$status" -eq 0 ]
+}
