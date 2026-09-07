@@ -191,6 +191,31 @@ def implementations_for(test_path, paths):
     return sorted(found)
 
 
+UNCLASSIFIED = ''
+
+
+def owners_by_path(rows):
+    """path -> the set of owner values its hunks carry, blanks included.
+
+    A set, not a value. `owner` is decided per hunk, and a file's hunks
+    routinely disagree: `scripts/lib/actas-lock.sh` carries 19 agguild and 2
+    official. Collapsing that to one value per path -- which a `{path: owner}`
+    comprehension does silently, keeping whichever hunk came last -- makes a
+    file look uniformly owned by its final hunk, and any test following it
+    inherits that. Nothing catches it afterwards: the rule and the check read
+    the same collapsed value, agree with each other, and report no mismatch.
+
+    Blanks are kept rather than dropped. A file with seven agguild hunks and
+    three nobody has looked at is not an agguild file yet: the three are unknown,
+    not agreeing, and deciding on the seven means the answer can be overturned
+    later by the other three.
+    """
+    found = {}
+    for row in rows:
+        found.setdefault(row['path'], set()).add(row['owner'])
+    return found
+
+
 def mechanical_rule(path, owners_by_path):
     """(owner, disposition, rationale) where a rule decides it, else None.
 
@@ -203,15 +228,17 @@ def mechanical_rule(path, owners_by_path):
         return 'agguild', 'port', FORK_RECORD_RATIONALE
     if is_test_path(path):
         implementations = implementations_for(path, owners_by_path)
-        owners = {owners_by_path.get(i) for i in implementations} & OWNERS
-        # One classified implementation, or several that agree. Several that
-        # disagree is not a tie to break: the rule says a test follows its
-        # implementation, and which one that is has stopped being mechanical.
-        if len(owners) == 1:
+        owners = set()
+        for implementation in implementations:
+            owners |= owners_by_path.get(implementation, {UNCLASSIFIED})
+        # One owner across every hunk of every implementation this test points
+        # at, and every one of those hunks classified. Two owners is not a tie
+        # to break, and an unclassified hunk is not a vote for the majority: in
+        # both cases which owner to follow has stopped being mechanical.
+        if len(owners) == 1 and owners <= OWNERS:
             owner = owners.pop()
             disposition = 'adopt' if owner == 'official' else 'port'
-            return owner, disposition, TEST_INHERIT_RATIONALE + ', '.join(
-                i for i in implementations if owners_by_path.get(i) == owner)
+            return owner, disposition, TEST_INHERIT_RATIONALE + ', '.join(implementations)
     return None
 
 
@@ -285,7 +312,7 @@ def classify_mechanical(ledger_path):
     lines, rows, malformed = read_rows(ledger_path)
     if malformed:
         raise LedgerError(f'{len(malformed)} malformed row(s); run --check first')
-    owners = {row['path']: row['owner'] for row in rows}
+    owners = owners_by_path(rows)
     filled = 0
     by_id = {}
     for row in rows:
@@ -299,6 +326,18 @@ def classify_mechanical(ledger_path):
         row['status'] = 'classified'
         by_id[row['hunk_id']] = row
         filled += 1
+    # Why each test that could have inherited did not. Three different things
+    # look identical in the ledger -- one implementation internally split, two
+    # implementations disagreeing, hunks nobody has judged yet -- and the row is
+    # blank in all three. The counts alone do not say what to do next.
+    blocked = {}
+    for path in sorted({row['path'] for row in rows if is_test_path(row['path'])}):
+        if mechanical_rule(path, owners) is not None:
+            continue
+        seen = {i: sorted(v or '(unclassified)' for v in owners.get(i, {UNCLASSIFIED}))
+                for i in implementations_for(path, owners)}
+        if seen:
+            blocked[path] = seen
     out = []
     for line in lines:
         if line.startswith('#'):
@@ -308,7 +347,7 @@ def classify_mechanical(ledger_path):
             continue
         row = by_id.get(line.split('\t')[0])
         out.append('\t'.join(row[column] for column in COLUMNS) if row else line)
-    return out, filled
+    return out, filled, blocked
 
 
 def parse_header(lines):
@@ -393,7 +432,7 @@ def check(ledger_path, repo='.', base_merge=BASE_MERGE, base_fork=BASE_FORK):
         if row['rationale'] and len(row['rationale']) < MIN_RATIONALE:
             add('rationale-too-short', f"{hunk_id} rationale={row['rationale']!r}")
 
-    owners = {row['path']: row['owner'] for row in rows.values()}
+    owners = owners_by_path(rows.values())
     for hunk_id, row in sorted(rows.items()):
         if hunk_id not in actual:
             continue
@@ -477,9 +516,15 @@ def main(argv=None):
                 print('\t'.join((hunk_id, path) + BLANK_ROW))
             return 0
         if args.classify_mechanical:
-            out, filled = classify_mechanical(args.classify_mechanical)
+            out, filled, split = classify_mechanical(args.classify_mechanical)
             print('\n'.join(out))
             print(f'classified {filled} row(s) by rule', file=sys.stderr)
+            for path, seen in sorted(split.items()):
+                # Named, not counted: a test that did not inherit is indis-
+                # tinguishable from one no rule reached unless the reason is
+                # readable somewhere.
+                detail = '; '.join(f'{i} carries {"/".join(v)}' for i, v in sorted(seen.items()))
+                print(f'  not inherited: {path} <- {detail}', file=sys.stderr)
             return 0
         if args.check:
             findings, notes = check(args.check, args.repo, args.base_merge, args.base_fork)
