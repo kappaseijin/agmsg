@@ -200,10 +200,15 @@ build_ledger() {
   [ "$status" -eq 1 ]
   grep -Fq -- "{'stale': 1}" <<<"$output"
 
-  awk -F'\t' -v id="$first" 'BEGIN{OFS="\t"} $1==id{$3=""} {print}' "$ledger" > "$broken"
+  awk -F'\t' -v id="$first" 'BEGIN{OFS="\t"} $1==id{$3="offical"} {print}' "$ledger" > "$broken"
   run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
   [ "$status" -eq 1 ]
-  grep -Fq -- "{'unclassified': 1}" <<<"$output"
+  grep -Fq -- "{'invalid-owner': 1}" <<<"$output"
+
+  awk -F'\t' -v id="$first" 'BEGIN{OFS="\t"} $1==id{$4="portt"} {print}' "$ledger" > "$broken"
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
+  [ "$status" -eq 1 ]
+  grep -Fq -- "{'invalid-disposition': 1}" <<<"$output"
 
   awk -F'\t' -v id="$first" 'BEGIN{OFS="\t"} $1==id{$2="wrong/path"} {print}' "$ledger" > "$broken"
   run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
@@ -217,11 +222,12 @@ build_ledger() {
   grep -Fq -- "{'duplicate': 1}" <<<"$output"
 }
 
-@test "a freshly generated ledger is unclassified, not malformed" {
-  # The two are different states in the design, and only one of them is a
-  # defect. `--emit-rows` used to write two columns, so the ledger a person had
-  # just generated came back as 734 malformed rows -- which reads as "the file
-  # is broken" rather than "nobody has classified these yet".
+@test "a freshly generated ledger passes the check and only fails the gate" {
+  # An empty column means nobody has classified that row yet. That is the state
+  # the design starts every row in, so reporting it would keep CI red for the
+  # whole classification period -- the exact thing splitting check from gate was
+  # for. A wrong value in that column is a different thing, and the check keeps
+  # it (see the invalid-owner/invalid-disposition rows next door).
   local fresh="$BATS_TEST_TMPDIR/fresh.tsv"
   emit_header > "$fresh"
   emit_rows >> "$fresh"
@@ -230,9 +236,15 @@ build_ledger() {
   [ "$columns" -eq 10 ]
 
   run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$fresh"
+  [ "$status" -eq 0 ]
+
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --gate "$fresh"
   [ "$status" -eq 1 ]
-  grep -Fq -- "'unclassified': 734" <<<"$output"
-  refute grep -Fq -- "malformed" <<<"$output"
+  # The judgment key, not the bare word: every not-verified row carries
+  # `status=unclassified` in its detail line, so matching the word alone passes
+  # even when the empty-column check has been removed entirely (measured).
+  grep -Fq -- "'unclassified':" <<<"$output"
+  grep -Fq -- "'not-verified':" <<<"$output"
 }
 
 @test "a row with the wrong number of columns is still malformed" {

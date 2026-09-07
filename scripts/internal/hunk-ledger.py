@@ -30,7 +30,12 @@ BASE_UPSTREAM = 'e58dbafad5a84be625f070385bb0c076c3daa4db'
 LEDGER_PATH = 'docs/migration/222-hunk-ledger.tsv'
 COLUMNS = ('hunk_id', 'path', 'owner', 'disposition', 'rationale', 'public_dep',
            'regression', 'conflict_risk', 'assignee', 'status')
+# Empty means "nobody has classified this yet", which is progress and belongs to
+# the gate. A non-empty value outside these sets is a typo or a stale vocabulary,
+# which is data and belongs to the check. Keeping that line straight is what lets
+# the check stay green while 734 rows are still being worked through.
 OWNERS = frozenset({'official', 'agguild', 'pool', 'exception'})
+DISPOSITIONS = frozenset({'adopt', 'port', 'drop'})
 STATUSES = ('unclassified', 'classified', 'verified')
 # What `--emit-rows` writes into the columns a person still has to fill in.
 # `unclassified` is the default state the design gives them, so the freshly
@@ -232,12 +237,12 @@ def check(ledger_path, repo='.', base_merge=BASE_MERGE, base_fork=BASE_FORK):
         if hunk_id not in actual:
             add('stale', f"{hunk_id} {row['path']}")
             continue
-        if row['owner'] not in OWNERS:
-            add('unclassified', f"{hunk_id} owner={row['owner'] or '(empty)'}")
-        if not row['disposition']:
-            add('no-disposition', hunk_id)
-        if row['status'] not in STATUSES:
-            add('invalid-status', f"{hunk_id} status={row['status'] or '(empty)'}")
+        if row['owner'] and row['owner'] not in OWNERS:
+            add('invalid-owner', f"{hunk_id} owner={row['owner']}")
+        if row['disposition'] and row['disposition'] not in DISPOSITIONS:
+            add('invalid-disposition', f"{hunk_id} disposition={row['disposition']}")
+        if row['status'] and row['status'] not in STATUSES:
+            add('invalid-status', f"{hunk_id} status={row['status']}")
 
     expected = {
         'base-merge': base_merge,
@@ -259,26 +264,33 @@ def check(ledger_path, repo='.', base_merge=BASE_MERGE, base_fork=BASE_FORK):
 
 
 def gate(ledger_path, repo='.', base_merge=BASE_MERGE, base_fork=BASE_FORK):
-    """Execution-gate condition 1: every row verified, on top of a passing check.
+    """Everything the check asks, plus: is the classification actually finished.
 
     Deliberately not part of `--check`. The check runs in CI from the moment the
-    ledger exists, and `unclassified` is the state the design gives every row to
-    start in -- folding this in would paint CI red for the whole classification
-    period and call a planned state a defect. The other three conditions in the
-    design's gate are not machine-readable at all, so this is one input to that
-    decision, not the decision.
+    ledger exists, and an unclassified row is the state the design gives every
+    row to start in -- folding this in would paint CI red for the whole
+    classification period and call a planned state a defect. The design's gate
+    has three further conditions that are not machine-readable at all, so this
+    is one input to that decision, not the decision.
     """
     findings, notes = check(ledger_path, repo, base_merge, base_fork)
-    unverified = []
+
+    def add(kind, detail):
+        findings.setdefault(kind, []).append(detail)
+
     with open(ledger_path, encoding='utf8') as handle:
         for line in handle.read().split('\n'):
             if line.startswith('#') or not line.strip():
                 continue
             fields = line.split('\t')
-            if len(fields) == len(COLUMNS) and fields[-1] != 'verified':
-                unverified.append(f'{fields[0]} status={fields[-1] or "(empty)"}')
-    for detail in unverified:
-        findings.setdefault('not-verified', []).append(detail)
+            if len(fields) != len(COLUMNS):
+                continue  # already reported as malformed by the check
+            row = dict(zip(COLUMNS, fields))
+            for column in ('owner', 'disposition', 'rationale'):
+                if not row[column]:
+                    add('unclassified', f"{row['hunk_id']} {column} is empty")
+            if row['status'] != 'verified':
+                add('not-verified', f"{row['hunk_id']} status={row['status'] or '(empty)'}")
     return findings, notes
 
 
