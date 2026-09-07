@@ -158,40 +158,40 @@ a8c5aca55d2fea1d	install.sh								unclassified
 33eb6e919831783c	install.sh								unclassified
 5a44366f6a6fe6ff	install.sh								unclassified
 c3785ea198c825f6	install.sh								unclassified
-960a97ebb9dd1670	scripts/actas-claim.sh								unclassified
-e1f0b71edef884dd	scripts/actas-claim.sh								unclassified
-e4d380d2a1b010de	scripts/actas-claim.sh								unclassified
-0067766b5a89380a	scripts/actas-claim.sh								unclassified
-14d2fa1e45d009de	scripts/actas-claim.sh								unclassified
-53779d1b41370377	scripts/actas-claim.sh								unclassified
-1a487cfbfd12fe79	scripts/actas-claim.sh								unclassified
-c680f057de8ba823	scripts/actas-claim.sh								unclassified
-dcb501a9456b2c28	scripts/api.sh								unclassified
-ffd11d1cc087e1ed	scripts/api.sh								unclassified
-c889909e00250a1e	scripts/api.sh								unclassified
-b079760e63d40fca	scripts/api.sh								unclassified
-adad748e17ae2a42	scripts/api.sh								unclassified
-99a52065e75031ca	scripts/api.sh								unclassified
-3e2fa87beb8bd90e	scripts/check-inbox.sh								unclassified
-41265ac3f5b6b92e	scripts/check-inbox.sh								unclassified
-a0a1a140018f3401	scripts/claim.sh								unclassified
-4480542fd7d514d9	scripts/delivery.sh								unclassified
-debb3d7b1f8763a3	scripts/delivery.sh								unclassified
-18be5274b8dd46e9	scripts/delivery.sh								unclassified
-c06684aa21630461	scripts/delivery.sh								unclassified
-4f2ea7ebe57eef91	scripts/delivery.sh								unclassified
-f1b9aabcc88ec1b1	scripts/delivery.sh								unclassified
-877410922fba7a56	scripts/delivery.sh								unclassified
-354f9059f19391d8	scripts/delivery.sh								unclassified
-0d61c3cf1247db67	scripts/despawn.sh								unclassified
-1754d655e551c56c	scripts/despawn.sh								unclassified
-86a4eb1b28952335	scripts/despawn.sh								unclassified
-1d010f9b35ebadf2	scripts/despawn.sh								unclassified
-67b3849d2212c66e	scripts/despawn.sh								unclassified
-dfc2318680b893f5	scripts/despawn.sh								unclassified
-845ce8375f7abe3b	scripts/despawn.sh								unclassified
-e15ce555a28f6b00	scripts/despawn.sh								unclassified
-c55af21598cbef20	scripts/despawn.sh								unclassified
+960a97ebb9dd1670	scripts/actas-claim.sh	agguild	port	終了コード 3 は delivery gate の status=unavailable の契約。上流に無い	none	needed	no	agmsg_architect_claude	classified
+e1f0b71edef884dd	scripts/actas-claim.sh	agguild	port	登録された全チームを引く旨の説明。fork の全チーム pair 解決に属する	none	needed	no	agmsg_architect_claude	classified
+e4d380d2a1b010de	scripts/actas-claim.sh	agguild	port	identities.sh へ --name --all-projects を渡す。どちらも上流に 0 件	none	needed	no	agmsg_architect_claude	classified
+0067766b5a89380a	scripts/actas-claim.sh	agguild	port	初期化失敗を status=unavailable と exit 3 で返す。exit 3 は gate の契約	none	needed	no	agmsg_architect_claude	classified
+14d2fa1e45d009de	scripts/actas-claim.sh	official	adopt	rollback を関数へ切り出し、失敗を握りつぶさず返す。参照は上流の actas_lock_release のみ	none	needed	no	agmsg_architect_claude	classified
+53779d1b41370377	scripts/actas-claim.sh	agguild	port	claim の終了コードを保持する。単独では読み手が無く挙動が変わらない。gate 判定と対	none	needed	no	agmsg_architect_claude	classified
+1a487cfbfd12fe79	scripts/actas-claim.sh	official	adopt	rollback の失敗を stderr で報告する。単独で適用しても挙動が変わる一般の正しさ	none	needed	no	agmsg_architect_claude	classified
+c680f057de8ba823	scripts/actas-claim.sh	agguild	port	claim 失敗時の gate 分岐と exit 3。fork の gate 契約	none	needed	no	agmsg_architect_claude	classified
+dcb501a9456b2c28	scripts/api.sh	agguild	port	registrations / actas-owner の usage 行。どちらも fork の api 契約	none	needed	no	agmsg_architect_claude	classified
+ffd11d1cc087e1ed	scripts/api.sh	agguild	port	SKILL_DIR の export。fork の api ライブラリが要求する	none	needed	no	agmsg_architect_claude	classified
+c889909e00250a1e	scripts/api.sh	agguild	port	api-registrations.sh / api-actas-owner.sh の読み込み。どちらも上流に無い	none	needed	no	agmsg_architect_claude	classified
+b079760e63d40fca	scripts/api.sh	agguild	port	usage へ registrations / actas-owner を足す。fork の api 契約	none	needed	no	agmsg_architect_claude	classified
+adad748e17ae2a42	scripts/api.sh	agguild	port	usage へ registrations / actas-owner を足す。fork の api 契約	none	needed	no	agmsg_architect_claude	classified
+99a52065e75031ca	scripts/api.sh	agguild	port	registrations / actas-owner の分岐。呼び先は fork のライブラリ	none	needed	no	agmsg_architect_claude	classified
+3e2fa87beb8bd90e	scripts/check-inbox.sh	agguild	port	lib/claims.sh の読み込み。同ファイルは上流に無い	none	needed	no	agmsg_architect_claude	classified
+41265ac3f5b6b92e	scripts/check-inbox.sh	agguild	port	storage_record_receipts の呼び出し。delivery gate の受領記録で上流に 0 件	none	needed	no	agmsg_architect_claude	classified
+a0a1a140018f3401	scripts/claim.sh	agguild	port	delivery gate の claim / release / ack コマンド。fork 固有の概念	none	needed	no	agmsg_architect_claude	classified
+4480542fd7d514d9	scripts/delivery.sh	agguild	port	--format の usage 行。JSON 出力は fork の delivery-capability に属する	none	needed	no	agmsg_architect_claude	classified
+debb3d7b1f8763a3	scripts/delivery.sh	official	adopt	off が意図を示さない旨の説明の削除。unknown 導入に伴う一般の記述整理	none	needed	no	agmsg_architect_claude	classified
+18be5274b8dd46e9	scripts/delivery.sh	official	adopt	off と unknown を区別できなかった経緯の説明の削除。一般の記述整理	none	needed	no	agmsg_architect_claude	classified
+c06684aa21630461	scripts/delivery.sh	official	adopt	settings が見つからない場合を off ではなく unknown と報告する。一般の正しさ	none	needed	no	agmsg_architect_claude	classified
+4f2ea7ebe57eef91	scripts/delivery.sh	official	adopt	settings を解決できない場合を off ではなく unknown と報告する。一般の正しさ	none	needed	no	agmsg_architect_claude	classified
+f1b9aabcc88ec1b1	scripts/delivery.sh	official	adopt	settings を読めない場合を off ではなく unknown と報告する。一般の正しさ	none	needed	no	agmsg_architect_claude	classified
+877410922fba7a56	scripts/delivery.sh	agguild	port	lib/delivery-capability.sh の読み込み。同ファイルは上流に無い	none	needed	no	agmsg_architect_claude	classified
+354f9059f19391d8	scripts/delivery.sh	agguild	port	status の --format 解析。JSON 出力は fork の capability 契約	none	needed	no	agmsg_architect_claude	classified
+0d61c3cf1247db67	scripts/despawn.sh	official	adopt	lock 状態を確認できない場合の扱いの説明。参照は上流の actas_lock_state のみ	none	needed	no	agmsg_architect_claude	classified
+1754d655e551c56c	scripts/despawn.sh	official	adopt	reset / release 失敗時に status=partial とする旨の説明。一般の正しさ	none	needed	no	agmsg_architect_claude	classified
+86a4eb1b28952335	scripts/despawn.sh	official	adopt	status_unavailable / status_partial の定義。上流の変数のみ参照	none	needed	no	agmsg_architect_claude	classified
+1d010f9b35ebadf2	scripts/despawn.sh	official	adopt	reset_status の初期化。失敗を伝播させるために必要で上流の識別子のみ	none	needed	no	agmsg_architect_claude	classified
+67b3849d2212c66e	scripts/despawn.sh	official	adopt	reset と lock release の失敗を握りつぶさず保持する。一般の正しさ	none	needed	no	agmsg_architect_claude	classified
+dfc2318680b893f5	scripts/despawn.sh	official	adopt	握りつぶしていた旧経路の削除。前 hunk と対で単独適用可	none	needed	no	agmsg_architect_claude	classified
+845ce8375f7abe3b	scripts/despawn.sh	official	adopt	lock 状態を読めないときに free と偽らず止まる。fail-closed の一般の正しさ	none	needed	no	agmsg_architect_claude	classified
+e15ce555a28f6b00	scripts/despawn.sh	official	adopt	free が「未取得」と「所有者が死亡」の両方を指す曖昧さの説明。一般の記述	none	needed	no	agmsg_architect_claude	classified
+c55af21598cbef20	scripts/despawn.sh	official	adopt	待機ループでも lock 状態の読み取り失敗を free と偽らない。一般の正しさ	none	needed	no	agmsg_architect_claude	classified
 6535593211f6fbe8	scripts/drivers/storage/sqlite.sh								unclassified
 250dbea6081ce1b4	scripts/drivers/storage/sqlite.sh								unclassified
 afd249817803acf9	scripts/drivers/storage/sqlite.sh								unclassified
@@ -202,14 +202,14 @@ a84a549ae8976404	scripts/drivers/storage/sqlite.sh								unclassified
 4db40bbfe92d7bef	scripts/drivers/storage/sqlite.sh								unclassified
 e088c1698d413ca3	scripts/drivers/storage/sqlite.sh								unclassified
 fc13b7aebfe35211	scripts/drivers/storage/sqlite.sh								unclassified
-805e459ab008657d	scripts/drivers/types/claude-code/template.md								unclassified
-766f019868735fc3	scripts/drivers/types/claude-code/template.md								unclassified
-bea58ce3724ea6aa	scripts/drivers/types/claude-code/template.md								unclassified
-c975d0db59ead7d3	scripts/drivers/types/claude-code/template.md								unclassified
-56cc6c63fde77078	scripts/drivers/types/claude-code/template.md								unclassified
-df818afe46a97f47	scripts/drivers/types/claude-code/type.conf								unclassified
-bd980f8217911943	scripts/drivers/types/codex/_session-start.sh								unclassified
-97b5504ba295ce74	scripts/drivers/types/codex/codex-bridge-launcher.sh								unclassified
+805e459ab008657d	scripts/drivers/types/claude-code/template.md	official	adopt	off ではなく unknown を説明へ反映する。delivery.sh の一般の修正に対応する記述	none	needed	no	agmsg_architect_claude	classified
+766f019868735fc3	scripts/drivers/types/claude-code/template.md	agguild	port	受信が全登録チームの同名へ広がる旨の説明。fork の全チーム pair 解決	none	needed	no	agmsg_architect_claude	classified
+bea58ce3724ea6aa	scripts/drivers/types/claude-code/template.md	agguild	port	lock を全チームで解除する旨の説明。fork の全チーム pair 解決	none	needed	no	agmsg_architect_claude	classified
+c975d0db59ead7d3	scripts/drivers/types/claude-code/template.md	official	adopt	off ではなく unknown を説明へ反映する。delivery.sh の一般の修正に対応する記述	none	needed	no	agmsg_architect_claude	classified
+56cc6c63fde77078	scripts/drivers/types/claude-code/template.md	official	adopt	despawn の status=partial / unavailable を説明へ反映する。despawn.sh の一般の修正に対応	none	needed	no	agmsg_architect_claude	classified
+df818afe46a97f47	scripts/drivers/types/claude-code/type.conf	agguild	port	vendor= キーの追加。spawn.sh の --role 由来の役割導出のために存在する	none	needed	no	agmsg_architect_claude	classified
+bd980f8217911943	scripts/drivers/types/codex/_session-start.sh	official	adopt	codex の SessionStart 出力を JSON へ正規化する。上流の codex 型が既に在り、無効な出力を返していた一般の不具合	none	needed	no	agmsg_architect_claude	classified
+97b5504ba295ce74	scripts/drivers/types/codex/codex-bridge-launcher.sh	official	adopt	store を初期化できないときに静かに終わる。上流の agmsg_storage_ensure_initialized のみ参照	none	needed	no	agmsg_architect_claude	classified
 0181557af436c6a9	scripts/drivers/types/codex/codex-bridge.js								unclassified
 1548e15e0c9571ee	scripts/drivers/types/codex/codex-bridge.js								unclassified
 beb0f9719d74d730	scripts/drivers/types/codex/codex-bridge.js								unclassified
@@ -220,38 +220,38 @@ d9f9ae4079addfa2	scripts/drivers/types/codex/codex-bridge.js								unclassified
 4d5dee0be793891f	scripts/drivers/types/codex/codex-bridge.js								unclassified
 ae4086b9a57da4dc	scripts/drivers/types/codex/codex-bridge.js								unclassified
 95767800b43222b0	scripts/drivers/types/codex/codex-bridge.js								unclassified
-d0338e606834cf2c	scripts/drivers/types/codex/template.md								unclassified
-4629e4184a39560c	scripts/drivers/types/codex/type.conf								unclassified
-2236df315549c181	scripts/drivers/types/codex/type.conf								unclassified
-8be6fc7701f086c2	scripts/drivers/types/codex/watch-once.sh								unclassified
-14b6ac342d95e073	scripts/drivers/types/codex/watch-once.sh								unclassified
-bb5c4aa95f77191a	scripts/drivers/types/codex/watch-once.sh								unclassified
-16ae34beb8150614	scripts/guards/gh-owner-guard-path.sh								unclassified
-b956af39cc84d785	scripts/guards/gh-write-owner-guard-launcher.sh								unclassified
-a35fb1fbcbe55e6d	scripts/guards/gh-write-owner-guard.sh								unclassified
-3637c227e7918971	scripts/guards/git-push-owner-guard-launcher.sh								unclassified
-033fe637d4772c0b	scripts/guards/git-push-owner-guard.sh								unclassified
-88f057d1bfe511dc	scripts/history.sh								unclassified
-48f45a952d78c575	scripts/history.sh								unclassified
-ebf9f7abbc7c9edf	scripts/identities.sh								unclassified
-988e1469f411fdd5	scripts/identities.sh								unclassified
-ea9f809c162deeb7	scripts/identities.sh								unclassified
-ec3f030fde8cebbe	scripts/identities.sh								unclassified
-6ed4c8646f2caf89	scripts/identities.sh								unclassified
-118a852f452dafd0	scripts/identities.sh								unclassified
-9d82f044c7d8b34e	scripts/inbox.sh								unclassified
-9a933a0751e02b57	scripts/inbox.sh								unclassified
-89219311144dba3b	scripts/inbox.sh								unclassified
-78a0f53eedd5f91a	scripts/internal/init-db.sh								unclassified
-b152b40fb9c7bdb8	scripts/internal/init-db.sh								unclassified
-fa53c8f6cb5d2fcf	scripts/internal/init-db.sh								unclassified
-7b09967c774e83e3	scripts/internal/init-db.sh								unclassified
-2cb6403c7cb2b5e5	scripts/internal/migrate-team-work-dispatch.sh								unclassified
-e1dbc5be1886d95d	scripts/internal/remote-sync.mjs								unclassified
-73b0b4d73c70a42d	scripts/internal/remote-sync.mjs								unclassified
-7b1ab854b07e4789	scripts/internal/remote-sync.mjs								unclassified
-f91441431d607672	scripts/internal/team-work-dispatch-schema.sql								unclassified
-d4e534147166757b	scripts/internal/team-work-dispatch-triggers.sql								unclassified
+d0338e606834cf2c	scripts/drivers/types/codex/template.md	official	adopt	despawn の status=partial / unavailable を説明へ反映する。despawn.sh の一般の修正に対応	none	needed	no	agmsg_architect_claude	classified
+4629e4184a39560c	scripts/drivers/types/codex/type.conf	agguild	port	vendor= キーの追加。--role 由来の役割導出のために存在する	none	needed	no	agmsg_architect_claude	classified
+2236df315549c181	scripts/drivers/types/codex/type.conf	agguild	port	role_overlay_* キーの追加。fork の role overlay の契約	none	needed	no	agmsg_architect_claude	classified
+8be6fc7701f086c2	scripts/drivers/types/codex/watch-once.sh	official	adopt	未読照会の失敗を握りつぶさず終了コードごと報告する。一般の正しさ	none	needed	no	agmsg_architect_claude	classified
+14b6ac342d95e073	scripts/drivers/types/codex/watch-once.sh	official	adopt	id 照会を条件式へ入れる。次の hunk の失敗報告と対で単独適用可	none	needed	no	agmsg_architect_claude	classified
+bb5c4aa95f77191a	scripts/drivers/types/codex/watch-once.sh	official	adopt	id 照会の失敗を握りつぶさず終了コードごと報告する。一般の正しさ	none	needed	no	agmsg_architect_claude	classified
+16ae34beb8150614	scripts/guards/gh-owner-guard-path.sh	agguild	port	gh ガードのパス解決。fork の GitHub アカウント分離に属する	none	needed	no	agmsg_architect_claude	classified
+b956af39cc84d785	scripts/guards/gh-write-owner-guard-launcher.sh	agguild	port	gh ガードの起動。fork のアカウント分離に属する	none	needed	no	agmsg_architect_claude	classified
+a35fb1fbcbe55e6d	scripts/guards/gh-write-owner-guard.sh	agguild	port	gh の書き込みアカウントのガード。fork のアカウント分離に属する	none	needed	no	agmsg_architect_claude	classified
+3637c227e7918971	scripts/guards/git-push-owner-guard-launcher.sh	agguild	port	git push ガードの起動。fork のアカウント分離に属する	none	needed	no	agmsg_architect_claude	classified
+033fe637d4772c0b	scripts/guards/git-push-owner-guard.sh	agguild	port	git push のアカウントのガード。fork のアカウント分離に属する	none	needed	no	agmsg_architect_claude	classified
+88f057d1bfe511dc	scripts/history.sh	agguild	port	受領記号の凡例。delivery gate の receipt を前提とする	none	needed	no	agmsg_architect_claude	classified
+48f45a952d78c575	scripts/history.sh	agguild	port	storage_receipt_status で表示を切り替える。同関数は上流に 0 件	none	needed	no	agmsg_architect_claude	classified
+ebf9f7abbc7c9edf	scripts/identities.sh	agguild	port	--name --all-projects の usage 行。どちらも上流に 0 件	none	needed	no	agmsg_architect_claude	classified
+988e1469f411fdd5	scripts/identities.sh	agguild	port	--name --all-projects の引数解析。上流に無いオプション	none	needed	no	agmsg_architect_claude	classified
+ea9f809c162deeb7	scripts/identities.sh	agguild	port	NAME_FILTER の SQL エスケープ。--name のために存在する	none	needed	no	agmsg_architect_claude	classified
+ec3f030fde8cebbe	scripts/identities.sh	agguild	port	全プロジェクト検索の WHERE 句。--all-projects のために存在する	none	needed	no	agmsg_architect_claude	classified
+6ed4c8646f2caf89	scripts/identities.sh	agguild	port	WHERE 句を変数へ差し替える。--all-projects の分岐と対	none	needed	no	agmsg_architect_claude	classified
+118a852f452dafd0	scripts/identities.sh	agguild	port	出力の重複除去。全プロジェクト検索が重複を生むために足された	none	needed	no	agmsg_architect_claude	classified
+9d82f044c7d8b34e	scripts/inbox.sh	agguild	port	stdout handoff 後に確認する旨の説明。delivery gate の契約	none	needed	no	agmsg_architect_claude	classified
+9a933a0751e02b57	scripts/inbox.sh	agguild	port	stdout handoff と確認の間の語へ改める。delivery gate の契約	none	needed	no	agmsg_architect_claude	classified
+89219311144dba3b	scripts/inbox.sh	agguild	port	storage_record_receipts の呼び出し。上流に 0 件	none	needed	no	agmsg_architect_claude	classified
+78a0f53eedd5f91a	scripts/internal/init-db.sh	agguild	port	team-work dispatch の移行の実行。fork 固有の機能	none	needed	no	agmsg_architect_claude	classified
+b152b40fb9c7bdb8	scripts/internal/init-db.sh	agguild	port	基底スキーマも原子的にする旨の説明。対応する COMMIT は fork の hunk 側にある	none	needed	no	agmsg_architect_claude	classified
+fa53c8f6cb5d2fcf	scripts/internal/init-db.sh	agguild	port	基底スキーマへ .bail on と BEGIN IMMEDIATE を足す。対応する COMMIT が fork の hunk 側にあり単独適用不可	none	needed	no	agmsg_architect_claude	classified
+7b09967c774e83e3	scripts/internal/init-db.sh	agguild	port	gate の表と dispatch スキーマの作成、および基底スキーマの COMMIT。fork 固有	none	needed	no	agmsg_architect_claude	classified
+2cb6403c7cb2b5e5	scripts/internal/migrate-team-work-dispatch.sh	agguild	port	team-work dispatch の移行。fork 固有の機能	none	needed	no	agmsg_architect_claude	classified
+e1dbc5be1886d95d	scripts/internal/remote-sync.mjs	official	adopt	authority ファイルの検査順序の見直し。開く前後の入れ替わりを防ぐ一般の正しさ	none	needed	no	agmsg_architect_claude	classified
+73b0b4d73c70a42d	scripts/internal/remote-sync.mjs	official	adopt	旧 open 呼び出しの削除。前 hunk の検査順序の変更と対	none	needed	no	agmsg_architect_claude	classified
+7b1ab854b07e4789	scripts/internal/remote-sync.mjs	official	adopt	開いた後の再検査の整理。TOCTOU を塞ぐ一般の正しさ	none	needed	no	agmsg_architect_claude	classified
+f91441431d607672	scripts/internal/team-work-dispatch-schema.sql	agguild	port	team-work dispatch のスキーマ。fork 固有の機能	none	needed	no	agmsg_architect_claude	classified
+d4e534147166757b	scripts/internal/team-work-dispatch-triggers.sql	agguild	port	team-work dispatch のトリガ。fork 固有の機能	none	needed	no	agmsg_architect_claude	classified
 2cda66134722b673	scripts/join.sh	agguild	port	--role / --kind を載せる usage 行。fork 固有の座席属性(#248 で上流移植対象外)	none	needed	no	agmsg_architect_claude	classified
 39b561b9f1c03b77	scripts/join.sh	agguild	port	--role / --kind の引数解析。fork 固有の座席属性	none	needed	no	agmsg_architect_claude	classified
 e2f82285bafc670c	scripts/join.sh	agguild	port	上流に無い識別子 MEMBER_ROLE を参照する。単独適用不可	none	needed	no	agmsg_architect_claude	classified
@@ -284,15 +284,15 @@ f9267bab41c036cf	scripts/lib/actas-lock.sh	agguild	port	常に 0 を返してい
 2b477338a69a3178	scripts/lib/actas-lock.sh	agguild	port	常に 0 を返していた GC を failed で返す。failed は gate 由来で単独適用不可	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
 2e5aca02e2cb0eab	scripts/lib/actas-lock.sh	official	adopt	owner を読めない lock を unknown として非 0 で返す契約の説明。一般の正しさ	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
 9d6dd19091fda520	scripts/lib/actas-lock.sh	official	adopt	owner が読めない場合を unknown として扱う。参照関数は上流。単独適用可	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
-6cd2f57efecc3d38	scripts/lib/api-actas-owner.sh								unclassified
-f26af7b2f8701098	scripts/lib/api-registrations.sh								unclassified
-c15dcbad6b8a5020	scripts/lib/claims.sh								unclassified
-d4977aa2a6ac9d26	scripts/lib/cli-options.sh								unclassified
-b9674251fdd6dc04	scripts/lib/delivery-capability.sh								unclassified
-7425525f076afbc2	scripts/lib/g4-audit.js								unclassified
-d9f0f11f6479e680	scripts/lib/g4-contract.js								unclassified
-3454953d9fd1aaff	scripts/lib/g4-ledger.js								unclassified
-23f7645245c1fd1a	scripts/lib/pm-claim.js								unclassified
+6cd2f57efecc3d38	scripts/lib/api-actas-owner.sh	agguild	port	actas owner の読み取り専用 API。fork の api 契約に属する	none	needed	no	agmsg_architect_claude	classified
+f26af7b2f8701098	scripts/lib/api-registrations.sh	agguild	port	registrations の読み取り API。fork の api 契約に属する	none	needed	no	agmsg_architect_claude	classified
+c15dcbad6b8a5020	scripts/lib/claims.sh	agguild	port	delivery gate の claim ヘルパ。fork 固有の概念	none	needed	no	agmsg_architect_claude	classified
+d4977aa2a6ac9d26	scripts/lib/cli-options.sh	agguild	port	共有オプション解析。AGMSG_OPTION_NO_RESOLVE は fork の resolve-project に属する	none	needed	no	agmsg_architect_claude	classified
+b9674251fdd6dc04	scripts/lib/delivery-capability.sh	agguild	port	delivery gate の capability を JSON で返す。fork 固有の概念	none	needed	no	agmsg_architect_claude	classified
+7425525f076afbc2	scripts/lib/g4-audit.js	agguild	port	g4 契約の監査。fork 固有の運用機構	none	needed	no	agmsg_architect_claude	classified
+d9f0f11f6479e680	scripts/lib/g4-contract.js	agguild	port	g4 契約の定義。fork 固有の運用機構	none	needed	no	agmsg_architect_claude	classified
+3454953d9fd1aaff	scripts/lib/g4-ledger.js	agguild	port	g4 台帳。fork 固有の運用機構	none	needed	no	agmsg_architect_claude	classified
+23f7645245c1fd1a	scripts/lib/pm-claim.js	agguild	port	pm の claim。fork 固有の運用機構	none	needed	no	agmsg_architect_claude	classified
 59cf5bdb2885591b	scripts/lib/registry-lock.sh								unclassified
 c7a8f3cd4fe2ccf0	scripts/lib/registry-lock.sh								unclassified
 8ed2a3266cdf9531	scripts/lib/registry-lock.sh								unclassified
@@ -303,16 +303,16 @@ f80e83ae3d23f09c	scripts/lib/registry-lock.sh								unclassified
 4685289e9dbf5a7f	scripts/lib/registry-lock.sh								unclassified
 7eca2189f1bd18fb	scripts/lib/registry-lock.sh								unclassified
 371eb2cb3e89eb99	scripts/lib/registry-lock.sh								unclassified
-7b0e5394db77801d	scripts/lib/resolve-project.sh								unclassified
-18d18408f3d906a9	scripts/lib/roster-contract.sh								unclassified
-d476828cede2d8f3	scripts/lib/safe-dir-sync.sh								unclassified
-ff4f88d645a5151a	scripts/lib/spawn-options.sh								unclassified
-5251959e359e78db	scripts/lib/spawn-options.sh								unclassified
-bbaf711e9424ce36	scripts/lib/spawn-options.sh								unclassified
-3108c4234bb629eb	scripts/lib/spawn-options.sh								unclassified
-3cd46c7d179695b3	scripts/lib/spawn-options.sh								unclassified
-fd57321b65eff0e6	scripts/lib/spawn-options.sh								unclassified
-8bb87a115015a7bd	scripts/lib/startup-path-resolver.sh								unclassified
+7b0e5394db77801d	scripts/lib/resolve-project.sh	agguild	port	AGMSG_RESOLVE_PROJECT_SKIP_MARKER による分岐。同変数は上流に 0 件	none	needed	no	agmsg_architect_claude	classified
+18d18408f3d906a9	scripts/lib/roster-contract.sh	agguild	port	版付き roster 契約の検証。fork が定めた契約で上流に無い概念	none	needed	no	agmsg_architect_claude	classified
+d476828cede2d8f3	scripts/lib/safe-dir-sync.sh	official	adopt	実行中のプロセスが開いているファイルを truncate せずにディレクトリを置き換える。上流の install.sh が呼び、上流の watcher が踏む一般の危険	none	needed	no	agmsg_architect_claude	classified
+ff4f88d645a5151a	scripts/lib/spawn-options.sh	agguild	port	節を type から任意の section へ改める説明。role overlay のための一般化	none	needed	no	agmsg_architect_claude	classified
+5251959e359e78db	scripts/lib/spawn-options.sh	agguild	port	agmsg_spawn_options_section_tokens への改名と suppressed_keys。role overlay のため	none	needed	no	agmsg_architect_claude	classified
+bbaf711e9424ce36	scripts/lib/spawn-options.sh	agguild	port	suppressed_keys を受ける awk。role overlay の上書きのため	none	needed	no	agmsg_architect_claude	classified
+3108c4234bb629eb	scripts/lib/spawn-options.sh	agguild	port	抑止されたキーを飛ばす。role overlay の上書きのため	none	needed	no	agmsg_architect_claude	classified
+3cd46c7d179695b3	scripts/lib/spawn-options.sh	agguild	port	agmsg_spawn_options_section_keys の追加。role overlay のため	none	needed	no	agmsg_architect_claude	classified
+fd57321b65eff0e6	scripts/lib/spawn-options.sh	agguild	port	profile flag の分類など role overlay の実装。上流に無い概念	none	needed	no	agmsg_architect_claude	classified
+8bb87a115015a7bd	scripts/lib/startup-path-resolver.sh	official	adopt	startup ファイルの symlink を 1 段ずつ辿り fail-closed に解決する。上流の install.sh が呼ぶ一般の安全策	none	needed	no	agmsg_architect_claude	classified
 559b0193506ebf7f	scripts/lib/storage.sh	official	adopt	agmsg_runtime_db_path の定義を補う。上流に呼び出し側が 4 ファイルあり定義が欠けていた	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
 49903285db79ade8	scripts/lib/storage.sh	official	adopt	sqlite3 の能力判定に </dev/null を足す。標準入力を奪う不具合の修正	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
 a511d434bb918c51	scripts/lib/storage.sh	agguild	port	上流に無い識別子 migration_script を参照する。単独適用不可	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
@@ -328,52 +328,52 @@ a78464771706de8b	scripts/lib/storage.sh	agguild	port	上流に無い識別子 _a
 0c81567fd2d4b71c	scripts/lib/storage.sh	official	adopt	agmsg_runtime_lock_owner の失敗を || true で握りつぶさず伝播する。一般の正しさ	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
 2b21cd826a6cb6be	scripts/lib/storage.sh	agguild	port	上流に無い識別子 _agmsg_runtime_db_exists を参照する。単独適用不可	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
 08d29e050ca98e8a	scripts/lib/storage.sh	agguild	port	上流に無い識別子 _agmsg_runtime_db_exists を参照する。単独適用不可	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
-a8ebddd274405a57	scripts/lib/subscription.sh								unclassified
-ab47092f2202026b	scripts/lib/subscription.sh								unclassified
-438b4aa1e2ff9789	scripts/lib/subscription.sh								unclassified
-c306bb591c44219f	scripts/lib/subscription.sh								unclassified
-84a3481fe120152b	scripts/lib/subscription.sh								unclassified
-a966d85688984771	scripts/lib/subscription.sh								unclassified
-e45e53504f790255	scripts/lib/subscription.sh								unclassified
-43a88ced2f5d24af	scripts/lib/team-work-audit.js								unclassified
-a60160825ed92743	scripts/lib/team-work-reconciler.js								unclassified
-26e4ab520d816de2	scripts/lib/team-work.js								unclassified
-d74d728e093bf768	scripts/lib/utf8.sh								unclassified
-3ebfd58bab940242	scripts/lib/validate.sh								unclassified
-73ba93ba259fc0ba	scripts/message-status.sh								unclassified
-55e71dfefd3a7b41	scripts/pane-liveness.sh								unclassified
-37d119fd904ffc1e	scripts/pm-audit-loop.sh								unclassified
-a9f47c1c4f3a4be0	scripts/pm-audit-watchdog.js								unclassified
-1435027d75d39892	scripts/pm-audit-watchdog.sh								unclassified
-1ef7344870982821	scripts/pm-audit.js								unclassified
-af9fd5b3092e60a9	scripts/pm-audit.sh								unclassified
-25360861e7989d36	scripts/pm-broker.js								unclassified
-6ac5f920d01111b9	scripts/pm-broker.sh								unclassified
-dd5c3406bbb31530	scripts/pm-posttool-record								unclassified
-28206f6476d10260	scripts/pm-posttool-record.js								unclassified
-4385aa54f7cf885d	scripts/pm-pretool-guard								unclassified
-7c115a5c21ec7a68	scripts/remote.sh								unclassified
-90150724784dc6ee	scripts/remote.sh								unclassified
-0ab1f4211ed44973	scripts/remote.sh								unclassified
-65731daa83444f13	scripts/remote.sh								unclassified
-37ab18ead653475b	scripts/repair-invalid-utf8.sh								unclassified
-5914ada97355fc0f	scripts/reset.sh								unclassified
-876f8b22cae60554	scripts/reset.sh								unclassified
-bf7d03ead0b5a734	scripts/reset.sh								unclassified
-e3e3f0917773eb65	scripts/reset.sh								unclassified
-30be2932c4d89ffa	scripts/reset.sh								unclassified
-c9756ce3df9ac185	scripts/reset.sh								unclassified
-2516330f2948c406	scripts/reset.sh								unclassified
-46ab30b7fd370e42	scripts/roster-normalize.sh								unclassified
-44edfcdf27140e0c	scripts/send.sh								unclassified
-73329a65327b72ea	scripts/send.sh								unclassified
-1ad27af1a475698b	scripts/send.sh								unclassified
-e6f24991983117a1	scripts/send.sh								unclassified
-c5c1e0ae19bc0899	scripts/send.sh								unclassified
-53322b5561ec1cbb	scripts/session-identity.js								unclassified
-26c9abebc2b405e8	scripts/session-identity.sh								unclassified
-e76cc30525e6742a	scripts/session-start.sh								unclassified
-82eb7cae71c6a1aa	scripts/session-start.sh								unclassified
+a8ebddd274405a57	scripts/lib/subscription.sh	agguild	port	claim の失敗と rollback を保持する局所変数。全チーム claim のために存在する	none	needed	no	agmsg_architect_claude	classified
+ab47092f2202026b	scripts/lib/subscription.sh	agguild	port	pairs の取得位置の変更。--all-projects 経路の導入と対	none	needed	no	agmsg_architect_claude	classified
+438b4aa1e2ff9789	scripts/lib/subscription.sh	agguild	port	active_name のとき --name --all-projects で引く。どちらも上流に 0 件	none	needed	no	agmsg_architect_claude	classified
+c306bb591c44219f	scripts/lib/subscription.sh	agguild	port	claimed_here の初期化。全チーム claim の rollback のため	none	needed	no	agmsg_architect_claude	classified
+84a3481fe120152b	scripts/lib/subscription.sh	agguild	port	claim の終了コードを保持する。単独では読み手が無く、全チーム claim の判定と対	none	needed	no	agmsg_architect_claude	classified
+a966d85688984771	scripts/lib/subscription.sh	agguild	port	claim 失敗で打ち切り、取得済みを記録する。全チーム claim のため	none	needed	no	agmsg_architect_claude	classified
+e45e53504f790255	scripts/lib/subscription.sh	agguild	port	取得済み lock の rollback。全チーム claim のため	none	needed	no	agmsg_architect_claude	classified
+43a88ced2f5d24af	scripts/lib/team-work-audit.js	agguild	port	team-work の監査。fork 固有の機能	none	needed	no	agmsg_architect_claude	classified
+a60160825ed92743	scripts/lib/team-work-reconciler.js	agguild	port	team-work の照合。fork 固有の機能	none	needed	no	agmsg_architect_claude	classified
+26e4ab520d816de2	scripts/lib/team-work.js	agguild	port	team-work の実体。fork 固有の機能	none	needed	no	agmsg_architect_claude	classified
+d74d728e093bf768	scripts/lib/utf8.sh	official	adopt	JSONL 中の不正な UTF-8 を 1 バイト単位で置換する。上流の SQLite 経路が踏む一般の不具合への対処	none	needed	no	agmsg_architect_claude	classified
+3ebfd58bab940242	scripts/lib/validate.sh	official	adopt	不正な UTF-8 をバイト単位で検出する検証関数。公開コマンドの一般の入力検証	none	needed	no	agmsg_architect_claude	classified
+73ba93ba259fc0ba	scripts/message-status.sh	agguild	port	receiver handoff の状態を返す。delivery gate の受領記録に依存し fork 固有	none	needed	no	agmsg_architect_claude	classified
+55e71dfefd3a7b41	scripts/pane-liveness.sh	agguild	port	herdr pane の TUI 状態の分類。delivery-capability.sh から呼ばれ fork の運用に属する	none	needed	no	agmsg_architect_claude	classified
+37d119fd904ffc1e	scripts/pm-audit-loop.sh	agguild	port	pm 監査のループ。fork 固有の運用機構	none	needed	no	agmsg_architect_claude	classified
+a9f47c1c4f3a4be0	scripts/pm-audit-watchdog.js	agguild	port	pm 監査 watchdog の実体。fork 固有の運用機構	none	needed	no	agmsg_architect_claude	classified
+1435027d75d39892	scripts/pm-audit-watchdog.sh	agguild	port	pm 監査の watchdog。fork 固有の運用機構	none	needed	no	agmsg_architect_claude	classified
+1ef7344870982821	scripts/pm-audit.js	agguild	port	pm 監査の実体。fork 固有の運用機構	none	needed	no	agmsg_architect_claude	classified
+af9fd5b3092e60a9	scripts/pm-audit.sh	agguild	port	pm 監査コマンド。fork 固有の運用機構	none	needed	no	agmsg_architect_claude	classified
+25360861e7989d36	scripts/pm-broker.js	agguild	port	pm broker の実体。fork 固有の運用機構	none	needed	no	agmsg_architect_claude	classified
+6ac5f920d01111b9	scripts/pm-broker.sh	agguild	port	pm broker。fork 固有の運用機構	none	needed	no	agmsg_architect_claude	classified
+dd5c3406bbb31530	scripts/pm-posttool-record	agguild	port	pm の PostToolUse 記録。fork 固有の運用機構	none	needed	no	agmsg_architect_claude	classified
+28206f6476d10260	scripts/pm-posttool-record.js	agguild	port	pm の PostToolUse 記録の実体。fork 固有の運用機構	none	needed	no	agmsg_architect_claude	classified
+4385aa54f7cf885d	scripts/pm-pretool-guard	agguild	port	pm の PreToolUse ガード。fork 固有の運用機構	none	needed	no	agmsg_architect_claude	classified
+7c115a5c21ec7a68	scripts/remote.sh	official	adopt	readiness の待ちを反復回数から実時間へ変えるための局所変数。上流の識別子のみ	none	needed	no	agmsg_architect_claude	classified
+90150724784dc6ee	scripts/remote.sh	official	adopt	timeout 環境変数の検証。8 を 8 進数と解さない配慮も含む一般の正しさ	none	needed	no	agmsg_architect_claude	classified
+0ab1f4211ed44973	scripts/remote.sh	official	adopt	1600 回の反復から実時間の期限へ。反復回数は待ち時間を表さない	none	needed	no	agmsg_architect_claude	classified
+65731daa83444f13	scripts/remote.sh	official	adopt	不要になった反復カウンタの削除。前 hunk と対で単独適用可	none	needed	no	agmsg_architect_claude	classified
+37ab18ead653475b	scripts/repair-invalid-utf8.sh	official	adopt	保存済みの不正な UTF-8 を修復する運用者向けコマンド。上流の message store に対する一般の修復	none	needed	no	agmsg_architect_claude	classified
+5914ada97355fc0f	scripts/reset.sh	agguild	port	--no-resolve の usage 行。resolve-project は fork 追加	none	needed	no	agmsg_architect_claude	classified
+876f8b22cae60554	scripts/reset.sh	agguild	port	位置引数の直接読みの削除。fork 追加の cli-options.sh へ移すため	none	needed	no	agmsg_architect_claude	classified
+bf7d03ead0b5a734	scripts/reset.sh	agguild	port	agmsg_parse_cli_options の利用。lib/cli-options.sh は上流に無い	none	needed	no	agmsg_architect_claude	classified
+e3e3f0917773eb65	scripts/reset.sh	agguild	port	--no-resolve の分岐。AGMSG_RESOLVE_PROJECT は fork の knob	none	needed	no	agmsg_architect_claude	classified
+30be2932c4d89ffa	scripts/reset.sh	agguild	port	release 失敗を ownership gate unavailable として報告する。gate の語彙に依存	none	needed	no	agmsg_architect_claude	classified
+c9756ce3df9ac185	scripts/reset.sh	agguild	port	全登録チームの lock を解除する。fork の全チーム pair 解決に属する	none	needed	no	agmsg_architect_claude	classified
+2516330f2948c406	scripts/reset.sh	agguild	port	--no-resolve を勧める診断。fork のオプション	none	needed	no	agmsg_architect_claude	classified
+46ab30b7fd370e42	scripts/roster-normalize.sh	agguild	port	旧 roster を版付き契約へ正規化する。fork の roster 契約に属する	none	needed	no	agmsg_architect_claude	classified
+44edfcdf27140e0c	scripts/send.sh	agguild	port	位置引数の解析を cli-options へ移す。同ファイルは上流に無い	none	needed	no	agmsg_architect_claude	classified
+73329a65327b72ea	scripts/send.sh	agguild	port	AGMSG_POSITIONAL_ARGS からの代入。cli-options は上流に無い	none	needed	no	agmsg_architect_claude	classified
+1ad27af1a475698b	scripts/send.sh	official	adopt	storage を読み込む前に全入力の UTF-8 を検証する。公開コマンドの一般の入力検証	none	needed	no	agmsg_architect_claude	classified
+e6f24991983117a1	scripts/send.sh	agguild	port	message id を返し空なら失敗させる。id は message-status.sh のために表に出す	none	needed	no	agmsg_architect_claude	classified
+c5c1e0ae19bc0899	scripts/send.sh	agguild	port	送信結果を「未確認」と表示し message-status.sh を案内する。gate の語彙と fork のコマンド	none	needed	no	agmsg_architect_claude	classified
+53322b5561ec1cbb	scripts/session-identity.js	agguild	port	session identity の実体。fork の pm ガードと spawn から呼ばれる	none	needed	no	agmsg_architect_claude	classified
+26c9abebc2b405e8	scripts/session-identity.sh	agguild	port	session identity の解決。fork の pm ガードと spawn から呼ばれる	none	needed	no	agmsg_architect_claude	classified
+e76cc30525e6742a	scripts/session-start.sh	official	adopt	pair が無いとき codex へ空 JSON を返す。上流の codex 型が要求する形式で一般の不具合の修正	none	needed	no	agmsg_architect_claude	classified
+82eb7cae71c6a1aa	scripts/session-start.sh	official	adopt	codex の型プラグの出力を JSON へ正規化する。上流の codex 型に対する一般の不具合の修正	none	needed	no	agmsg_architect_claude	classified
 3b4eed3353661482	scripts/spawn.sh								unclassified
 fd64cbce362aee51	scripts/spawn.sh								unclassified
 bfc74431222026fa	scripts/spawn.sh								unclassified
@@ -384,10 +384,10 @@ bfc74431222026fa	scripts/spawn.sh								unclassified
 c1c40e74e86a2e3d	scripts/spawn.sh								unclassified
 bf9149090774e23e	scripts/spawn.sh								unclassified
 66d7d02ce85d23ff	scripts/spawn.sh								unclassified
-11b94ffd8dcd5644	scripts/team-work.sh								unclassified
-a5919c6a81a0b776	scripts/team.sh								unclassified
-699435d54e770773	scripts/team.sh								unclassified
-b2ca3bcaaba8f777	scripts/team.sh								unclassified
+11b94ffd8dcd5644	scripts/team-work.sh	agguild	port	team-work コマンド。fork 固有の機能	none	needed	no	agmsg_architect_claude	classified
+a5919c6a81a0b776	scripts/team.sh	agguild	port	--format json の usage 行。roster contract は fork が定めた概念	none	needed	no	agmsg_architect_claude	classified
+699435d54e770773	scripts/team.sh	agguild	port	--format の引数解析。JSON 出力は fork の roster contract	none	needed	no	agmsg_architect_claude	classified
+b2ca3bcaaba8f777	scripts/team.sh	agguild	port	roster-contract.sh の呼び出し。同ファイルは上流に無い	none	needed	no	agmsg_architect_claude	classified
 966923c7c873301a	scripts/watch.sh	agguild	port	active_name が全登録チームの pair へ広がる旨の説明。fork の全チーム化	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
 17cc2847f6e46a26	scripts/watch.sh	official	adopt	"-" sentinel の説明。sentinel の処理自体が上流にある(#477)ので上流挙動の説明	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
 b16409d8dd07dda3	scripts/watch.sh	official	adopt	${n:?} をやめ必須引数の判定を後段へ回す。次の hunk の明示的な検査と対で一般の堅牢化	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
@@ -418,10 +418,10 @@ e488babcad860c0d	scripts/watch.sh	agguild	port	読み出し処理を fork 追加
 ce803f378ab218d4	scripts/watch.sh	agguild	port	上流に無い識別子 _watch_release_gate を参照する。単独適用不可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
 eac1fec1301458ba	scripts/watch.sh	agguild	port	上流に無い識別子 placed_id を参照する。単独適用不可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
 6d1b3cd1d9203fa9	scripts/watch.sh	agguild	port	上流に無い識別子 _watch_release_gate を参照する。単独適用不可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
-40d31e35863c4bc8	scripts/whoami.sh								unclassified
-39b2292a73ffd028	scripts/whoami.sh								unclassified
-b485eafe159ececf	scripts/whoami.sh								unclassified
-847bde44ac348242	scripts/whoami.sh								unclassified
+40d31e35863c4bc8	scripts/whoami.sh	agguild	port	--format json の usage 行。roster contract は fork の概念	none	needed	no	agmsg_architect_claude	classified
+39b2292a73ffd028	scripts/whoami.sh	agguild	port	--format の引数解析。JSON 出力は fork の roster contract	none	needed	no	agmsg_architect_claude	classified
+b485eafe159ececf	scripts/whoami.sh	agguild	port	型の明示判定を AGENT_TYPE_EXPLICIT へ。shift 方式の引数解析とだけ意味を持つ	none	needed	no	agmsg_architect_claude	classified
+847bde44ac348242	scripts/whoami.sh	agguild	port	JSON 出力の組み立て。roster-contract.sh に依存する	none	needed	no	agmsg_architect_claude	classified
 b31a12d0fdb79d5c	tests/fixtures/g4-audit/duplicate.json								unclassified
 1f28b26644640e1d	tests/fixtures/g4-audit/empty.json								unclassified
 84222bed34599b30	tests/fixtures/g4-audit/error.json								unclassified
