@@ -470,12 +470,12 @@ b777fea728fe180f	tests/test_actas_integration.bats								unclassified
 29be27cc6aba50ca	tests/test_actas_integration.bats								unclassified
 e8bf9b250ddecd05	tests/test_actas_integration.bats								unclassified
 68d952228373bafb	tests/test_actas_integration.bats								unclassified
-8b067f31a1317c9d	tests/test_actas_lock.bats	official	adopt	test follows the implementation it exercises: scripts/lib/actas-lock.sh					classified
-5d42d7cac7972617	tests/test_actas_lock.bats	official	adopt	test follows the implementation it exercises: scripts/lib/actas-lock.sh					classified
-0057991895d50013	tests/test_actas_lock.bats	official	adopt	test follows the implementation it exercises: scripts/lib/actas-lock.sh					classified
-e259257277842e00	tests/test_actas_lock.bats	official	adopt	test follows the implementation it exercises: scripts/lib/actas-lock.sh					classified
-0ddc18257521ad77	tests/test_actas_lock.bats	official	adopt	test follows the implementation it exercises: scripts/lib/actas-lock.sh					classified
-980b47a20555bd96	tests/test_actas_lock.bats	official	adopt	test follows the implementation it exercises: scripts/lib/actas-lock.sh					classified
+8b067f31a1317c9d	tests/test_actas_lock.bats								unclassified
+5d42d7cac7972617	tests/test_actas_lock.bats								unclassified
+0057991895d50013	tests/test_actas_lock.bats								unclassified
+e259257277842e00	tests/test_actas_lock.bats								unclassified
+0ddc18257521ad77	tests/test_actas_lock.bats								unclassified
+980b47a20555bd96	tests/test_actas_lock.bats								unclassified
 aa67f00e36e485fd	tests/test_api.bats								unclassified
 e4e7d8708d9ecd0b	tests/test_api_actas_owner.bats								unclassified
 04cd96a35cad875b	tests/test_api_registrations.bats								unclassified
@@ -681,15 +681,15 @@ b718c71e3cc63a58	tests/test_spawn_options.bats								unclassified
 46fd3ebfc722971e	tests/test_spawn_options.bats								unclassified
 90b75d9e95da5af3	tests/test_spawn_options.bats								unclassified
 d84ae3bb80450d98	tests/test_sqlite_sync_jq_binary.bats								unclassified
-812a1f77190e5d3c	tests/test_storage.bats	agguild	port	test follows the implementation it exercises: scripts/lib/storage.sh					classified
-51c236cdc64f16b9	tests/test_storage.bats	agguild	port	test follows the implementation it exercises: scripts/lib/storage.sh					classified
-0ffd1cc21220e797	tests/test_storage.bats	agguild	port	test follows the implementation it exercises: scripts/lib/storage.sh					classified
-1d293e3deec4bfa3	tests/test_storage.bats	agguild	port	test follows the implementation it exercises: scripts/lib/storage.sh					classified
-100a9e6b37cc4fbe	tests/test_storage.bats	agguild	port	test follows the implementation it exercises: scripts/lib/storage.sh					classified
-ce35ea4080e50c20	tests/test_storage.bats	agguild	port	test follows the implementation it exercises: scripts/lib/storage.sh					classified
-d0eed7941590f43c	tests/test_storage.bats	agguild	port	test follows the implementation it exercises: scripts/lib/storage.sh					classified
-0ebeb9b321b397c0	tests/test_storage.bats	agguild	port	test follows the implementation it exercises: scripts/lib/storage.sh					classified
-de2a5843a9e12550	tests/test_storage_contract.bats	agguild	port	test follows the implementation it exercises: scripts/lib/storage.sh					classified
+812a1f77190e5d3c	tests/test_storage.bats								unclassified
+51c236cdc64f16b9	tests/test_storage.bats								unclassified
+0ffd1cc21220e797	tests/test_storage.bats								unclassified
+1d293e3deec4bfa3	tests/test_storage.bats								unclassified
+100a9e6b37cc4fbe	tests/test_storage.bats								unclassified
+ce35ea4080e50c20	tests/test_storage.bats								unclassified
+d0eed7941590f43c	tests/test_storage.bats								unclassified
+0ebeb9b321b397c0	tests/test_storage.bats								unclassified
+de2a5843a9e12550	tests/test_storage_contract.bats								unclassified
 918a728372a6b92b	tests/test_sync_autostart.bats								unclassified
 b30876199f0ec402	tests/test_sync_cipher.bats								unclassified
 77e99abc960bf600	tests/test_team.bats								unclassified
@@ -710,41 +710,41 @@ ef3cd0cfbc3f690b	tests/test_team_work.bats								unclassified
 ee24e09701983bd1	tests/test_team_work_state.bats								unclassified
 abe318d7caecff7c	tests/test_wait_helpers.bats								unclassified
 1f16cdacfd21c699	tests/test_wait_helpers.bats								unclassified
-b8b7ac74576d64ff	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-2652d2fbd89c8b6c	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-ad4ee9a2f2fd1991	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-42365c2b23fc4c45	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-20eb80dbc09a29eb	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-ae9f3371eb8cfbe0	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-3462673700e2dcc8	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-087a8520fc6bce40	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-c025e4d79de58906	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-b6d2fd38c1b278ee	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-50dbe66e94da78fe	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-128d3358324d5514	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-5859087f9b44ef64	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-7e592a584f534541	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-63e8f8af6d3e9e7b	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-ad253bddd1daee66	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-a5ebf6e52557a490	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-2fb23ce2c8c4422c	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-59c13b7f19aceecc	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-83c94f7441337ce8	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-d139a30cfb5dfd24	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-d224ffc5888422a7	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-df7e415e0cffa07f	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-4a462abf249b655f	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-a970cf8caa579457	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-7dc3d6bec896cfe4	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-bd6bf272b3b3a622	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-c29617b2209fa593	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-33bf7fb538a72f55	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-71a12c51e9cb3def	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-2c0e74992710b106	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-f4235325f423fee2	tests/test_watch.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-f4f3015f4e11aeb2	tests/test_watch_install_changed.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-06cefbbfb1942667	tests/test_watch_once.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
-b63945588cad2f66	tests/test_watch_ownership_log.bats	agguild	port	test follows the implementation it exercises: scripts/watch.sh					classified
+b8b7ac74576d64ff	tests/test_watch.bats								unclassified
+2652d2fbd89c8b6c	tests/test_watch.bats								unclassified
+ad4ee9a2f2fd1991	tests/test_watch.bats								unclassified
+42365c2b23fc4c45	tests/test_watch.bats								unclassified
+20eb80dbc09a29eb	tests/test_watch.bats								unclassified
+ae9f3371eb8cfbe0	tests/test_watch.bats								unclassified
+3462673700e2dcc8	tests/test_watch.bats								unclassified
+087a8520fc6bce40	tests/test_watch.bats								unclassified
+c025e4d79de58906	tests/test_watch.bats								unclassified
+b6d2fd38c1b278ee	tests/test_watch.bats								unclassified
+50dbe66e94da78fe	tests/test_watch.bats								unclassified
+128d3358324d5514	tests/test_watch.bats								unclassified
+5859087f9b44ef64	tests/test_watch.bats								unclassified
+7e592a584f534541	tests/test_watch.bats								unclassified
+63e8f8af6d3e9e7b	tests/test_watch.bats								unclassified
+ad253bddd1daee66	tests/test_watch.bats								unclassified
+a5ebf6e52557a490	tests/test_watch.bats								unclassified
+2fb23ce2c8c4422c	tests/test_watch.bats								unclassified
+59c13b7f19aceecc	tests/test_watch.bats								unclassified
+83c94f7441337ce8	tests/test_watch.bats								unclassified
+d139a30cfb5dfd24	tests/test_watch.bats								unclassified
+d224ffc5888422a7	tests/test_watch.bats								unclassified
+df7e415e0cffa07f	tests/test_watch.bats								unclassified
+4a462abf249b655f	tests/test_watch.bats								unclassified
+a970cf8caa579457	tests/test_watch.bats								unclassified
+7dc3d6bec896cfe4	tests/test_watch.bats								unclassified
+bd6bf272b3b3a622	tests/test_watch.bats								unclassified
+c29617b2209fa593	tests/test_watch.bats								unclassified
+33bf7fb538a72f55	tests/test_watch.bats								unclassified
+71a12c51e9cb3def	tests/test_watch.bats								unclassified
+2c0e74992710b106	tests/test_watch.bats								unclassified
+f4235325f423fee2	tests/test_watch.bats								unclassified
+f4f3015f4e11aeb2	tests/test_watch_install_changed.bats								unclassified
+06cefbbfb1942667	tests/test_watch_once.bats								unclassified
+b63945588cad2f66	tests/test_watch_ownership_log.bats								unclassified
 075637b6ce5ac87c	uninstall.sh								unclassified
 f354b140f8ea7e57	uninstall.sh								unclassified
 d299832e354173e6	uninstall.sh								unclassified
