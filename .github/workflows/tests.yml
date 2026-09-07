@@ -269,6 +269,12 @@ jobs:
             shard: 6
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The #254 ledger check recounts hunks between two fixed commits, so
+          # the shard that happens to hold tests/test_hunk_ledger.bats needs
+          # them present. Which shard that is moves with the partition, so every
+          # shard gets the history. ~19MiB packed.
+          fetch-depth: 0
 
       - name: Docs-only change — skipping suite
         if: needs.changes.outputs.docs_only == 'true'
