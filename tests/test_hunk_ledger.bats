@@ -44,11 +44,21 @@ emit_rows() { python3 "$LEDGER_TOOL" --repo "$REPO" --emit-rows; }
 }
 
 @test "the digest matches the shell one-liner the design note publishes" {
-  # A second implementation of the same byte-level spec. If the spec and the
-  # generator ever disagree, whoever recomputes by hand gets a different number
-  # than CI does, which is the failure this pins.
-  local shell_digest
+  # Two implementations of the same byte-level spec, compared with each other
+  # before either is compared with the constant. That ordering does not widen
+  # what is caught -- measured: if both implementations change together and the
+  # constant is updated to match, this still passes. What it buys is which
+  # assertion fails: a disagreement between the two is reported as a
+  # disagreement, rather than as two separate quarrels with the constant.
+  #
+  # Nothing here can catch a coordinated change to all three. That is what the
+  # design note asks a person to do instead -- recompute from its own text,
+  # without reading either implementation.
+  local shell_digest python_digest
   shell_digest="$(emit_rows | cut -f1 | LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1)"
+  python_digest="$(emit_header | sed -n 's/^# expected-digest: //p')"
+  [ -n "$shell_digest" ]
+  [ "$shell_digest" = "$python_digest" ]
   [ "$shell_digest" = "$EXPECTED_DIGEST" ]
 }
 
