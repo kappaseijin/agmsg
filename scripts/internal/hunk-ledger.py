@@ -50,6 +50,18 @@ DIFF_ARGS = ('-c', 'diff.algorithm=myers', '-c', 'core.quotePath=false',
              '--no-ext-diff', '--no-textconv')
 
 
+# Fork-owned records: the decision notes, plans and ADRs the fork wrote about
+# itself. `docs/actas.md` and `docs/building-on-agmsg.md` are deliberately NOT
+# here -- they describe behaviour, so they follow whatever that behaviour turns
+# out to be, which is a judgement.
+FORK_RECORD_PREFIXES = ('docs/decisions/', 'docs/superpowers/', 'docs/plan/', 'docs/adr/')
+FORK_RECORD_RATIONALE = 'fork-owned record of its own decisions; not an upstream concern'
+TEST_INHERIT_RATIONALE = 'test follows the implementation it exercises: '
+# `rationale` shorter than this is treated as not written rather than written.
+# The number has no derivation; it exists to reject "port" as an explanation.
+MIN_RATIONALE = 10
+
+
 class LedgerError(RuntimeError):
     """A precondition the enumeration refuses to work around."""
 
@@ -132,6 +144,77 @@ def enumerate_hunks(diff_text):
     return hunks, unexercised
 
 
+def normalized_stem(path):
+    """Basename without its extension, `-` folded to `_`, lowercased.
+
+    `codex-bridge.js` and `test_codex_bridge.bats` differ only in punctuation;
+    without this they do not match and 42 of the 44 correspondences disappear.
+    """
+    name = path.rsplit('/', 1)[-1]
+    stem = name.rsplit('.', 1)[0] if '.' in name else name
+    return stem.replace('-', '_').lower()
+
+
+def is_test_path(path):
+    """Anywhere under tests/, any extension, as long as the basename says test_.
+
+    Not `tests/test_*.bats`: read that way, `tests/isolated/**` and
+    `tests/test_helper.bash` fall outside the rule entirely rather than being
+    matched or left for judgement, which is not what the rule means.
+    """
+    return path.startswith('tests/') and path.rsplit('/', 1)[-1].startswith('test_')
+
+
+def implementations_for(test_path, paths):
+    """Every changed implementation whose name the test's name points at.
+
+    A match is equality or one stem being a prefix of the other. Candidates are
+    every changed path outside tests/ and docs/ -- restricting the search to
+    scripts/ loses install.sh and uninstall.sh.
+
+    Often more than one: `test_api.bats` points at `scripts/api.sh`,
+    `scripts/lib/api-actas-owner.sh` and `scripts/lib/api-registrations.sh`
+    alike, because prefix matching cannot tell a file from its neighbours. 22 of
+    the 44 corresponding tests are in that position, covering 166 of the 211
+    hunks, so the plural is the normal case rather than an edge one.
+    """
+    stem = normalized_stem(test_path)[len('test_'):]
+    if not stem:
+        return []
+    found = set()
+    for path in paths:
+        if path.startswith('tests/') or path.startswith('docs/'):
+            continue
+        other = normalized_stem(path)
+        if stem == other or stem.startswith(other) or other.startswith(stem):
+            found.add(path)
+    return sorted(found)
+
+
+def mechanical_rule(path, owners_by_path):
+    """(owner, disposition, rationale) where a rule decides it, else None.
+
+    The test rule reads the ledger's own owners rather than deciding one: which
+    owner a test inherits is not knowable until the implementation it follows
+    has been classified, and that is a judgement. So this is re-run as the
+    judged rows land, and fills in behind them.
+    """
+    if path.startswith(FORK_RECORD_PREFIXES):
+        return 'agguild', 'port', FORK_RECORD_RATIONALE
+    if is_test_path(path):
+        implementations = implementations_for(path, owners_by_path)
+        owners = {owners_by_path.get(i) for i in implementations} & OWNERS
+        # One classified implementation, or several that agree. Several that
+        # disagree is not a tie to break: the rule says a test follows its
+        # implementation, and which one that is has stopped being mechanical.
+        if len(owners) == 1:
+            owner = owners.pop()
+            disposition = 'adopt' if owner == 'official' else 'port'
+            return owner, disposition, TEST_INHERIT_RATIONALE + ', '.join(
+                i for i in implementations if owners_by_path.get(i) == owner)
+    return None
+
+
 def digest_of(hunk_ids):
     """sha256 of the ids, C-sorted, LF-separated AND LF-terminated."""
     joined = ''.join(i + '\n' for i in sorted(hunk_ids))
@@ -175,6 +258,57 @@ def build_header(repo='.', base_merge=BASE_MERGE, base_fork=BASE_FORK):
         '#',
         '# columns: ' + '  '.join(COLUMNS),
     ])
+
+
+def read_rows(ledger_path):
+    """(header lines, rows as dicts, malformed raw lines) from a ledger file."""
+    with open(ledger_path, encoding='utf8') as handle:
+        lines = handle.read().split('\n')
+    rows, malformed = [], []
+    for line in lines:
+        if line.startswith('#') or not line.strip():
+            continue
+        fields = line.split('\t')
+        if len(fields) != len(COLUMNS):
+            malformed.append(line)
+            continue
+        rows.append(dict(zip(COLUMNS, fields)))
+    return lines, rows, malformed
+
+
+def classify_mechanical(ledger_path):
+    """The ledger with the mechanical rules applied. Judged rows are untouched.
+
+    Rows a rule does not reach keep whatever they have, including nothing: not
+    reaching a row is "this needs a person", not "this is official".
+    """
+    lines, rows, malformed = read_rows(ledger_path)
+    if malformed:
+        raise LedgerError(f'{len(malformed)} malformed row(s); run --check first')
+    owners = {row['path']: row['owner'] for row in rows}
+    filled = 0
+    by_id = {}
+    for row in rows:
+        rule = mechanical_rule(row['path'], owners)
+        if rule is None:
+            by_id[row['hunk_id']] = row
+            continue
+        row['owner'], row['disposition'], row['rationale'] = rule
+        # `classified`, never `verified`: a rule having fired is not a person
+        # having checked, and the execution gate asks for the latter.
+        row['status'] = 'classified'
+        by_id[row['hunk_id']] = row
+        filled += 1
+    out = []
+    for line in lines:
+        if line.startswith('#'):
+            out.append(line)
+            continue
+        if not line.strip():
+            continue
+        row = by_id.get(line.split('\t')[0])
+        out.append('\t'.join(row[column] for column in COLUMNS) if row else line)
+    return out, filled
 
 
 def parse_header(lines):
@@ -243,6 +377,30 @@ def check(ledger_path, repo='.', base_merge=BASE_MERGE, base_fork=BASE_FORK):
             add('invalid-disposition', f"{hunk_id} disposition={row['disposition']}")
         if row['status'] and row['status'] not in STATUSES:
             add('invalid-status', f"{hunk_id} status={row['status']}")
+        # Design 1.2: disposition follows owner, except for `exception`, where
+        # the choice between port and drop is the judgement. Every one of these
+        # is a contradiction between two values somebody wrote, never a blank.
+        pairing = {'official': ('adopt',), 'agguild': ('port',), 'exception': ('port', 'drop')}
+        allowed = pairing.get(row['owner'])
+        if allowed and row['disposition'] and row['disposition'] not in allowed:
+            add('owner-disposition-mismatch',
+                f"{hunk_id} owner={row['owner']} disposition={row['disposition']}")
+        if row['owner'] == 'pool':
+            # The pool holds agent personas and state, which live in another
+            # repository entirely. One here means the classification is wrong or
+            # the premise is; either way it stops rather than being absorbed.
+            add('unexpected-pool', f"{hunk_id} {row['path']}")
+        if row['rationale'] and len(row['rationale']) < MIN_RATIONALE:
+            add('rationale-too-short', f"{hunk_id} rationale={row['rationale']!r}")
+
+    owners = {row['path']: row['owner'] for row in rows.values()}
+    for hunk_id, row in sorted(rows.items()):
+        if hunk_id not in actual:
+            continue
+        rule = mechanical_rule(row['path'], owners)
+        if rule and row['owner'] and row['owner'] != rule[0]:
+            add('rule-mismatch',
+                f"{hunk_id} {row['path']} owner={row['owner']} rule={rule[0]}")
 
     expected = {
         'base-merge': base_merge,
@@ -299,6 +457,8 @@ def main(argv=None):
     parser.add_argument('--emit-header', action='store_true')
     parser.add_argument('--emit-rows', action='store_true')
     parser.add_argument('--check', metavar='LEDGER')
+    parser.add_argument('--classify-mechanical', metavar='LEDGER',
+                        help='apply the mechanical owner rules and print the ledger')
     parser.add_argument('--gate', metavar='LEDGER',
                         help='--check, plus the design\'s execution-gate condition that '
                              'every row is verified. Not run by CI; see gate().')
@@ -316,12 +476,18 @@ def main(argv=None):
             for hunk_id, path, _, _ in hunks:
                 print('\t'.join((hunk_id, path) + BLANK_ROW))
             return 0
+        if args.classify_mechanical:
+            out, filled = classify_mechanical(args.classify_mechanical)
+            print('\n'.join(out))
+            print(f'classified {filled} row(s) by rule', file=sys.stderr)
+            return 0
         if args.check:
             findings, notes = check(args.check, args.repo, args.base_merge, args.base_fork)
         elif args.gate:
             findings, notes = gate(args.gate, args.repo, args.base_merge, args.base_fork)
         else:
-            parser.error('one of --emit-header, --emit-rows, --check, --gate is required')
+            parser.error('one of --emit-header, --emit-rows, --classify-mechanical, '
+                         '--check, --gate is required')
     except LedgerError as error:
         print(f'FAIL {error}', file=sys.stderr)
         return 1
