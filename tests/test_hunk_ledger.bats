@@ -550,6 +550,64 @@ tiny_ledger() {  # $1=out $2..=owner for each actas-lock hunk, in order
   [ -z "$difference" ]
 }
 
+@test "an official hunk that needs an agguild name is reported (#339)" {
+  # The official hunks have to be applicable upstream as a set. One of them
+  # needing a name that exists only because of an agguild hunk breaks that, and
+  # the design note found the cases by hand until now.
+  [ -f "$LEDGER_FILE" ] || skip "ledger not generated yet"
+  local run_case="python3 $BATS_TEST_DIRNAME/ledger_dependency.py $LEDGER_TOOL $LEDGER_FILE"
+
+  # The ledger as it stands.
+  run $run_case as-is
+  [ "$status" -eq 0 ]
+  [ "$output" = "0 -" ]
+
+  # Mark the definer of a name an official hunk calls as agguild, and it is
+  # named. Without this the "0" above would be satisfied by a check that reports
+  # nothing at all.
+  run $run_case flipped
+  [ "$status" -eq 0 ]
+  [ "$output" = "1 agmsg_validate_utf8" ]
+}
+
+@test "a stub for an external command is not a dependency, unless it is product code (#339)" {
+  # Test fixtures replace mktemp and rm to control what a teardown does. A hunk
+  # calling those is calling the command. The exclusion is deliberately narrow:
+  # the same name defined outside tests/ is a real dependency, and the second
+  # case here is what stops the list from hiding it.
+  [ -f "$LEDGER_FILE" ] || skip "ledger not generated yet"
+  local run_case="python3 $BATS_TEST_DIRNAME/ledger_dependency.py $LEDGER_TOOL $LEDGER_FILE"
+
+  run $run_case no-shadow-list
+  [ "$status" -eq 0 ]
+  [ "$output" = "10 mktemp,rm" ]
+
+  run $run_case product-shadow
+  [ "$status" -eq 0 ]
+  [ "$output" = "4 mktemp" ]
+}
+
+@test "a name this file defines itself is not borrowed from another file (#339)" {
+  # Two scripts each defining `usage` are not a dependency. A definition in the
+  # same file wins over anything sourced, so the local one is what runs.
+  #
+  # The sourcing check is the other half of this and is currently carrying
+  # nothing: with it disabled the count stays 0, and only disabling both brings
+  # `usage` back. Recorded rather than removed -- it is the part that would
+  # catch a cross-file name this file does NOT also define -- but it is
+  # unexercised by the ledger as it stands.
+  [ -f "$LEDGER_FILE" ] || skip "ledger not generated yet"
+  local run_case="python3 $BATS_TEST_DIRNAME/ledger_dependency.py $LEDGER_TOOL $LEDGER_FILE"
+
+  run $run_case no-visibility
+  [ "$status" -eq 0 ]
+  [ "$output" = "0 -" ]
+
+  run $run_case no-local-wins
+  [ "$status" -eq 0 ]
+  [ "$output" = "1 json_value" ]
+}
+
 @test "the ledger, once present, covers every hunk and classifies each one" {
   [ -f "$LEDGER_FILE" ] || skip "ledger not generated yet (worker task, Issue #254)"
   run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$LEDGER_FILE"
