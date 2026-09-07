@@ -14,3 +14,7 @@ teams/
 .env
 .env.*
 /.secrets/
+
+# Python のコンパイル済みキャッシュ。importlib で内部スクリプトを読むと作られる
+__pycache__/
+*.pyc
