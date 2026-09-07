@@ -387,9 +387,12 @@ mechanical_ledger() {
 @test "a name that is not a test name points at no implementation" {
   # The stem used to be taken by slicing five characters off unconditionally,
   # so `broker.js` became `r` and prefix-matched README.md and ten other files.
-  # Nothing had gone wrong yet only because those files disagree about their
-  # owner, which is luck rather than design: agree, and a fixture would have
-  # quietly inherited the readme's classification.
+  #
+  # Measured: no ledger row was ever affected, because both callers ask
+  # is_test_path first and broker.js never reaches the function. The fix is not
+  # a repair, it is moving the condition to where the assumption lives -- a
+  # function that is only correct when its callers remember something is one
+  # refactor away from being wrong.
   run python3 "$BATS_TEST_DIRNAME/ledger_correspondence.py" --probe "$LEDGER_TOOL"
   [ "$status" -eq 0 ]
   grep -Fq -- "tests/fixtures/pm-broker/broker.js 0" <<<"$output"

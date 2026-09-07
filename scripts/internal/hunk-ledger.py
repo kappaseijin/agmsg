@@ -180,9 +180,13 @@ def implementations_for(test_path, paths):
     """
     # Check the prefix before removing it. Slicing five characters off any name
     # turns `broker.js` into `r`, which then prefix-matches README.md and ten
-    # other files -- a fixture pointed at the readme. The old `if not stem`
-    # only caught names of five characters or fewer, because it was looking at
-    # what survived the slice rather than at whether the slice was warranted.
+    # other files. The old `if not stem` only caught names of five characters or
+    # fewer, because it was looking at what survived the slice rather than at
+    # whether the slice was warranted.
+    #
+    # Every caller happens to ask is_test_path first, so no classification was
+    # ever wrong. The condition belongs here anyway: the guarantee should not
+    # depend on each caller remembering it.
     stem = normalized_stem(test_path)
     if not stem.startswith('test_'):
         return []
