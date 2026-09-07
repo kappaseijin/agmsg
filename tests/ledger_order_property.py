@@ -1,9 +1,15 @@
-"""How many different classifications a ledger produces when its rows are reordered.
+"""What a ledger classifies, over every ordering of its rows.
 
-Prints one integer. Anything but 1 means the answer depends on the order the
-rows happen to sit in, which is the shape of defect this exists to catch: the
-first version read one owner per path and kept whichever hunk came last, so
-sorting the same facts differently classified them differently.
+Prints "<distinct outcomes> <owner the test row ended up with, or ->".
+
+Anything but 1 in the first field means the answer depends on the order the rows
+happen to sit in -- the shape of defect this exists to catch: the first version
+read one owner per path and kept whichever hunk came last, so sorting the same
+facts differently classified them differently.
+
+The second field is there because order-independence alone is satisfied by an
+implementation that never inherits anything. Invariant and correct are not the
+same claim, so the caller checks both.
 
   ledger_order_property.py <hunk-ledger.py> <ledger.tsv>
 """
@@ -33,4 +39,6 @@ for order in itertools.permutations(rows):
     # Compare what was decided, not the order it was printed in.
     decided = frozenset((l.split('\t')[0], l.split('\t')[2]) for l in out if not l.startswith('#'))
     outcomes.add(decided)
-print(len(outcomes))
+    inherited = {l.split('\t')[2] for l in out
+                 if not l.startswith('#') and l.split('\t')[1].startswith('tests/')}
+print(len(outcomes), '/'.join(sorted(i or '-' for i in inherited)))

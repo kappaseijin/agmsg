@@ -438,12 +438,23 @@ tiny_ledger() {  # $1=out $2..=owner for each actas-lock hunk, in order
   # facts in a different order produced a different answer -- the same shape as
   # the batch ordering that had to be corrected earlier. Pinning one wrong
   # inheritance would leave the shape free to come back somewhere else.
+  # Every permutation of three rows, so "official last" and "agguild last" are
+  # both covered rather than hoped for.
   local ledger="$BATS_TEST_TMPDIR/order.tsv"
   tiny_ledger "$ledger" agguild agguild official
 
   run python3 "$BATS_TEST_DIRNAME/ledger_order_property.py" "$LEDGER_TOOL" "$ledger"
   [ "$status" -eq 0 ]
-  [ "$output" = "1" ]
+  [ "$output" = "1 -" ]
+
+  # And the same over an implementation that does agree. Without this, an
+  # implementation that inherits nothing at all would satisfy the invariance
+  # above: unchanging is not the same as right.
+  local uniform="$BATS_TEST_TMPDIR/order-uniform.tsv"
+  tiny_ledger "$uniform" agguild agguild agguild
+  run python3 "$BATS_TEST_DIRNAME/ledger_order_property.py" "$LEDGER_TOOL" "$uniform"
+  [ "$status" -eq 0 ]
+  [ "$output" = "1 agguild" ]
 }
 
 @test "the correspondence the design counted is the one the code finds" {
