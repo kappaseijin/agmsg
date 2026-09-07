@@ -15,46 +15,46 @@
 #       Trust expected-hunks/expected-digest, not your own diff.
 #
 # columns: hunk_id  path  owner  disposition  rationale  public_dep  regression  conflict_risk  assignee  status
-9b262a83717fc01d	.github/enforced-assertions-baseline								unclassified
-96e94de06531318d	.github/workflows/tests.yml								unclassified
-ffa0428a4fb0efc9	README.ja.md								unclassified
-9129534e3ce4a93c	README.ja.md								unclassified
-8fa2fe7594dc170c	README.ja.md								unclassified
-cbafc55b85aea43e	README.ja.md								unclassified
-d854eaa0c62a3ae9	README.ja.md								unclassified
-f7e09867c3f74590	README.ja.md								unclassified
-6e89dfd698657ee6	README.ja.md								unclassified
-a08ec06ffcae923b	README.ja.md								unclassified
-dcc4d79d3fb222c6	README.ja.md								unclassified
-97a4b15f56b0a4ab	README.ja.md								unclassified
-dbf7b0b63f3e4320	README.ja.md								unclassified
-227192501cc326ea	README.ja.md								unclassified
-38d95e986e5ca52e	README.md								unclassified
-6b5b9c3fc08768cb	README.md								unclassified
-058f7d6373fa2ed2	README.md								unclassified
-69cd50ec1d7d8134	README.md								unclassified
-02f47959d3b6d681	README.md								unclassified
-f5f4ff2d3c68f027	README.md								unclassified
-a15687e691f5f4a1	README.md								unclassified
-ef8a701162fca332	README.md								unclassified
-77d8a6eb5eee54a1	README.md								unclassified
-a353dccb4092a36b	README.md								unclassified
-aaa80b85e0515fd7	README.md								unclassified
-3a35fb7c436e6851	README.md								unclassified
-2401790a8082d18a	README.md								unclassified
-425f0b8ae10634de	README.md								unclassified
-4ef300f45f2f6fb0	README.md								unclassified
-c11784a3337594fb	README.md								unclassified
-ebc8ac636c17bd7a	README.md								unclassified
-9aeda936f7bfe00e	README.md								unclassified
-fe8e97bac881ecbc	README.md								unclassified
-f2ce05efcf67b8da	README.md								unclassified
-387091ceedc83e67	README.md								unclassified
-9d112611a67b9531	SKILL.md								unclassified
-bc8c5d429535fa99	SKILL.md								unclassified
-347fd96241c5e0cd	SKILL.md								unclassified
-770990f4230f8250	app/README.md								unclassified
-947f0879b6937804	app/scripts/bundle-core.sh								unclassified
+9b262a83717fc01d	.github/enforced-assertions-baseline	agguild	port	assertion の基準値を 638 から 718 へ。fork が足した試験の分だけ増えている	none	needed	no	agmsg_architect_claude	classified
+96e94de06531318d	.github/workflows/tests.yml	agguild	port	codex monitor / bridge launcher / fixture helpers の試験を CI へ足す。いずれも fork の試験	none	needed	no	agmsg_architect_claude	classified
+ffa0428a4fb0efc9	README.ja.md	agguild	port	GitHub CLI の宛先ガードの説明（日本語版）。fork のアカウント分離	none	needed	no	agmsg_architect_claude	classified
+9129534e3ce4a93c	README.ja.md	agguild	port	actas が全登録チームで排他になる旨の説明（日本語版）。fork の全チーム pair 解決	none	needed	no	agmsg_architect_claude	classified
+8fa2fe7594dc170c	README.ja.md	agguild	port	spawn options の type@role 節の説明（日本語版）。fork の role overlay	none	needed	no	agmsg_architect_claude	classified
+cbafc55b85aea43e	README.ja.md	agguild	port	codex@architect overlay の例（日本語版）。fork の role overlay	none	needed	no	agmsg_architect_claude	classified
+d854eaa0c62a3ae9	README.ja.md	agguild	port	codex の profile alias の要件（日本語版）。fork の role overlay	none	needed	no	agmsg_architect_claude	classified
+f7e09867c3f74590	README.ja.md	official	adopt	despawn の status=unavailable を説明へ反映（日本語版）。despawn.sh の一般の修正に対応	none	needed	no	agmsg_architect_claude	classified
+6e89dfd698657ee6	README.ja.md	official	adopt	despawn の status=forced / partial を説明へ反映（日本語版）。despawn.sh の一般の修正に対応	none	needed	no	agmsg_architect_claude	classified
+a08ec06ffcae923b	README.ja.md	agguild	port	actas が全登録チームの同名を購読する旨の一覧行（日本語版）。fork の全チーム pair 解決	none	needed	no	agmsg_architect_claude	classified
+dcc4d79d3fb222c6	README.ja.md	agguild	port	reset.sh --no-resolve と send.sh のオプションの説明（日本語版）。いずれも fork	none	needed	no	agmsg_architect_claude	classified
+97a4b15f56b0a4ab	README.ja.md	agguild	port	registrations resource の説明（日本語版）。fork の api 契約	none	needed	no	agmsg_architect_claude	classified
+dbf7b0b63f3e4320	README.ja.md	official	adopt	staging と rename で配置する旨の説明（日本語版）。safe-dir-sync の official な追加に対応	none	needed	no	agmsg_architect_claude	classified
+227192501cc326ea	README.ja.md	official	adopt	不正 UTF-8 の修復コマンドの説明（日本語版）。repair-invalid-utf8.sh の official な追加に対応	none	needed	no	agmsg_architect_claude	classified
+38d95e986e5ca52e	README.md	agguild	port	受信側の短期リースの説明。delivery gate の概念	none	needed	no	agmsg_architect_claude	classified
+6b5b9c3fc08768cb	README.md	agguild	port	受信が排他リースを取る旨の説明。delivery gate の概念	none	needed	no	agmsg_architect_claude	classified
+058f7d6373fa2ed2	README.md	agguild	port	receipt が何を意味するかの説明。delivery gate の受領記録	none	needed	no	agmsg_architect_claude	classified
+69cd50ec1d7d8134	README.md	agguild	port	GitHub CLI の宛先ガードの説明。fork のアカウント分離	none	needed	no	agmsg_architect_claude	classified
+02f47959d3b6d681	README.md	agguild	port	actas が全登録チームで排他になる旨の説明。fork の全チーム pair 解決	none	needed	no	agmsg_architect_claude	classified
+f5f4ff2d3c68f027	README.md	agguild	port	spawn options の type@role 節の説明。fork の role overlay	none	needed	no	agmsg_architect_claude	classified
+a15687e691f5f4a1	README.md	agguild	port	codex@architect overlay の例。fork の role overlay	none	needed	no	agmsg_architect_claude	classified
+ef8a701162fca332	README.md	agguild	port	codex の profile alias の要件。fork の role overlay	none	needed	no	agmsg_architect_claude	classified
+77d8a6eb5eee54a1	README.md	official	adopt	despawn の status=unavailable を説明へ反映。despawn.sh の一般の修正に対応	none	needed	no	agmsg_architect_claude	classified
+a353dccb4092a36b	README.md	official	adopt	despawn の status=forced / partial を説明へ反映。despawn.sh の一般の修正に対応	none	needed	no	agmsg_architect_claude	classified
+aaa80b85e0515fd7	README.md	official	adopt	delivery.sh の unknown と off の違いの説明。delivery.sh の一般の修正に対応	none	needed	no	agmsg_architect_claude	classified
+3a35fb7c436e6851	README.md	agguild	port	actas が全登録チームの同名を購読する旨の一覧行。fork の全チーム pair 解決	none	needed	no	agmsg_architect_claude	classified
+2401790a8082d18a	README.md	agguild	port	message-status.sh の usage 行。同コマンドは上流に無い	none	needed	no	agmsg_architect_claude	classified
+425f0b8ae10634de	README.md	agguild	port	join.sh の --role / --kind と roster-normalize.sh の usage 行。いずれも fork	none	needed	no	agmsg_architect_claude	classified
+4ef300f45f2f6fb0	README.md	agguild	port	delivery.sh --format と reset.sh --no-resolve の usage 行。いずれも fork	none	needed	no	agmsg_architect_claude	classified
+c11784a3337594fb	README.md	agguild	port	reconciler と watchdog の orphan_ready の説明。team-work は fork 固有	none	needed	no	agmsg_architect_claude	classified
+ebc8ac636c17bd7a	README.md	agguild	port	受信のメッセージリースの説明。delivery gate の概念	none	needed	no	agmsg_architect_claude	classified
+9aeda936f7bfe00e	README.md	official	adopt	配送経路が 1 本しかないことの FAQ。上流の delivery mode と queue だけを説明する	none	needed	no	agmsg_architect_claude	classified
+fe8e97bac881ecbc	README.md	official	adopt	startup ファイルが symlink でもよい旨の説明。startup-path-resolver の official な変更に対応	none	needed	no	agmsg_architect_claude	classified
+f2ce05efcf67b8da	README.md	official	adopt	不正 UTF-8 の修復コマンドの説明。repair-invalid-utf8.sh の official な追加に対応	none	needed	no	agmsg_architect_claude	classified
+387091ceedc83e67	README.md	agguild	port	inbox の handoff の claim と確認の説明。delivery gate の概念	none	needed	no	agmsg_architect_claude	classified
+9d112611a67b9531	SKILL.md	agguild	port	reset.sh --no-resolve の説明。fork のオプション	none	needed	no	agmsg_architect_claude	classified
+bc8c5d429535fa99	SKILL.md	official	adopt	despawn の status=unavailable を説明へ反映。despawn.sh の一般の修正に対応	none	needed	no	agmsg_architect_claude	classified
+347fd96241c5e0cd	SKILL.md	official	adopt	despawn の status=forced / partial を説明へ反映。despawn.sh の一般の修正に対応	none	needed	no	agmsg_architect_claude	classified
+770990f4230f8250	app/README.md	agguild	port	bundle する agmsg-core の tag を fork の origin から読む旨の説明。fork の配布事情	none	needed	no	agmsg_architect_claude	classified
+947f0879b6937804	app/scripts/bundle-core.sh	agguild	port	origin に pin した tag が無い場合の診断。fork の配布事情	none	needed	no	agmsg_architect_claude	classified
 6df64886ccde3dd6	docs/actas.md	agguild	port	全登録 (team, name) の pair ごとに排他ロックを取る旨の説明。fork の全チーム pair 解決	none	needed	no	agmsg_architect_claude	classified
 fd4d849c1818cfb7	docs/actas.md	agguild	port	active-name watcher が全チームの pair 集合を使う旨の説明。fork の全チーム pair 解決	none	needed	no	agmsg_architect_claude	classified
 dc0f382789e91879	docs/actas.md	agguild	port	drop が残る全チームのロックを解放する旨の説明。fork の全チーム pair 解決	none	needed	no	agmsg_architect_claude	classified
@@ -147,17 +147,17 @@ baf671cf9ff64790	docs/superpowers/specs/2026-08-15-delivery-capability-json-desi
 a8c85b67f7d78a17	docs/superpowers/specs/2026-08-15-team-work-lease-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
 00a83a278e6ec626	docs/superpowers/specs/2026-08-15-team-work-live-audit-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
 03cbe0e439928e58	docs/superpowers/specs/2026-08-15-team-work-reconciler-dispatch-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
-80fe5c6f3dbc17ad	install.sh								unclassified
-ed7150a789cca3eb	install.sh								unclassified
-0f0f3b6baa24c2ee	install.sh								unclassified
-735c20f68b70d611	install.sh								unclassified
-1d62f814dca0809e	install.sh								unclassified
-f27faa66be48ff53	install.sh								unclassified
-a8c5aca55d2fea1d	install.sh								unclassified
-8e9cde2ef08c4552	install.sh								unclassified
-33eb6e919831783c	install.sh								unclassified
-5a44366f6a6fe6ff	install.sh								unclassified
-c3785ea198c825f6	install.sh								unclassified
+80fe5c6f3dbc17ad	install.sh	official	adopt	safe-dir-sync.sh と startup-path-resolver.sh の読み込み。どちらも official	none	needed	no	agmsg_architect_claude	classified
+ed7150a789cca3eb	install.sh	official	adopt	書き込み先パスを cygpath で変換する。MSYS2 での一般のパス不整合の修正	none	needed	no	agmsg_architect_claude	classified
+0f0f3b6baa24c2ee	install.sh	agguild	port	git push の宛先ガードの設置。fork のアカウント分離	none	needed	no	agmsg_architect_claude	classified
+735c20f68b70d611	install.sh	official	adopt	再帰同期である旨の説明。safe_dir_sync への切り替えと対で official	none	needed	no	agmsg_architect_claude	classified
+1d62f814dca0809e	install.sh	official	adopt	--update 経路を safe_dir_sync へ。実行中の watcher を truncate しない一般の修正	none	needed	no	agmsg_architect_claude	classified
+f27faa66be48ff53	install.sh	agguild	port	guards/ への chmod。fork のアカウント分離	none	needed	no	agmsg_architect_claude	classified
+a8c5aca55d2fea1d	install.sh	agguild	port	ガードの設置呼び出し。fork のアカウント分離	none	needed	no	agmsg_architect_claude	classified
+8e9cde2ef08c4552	install.sh	official	adopt	再帰同期である旨の説明（新規インストール側）。safe_dir_sync と対で official	none	needed	no	agmsg_architect_claude	classified
+33eb6e919831783c	install.sh	official	adopt	新規インストール側も safe_dir_sync へ。--update 経路と挙動を揃える一般の修正	none	needed	no	agmsg_architect_claude	classified
+5a44366f6a6fe6ff	install.sh	agguild	port	guards/ への chmod（新規インストール側）。fork のアカウント分離	none	needed	no	agmsg_architect_claude	classified
+c3785ea198c825f6	install.sh	agguild	port	ガードの設置呼び出し（新規インストール側）。fork のアカウント分離	none	needed	no	agmsg_architect_claude	classified
 960a97ebb9dd1670	scripts/actas-claim.sh								unclassified
 e1f0b71edef884dd	scripts/actas-claim.sh								unclassified
 e4d380d2a1b010de	scripts/actas-claim.sh								unclassified
@@ -745,7 +745,7 @@ f4235325f423fee2	tests/test_watch.bats								unclassified
 f4f3015f4e11aeb2	tests/test_watch_install_changed.bats								unclassified
 06cefbbfb1942667	tests/test_watch_once.bats								unclassified
 b63945588cad2f66	tests/test_watch_ownership_log.bats								unclassified
-075637b6ce5ac87c	uninstall.sh								unclassified
-f354b140f8ea7e57	uninstall.sh								unclassified
-d299832e354173e6	uninstall.sh								unclassified
-235fc78947d8b365	uninstall.sh								unclassified
+075637b6ce5ac87c	uninstall.sh	official	adopt	SCRIPT_DIR の定義。startup-path-resolver.sh を読み込むために必要で official と対	none	needed	no	agmsg_architect_claude	classified
+f354b140f8ea7e57	uninstall.sh	official	adopt	startup-path-resolver.sh の読み込み。同ファイルは official	none	needed	no	agmsg_architect_claude	classified
+d299832e354173e6	uninstall.sh	agguild	port	gh owner guard の PATH マーカーの定義。fork のアカウント分離	none	needed	no	agmsg_architect_claude	classified
+235fc78947d8b365	uninstall.sh	agguild	port	gh / git owner guard の削除処理。fork のアカウント分離	none	needed	no	agmsg_architect_claude	classified
