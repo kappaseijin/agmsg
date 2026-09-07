@@ -256,7 +256,7 @@ d4e534147166757b	scripts/internal/team-work-dispatch-triggers.sql								unclass
 39b561b9f1c03b77	scripts/join.sh	agguild	port	--role / --kind の引数解析。fork 固有の座席属性	none	needed	no	agmsg_architect_claude	classified
 e2f82285bafc670c	scripts/join.sh	agguild	port	上流に無い識別子 MEMBER_ROLE を参照する。単独適用不可	none	needed	no	agmsg_architect_claude	classified
 e7cc375b4053acb4	scripts/join.sh	agguild	port	上流に無い識別子 MEMBER_KIND を参照する。単独適用不可	none	needed	no	agmsg_architect_claude	classified
-88e83e30ab52898c	scripts/join.sh	official	adopt	登録対象の取り違えを直す(#73)。AGMSG_RESOLVE_PROJECT_SKIP_MARKER は上流の仕組み	none	needed	no	agmsg_architect_claude	classified
+88e83e30ab52898c	scripts/join.sh	agguild	port	AGMSG_RESOLVE_PROJECT_SKIP_MARKER が上流に 0 件。fork の resolve-project.sh が定義する knob で単独適用不可	none	needed	no	agmsg_architect_claude	classified
 64c8407c2ee5c268	scripts/join.sh	agguild	port	上流に無い識別子 TEAM_ID_SQL を参照する。単独適用不可	none	needed	no	agmsg_architect_claude	classified
 491546b72df3e88c	scripts/join.sh	agguild	port	上流に無い識別子 MEMBER_KIND を参照する。単独適用不可	none	needed	no	agmsg_architect_claude	classified
 4fe0d186f4d695a5	scripts/join.sh	official	adopt	MEMBER_ID の SQL エスケープ。一般の SQL 混入対策で単独適用可	none	needed	no	agmsg_architect_claude	classified
