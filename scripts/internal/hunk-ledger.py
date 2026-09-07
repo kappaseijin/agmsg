@@ -178,7 +178,15 @@ def implementations_for(test_path, paths):
     the 44 corresponding tests are in that position, covering 166 of the 211
     hunks, so the plural is the normal case rather than an edge one.
     """
-    stem = normalized_stem(test_path)[len('test_'):]
+    # Check the prefix before removing it. Slicing five characters off any name
+    # turns `broker.js` into `r`, which then prefix-matches README.md and ten
+    # other files -- a fixture pointed at the readme. The old `if not stem`
+    # only caught names of five characters or fewer, because it was looking at
+    # what survived the slice rather than at whether the slice was warranted.
+    stem = normalized_stem(test_path)
+    if not stem.startswith('test_'):
+        return []
+    stem = stem[len('test_'):]
     if not stem:
         return []
     found = set()

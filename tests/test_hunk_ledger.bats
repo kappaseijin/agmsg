@@ -384,6 +384,21 @@ mechanical_ledger() {
   grep -Eq -- "	tests/test_api_actas_owner\.bats	official" <<<"$output"
 }
 
+@test "a name that is not a test name points at no implementation" {
+  # The stem used to be taken by slicing five characters off unconditionally,
+  # so `broker.js` became `r` and prefix-matched README.md and ten other files.
+  # Nothing had gone wrong yet only because those files disagree about their
+  # owner, which is luck rather than design: agree, and a fixture would have
+  # quietly inherited the readme's classification.
+  run python3 "$BATS_TEST_DIRNAME/ledger_correspondence.py" --probe "$LEDGER_TOOL"
+  [ "$status" -eq 0 ]
+  grep -Fq -- "tests/fixtures/pm-broker/broker.js 0" <<<"$output"
+  grep -Fq -- "tests/fixtures/team-work-audit/closed.json 0" <<<"$output"
+  # The positive control: a real test name still resolves, so this is the
+  # prefix check working rather than the matching having been switched off.
+  grep -Fq -- "tests/test_watch.bats 1" <<<"$output"
+}
+
 @test "the correspondence the design counted is the one the code finds" {
   # 44 files / 211 hunks. Pinned because the number moves with the reading:
   # searching only scripts/ gives 42, and skipping the -/_ normalisation gives
