@@ -1,0 +1,751 @@
+# agmsg fork hunk ledger (Issue #254 / #222)
+# base-merge: 3d06318
+# base-fork: 7ea795e93683b0e7ede0fabf017fe503fcfe6aea
+# base-upstream: e58dbafad5a84be625f070385bb0c076c3daa4db
+# command: GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -c diff.algorithm=myers -c core.quotePath=false diff -U0 --inter-hunk-context=0 --no-color --no-ext-diff --no-textconv 3d06318 7ea795e93683b0e7ede0fabf017fe503fcfe6aea
+# git-version: 2.54.0
+# precondition: `git config --list --show-origin | grep -c '\bdiff\.'` must be 0
+# expected-hunks: 734
+# expected-files: 267
+# expected-digest: 258a1e93df7db7fe06334c5d8bb70517e96221b0ea5be9b63bd09b93a42589f1
+#                  grep -v '^#' <ledger> | cut -f1 | LC_ALL=C sort | shasum -a 256
+#                  (LF-separated AND LF-terminated; see the design doc for the byte-level spec)
+# NOTE: the count depends on this exact command AND on git config. -U3:484, -U10:404,
+#       -w:742, diff.interHunkContext=10:450, core.quotePath=true changes one non-ASCII path.
+#       Trust expected-hunks/expected-digest, not your own diff.
+#
+# columns: hunk_id  path  owner  disposition  rationale  public_dep  regression  conflict_risk  assignee  status
+9b262a83717fc01d	.github/enforced-assertions-baseline								unclassified
+96e94de06531318d	.github/workflows/tests.yml								unclassified
+ffa0428a4fb0efc9	README.ja.md								unclassified
+9129534e3ce4a93c	README.ja.md								unclassified
+8fa2fe7594dc170c	README.ja.md								unclassified
+cbafc55b85aea43e	README.ja.md								unclassified
+d854eaa0c62a3ae9	README.ja.md								unclassified
+f7e09867c3f74590	README.ja.md								unclassified
+6e89dfd698657ee6	README.ja.md								unclassified
+a08ec06ffcae923b	README.ja.md								unclassified
+dcc4d79d3fb222c6	README.ja.md								unclassified
+97a4b15f56b0a4ab	README.ja.md								unclassified
+dbf7b0b63f3e4320	README.ja.md								unclassified
+227192501cc326ea	README.ja.md								unclassified
+38d95e986e5ca52e	README.md								unclassified
+6b5b9c3fc08768cb	README.md								unclassified
+058f7d6373fa2ed2	README.md								unclassified
+69cd50ec1d7d8134	README.md								unclassified
+02f47959d3b6d681	README.md								unclassified
+f5f4ff2d3c68f027	README.md								unclassified
+a15687e691f5f4a1	README.md								unclassified
+ef8a701162fca332	README.md								unclassified
+77d8a6eb5eee54a1	README.md								unclassified
+a353dccb4092a36b	README.md								unclassified
+aaa80b85e0515fd7	README.md								unclassified
+3a35fb7c436e6851	README.md								unclassified
+2401790a8082d18a	README.md								unclassified
+425f0b8ae10634de	README.md								unclassified
+4ef300f45f2f6fb0	README.md								unclassified
+c11784a3337594fb	README.md								unclassified
+ebc8ac636c17bd7a	README.md								unclassified
+9aeda936f7bfe00e	README.md								unclassified
+fe8e97bac881ecbc	README.md								unclassified
+f2ce05efcf67b8da	README.md								unclassified
+387091ceedc83e67	README.md								unclassified
+9d112611a67b9531	SKILL.md								unclassified
+bc8c5d429535fa99	SKILL.md								unclassified
+347fd96241c5e0cd	SKILL.md								unclassified
+770990f4230f8250	app/README.md								unclassified
+947f0879b6937804	app/scripts/bundle-core.sh								unclassified
+6df64886ccde3dd6	docs/actas.md								unclassified
+fd4d849c1818cfb7	docs/actas.md								unclassified
+dc0f382789e91879	docs/actas.md								unclassified
+fe741d7ad82448d9	docs/actas.md								unclassified
+5e4c5c933df38e1b	docs/actas.md								unclassified
+523ee448986f2bdc	docs/actas.md								unclassified
+711c79c432511638	docs/adr/0005-safe-scripts-dir-sync-for-install.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+6d55a2cb08f6cfff	docs/building-on-agmsg.md								unclassified
+22e63511df135b71	docs/building-on-agmsg.md								unclassified
+b0a25e7d3d0fd09d	docs/building-on-agmsg.md								unclassified
+54995afacd88e329	docs/decisions/2026-08-11T121328_git-push-owner-guard.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+3e2352994722e41a	docs/decisions/2026-08-11T124253_required-role-overlay-and-codex-profile-validation.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+fab7b1052566e078	docs/decisions/2026-08-11T124720_scale-exporter-work-queue-boundary.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+7dba94ff73945737	docs/decisions/2026-08-11T192614_gh-write-owner-guard.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+be9c9e4c249dbebd	docs/decisions/2026-08-14T131041_issue-23-derived-agent.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+a75398923c524cca	docs/decisions/2026-08-17T060000_codex不在期間のClaude単独運用とmerge方針.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+14096ba9664822e5	docs/decisions/2026-08-20T170319_issue-92-team-work-rollout.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+47bd175b7b32d412	docs/decisions/2026-08-21T114715_issue-101-blocked-state-ready.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+5621e105a19cac3b	docs/decisions/2026-08-21T174508_issue-103-roster-normalizer.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+8cbfbcec11723ea4	docs/decisions/2026-08-21T203441_issue-97-102-dispatch-recovery-g4.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+1091c302b81dc5fd	docs/decisions/2026-08-21T210215_issue-102-g4-implementation-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+c40a8eb280d91fd7	docs/decisions/2026-08-22T141536_issue-116-git-push-ssh-alias-guard.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+9e1ad564f3aca102	docs/decisions/2026-08-22T181337_issue-119-multiteam-actas-subscription.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+166e799035755a8a	docs/decisions/2026-08-23T230831_issue-128-launcher-flake-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+620b694357b271c0	docs/decisions/2026-08-24T081841_issue-88-ready-deadline.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+b0ddb6f81307b8e2	docs/decisions/2026-08-25T140818_issue-145-b-invalid-utf8-repair.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+4220381cfe38a9fd	docs/decisions/2026-08-26T091709_r1-test-harness-environment-isolation.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+b9b9b4cb85bcc6d4	docs/decisions/2026-08-27T090957_issue-210-g4-reconcile-closeout-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+7314f3344fc725e4	docs/decisions/2026-08-27T090957_issue-211-g4-reblock-transition-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+0d0ab69189e41b8d	docs/decisions/2026-08-27T110605_issue-214-gh-owner-guard-path-activation-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+bb482fab33ae63b7	docs/decisions/2026-09-04T182436_issue-219-symlinked-startup-file-update-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+bfc33446aab34fcf	docs/decisions/2026-09-04T204406_issue-221-nonexact-whoami-account-selection-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+6f5c78ddbf4a580f	docs/decisions/2026-09-04T230624_issue-209-g4-transition-required-quiescent-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+d11c1b1582b697ae	docs/decisions/2026-09-05T030329_issue-223-delivery-gate-runtime-initialization-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+54fbf3ce0a7ab510	docs/decisions/2026-09-05T100910_issue-230-watch-gate-release-resilience-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+b836c3800e51d037	docs/decisions/2026-09-05T125720_issue-230-pr233-event-order-diagnosis.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+e01d27e0ef092501	docs/decisions/2026-09-05T150240_issue-236-pm-execution-boundary.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+aa1b7e0719fd8c15	docs/decisions/2026-09-05T174503_issue-236-native-tui-hook-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+f4dac06a068ac52e	docs/decisions/2026-09-05T205739_issue-236-claim-schema-integration.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+e97a9a2bd4476a7c	docs/decisions/2026-09-05T224258_issue-236-p2-pilot.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+983c86d214b0b5f7	docs/decisions/2026-09-05T231020_issue-222-forward-inventory.json	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+d09bee2452accad8	docs/decisions/2026-09-05T231020_issue-222-responsibility-contract.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+de447b3927f7181c	docs/decisions/2026-09-05T231020_issue-222-reverse-inventory.json	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+75fb7fa03ed8a396	docs/decisions/2026-09-05T235514_issue-246-registration-query.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+e2bbb93d0985e419	docs/decisions/2026-09-05T235514_issue-247-owner-query.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+81aa8b66167c9ef3	docs/plan/2026-08-14_issue-10-gh-write-owner-guard.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+f779834f00f16116	docs/plan/2026-08-14_issue-22-safe-dir-sync.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+56c8fe9b96ba9472	docs/plan/2026-08-14_issue-28_dependency-audit.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+26a7f02c4cdd1aec	docs/plan/2026-08-14_issue-3-git-push-owner-guard.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+ee66e0cbaa9621d2	docs/plan/2026-08-14_issue-7-and-17-reset-flags.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+cde6b5c7837cca65	docs/plan/2026-08-16_issue-63-gh-default-destination-failure.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+ddef00120b35b6b7	docs/plan/2026-08-16_issue-65-codex-sessionstart-json.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+a3a48f7f88d76016	docs/plan/2026-08-16_issue-67-gh-rerun-guard.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+33c33e1ea3513b38	docs/plan/2026-08-21_issue-88-hang-artifact-verification.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+e403a96b77483de3	docs/plan/2026-08-22_issue-98-roster-check-verification.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+5e8a57848c89ee56	docs/plan/2026-08-25_issue-155-gh-label-create-guard.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+28bc8a3d891c28d1	docs/plan/2026-08-25_issue-162-bridge-metadata-identity.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+f9753b873bbb1c9b	docs/plan/2026-08-26_issue-164-pr3-writer-gate.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+2a582e5075d2c8e6	docs/plan/2026-08-26_issue-168-watch-runtime-db-preflight.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+7a1e278d29ab2862	docs/plan/2026-08-26_issue-169-codex-monitor-launcher-teardown.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+5f3dd08e1111f50f	docs/plan/2026-08-26_issue-169-windows-diagnostic-repair.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+ce0b6093c2a9aee0	docs/plan/2026-08-26_issue-169-windows-teardown-evidence.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+0a57cd2bb4e09601	docs/plan/2026-08-26_issue-171-bats-storage-isolation.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+f207fd752fb93691	docs/plan/2026-08-26_issue-175-delivery-status-tristate.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+1ed4e17ebb764247	docs/superpowers/plans/2026-08-11-issue-15-core-tag-sync-diagnostic.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+1b10e1c034160738	docs/superpowers/plans/2026-08-11-issue-4-bsd-awk-newlines.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+c3a1fe112e6f97c3	docs/superpowers/plans/2026-08-14-message-claim-ack.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+0d0b884dbaa91af6	docs/superpowers/plans/2026-08-14-upstream-main-sync.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+f63f6f472a76b2d6	docs/superpowers/plans/2026-08-15-delivery-capability-json.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+49726c47de9666a5	docs/superpowers/plans/2026-08-15-gh-pr-ready-guard.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+11c742de4c1087d9	docs/superpowers/plans/2026-08-15-git-push-quiet-option.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+cad5ef4828e2dd69	docs/superpowers/plans/2026-08-15-preinstalled-git-guard-fixtures.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+6237f88281eee832	docs/superpowers/plans/2026-08-15-role-overlay-capability-contract.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+29a9815ae926be51	docs/superpowers/plans/2026-08-15-roster-json-contract.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+893414d1f5dfff15	docs/superpowers/plans/2026-08-15-team-work-contract.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+35d8140bd5872f42	docs/superpowers/plans/2026-08-15-team-work-lease.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+b5d6c5e42bf92956	docs/superpowers/plans/2026-08-15-team-work-live-audit.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+9363f05b84de0bbc	docs/superpowers/plans/2026-08-15-team-work-reconciler-dispatch.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+c2a1d412b81218c0	docs/superpowers/plans/2026-08-20-issue-91-lock-test-isolation.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+3e117d9e710d8fbd	docs/superpowers/plans/2026-08-20-issue-99-model-sync.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+af7ef872e8a1cd3f	docs/superpowers/plans/2026-08-21-issue-102-g4-audit.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+035185cae880c53d	docs/superpowers/plans/2026-08-21-issue-97-dispatch-recovery.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+c96abcd87800ce7f	docs/superpowers/plans/2026-08-21_17-45-08-issue-103-roster-normalizer.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+8fd4c0de3c09f71d	docs/superpowers/plans/2026-08-22-issue-102-g4-phase-1b.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+efb25c1dcbaef8cf	docs/superpowers/specs/2026-08-11-issue-15-core-tag-sync-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+81af4afe03e4fa3d	docs/superpowers/specs/2026-08-14-message-claim-ack-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+baf671cf9ff64790	docs/superpowers/specs/2026-08-15-delivery-capability-json-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+47953cd0c6921853	docs/superpowers/specs/2026-08-15-roster-json-contract-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+840b5193c32a5f5a	docs/superpowers/specs/2026-08-15-team-work-contract-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+a8c85b67f7d78a17	docs/superpowers/specs/2026-08-15-team-work-lease-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+00a83a278e6ec626	docs/superpowers/specs/2026-08-15-team-work-live-audit-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+03cbe0e439928e58	docs/superpowers/specs/2026-08-15-team-work-reconciler-dispatch-design.md	agguild	port	fork-owned record of its own decisions; not an upstream concern					classified
+80fe5c6f3dbc17ad	install.sh								unclassified
+ed7150a789cca3eb	install.sh								unclassified
+0f0f3b6baa24c2ee	install.sh								unclassified
+735c20f68b70d611	install.sh								unclassified
+1d62f814dca0809e	install.sh								unclassified
+f27faa66be48ff53	install.sh								unclassified
+a8c5aca55d2fea1d	install.sh								unclassified
+8e9cde2ef08c4552	install.sh								unclassified
+33eb6e919831783c	install.sh								unclassified
+5a44366f6a6fe6ff	install.sh								unclassified
+c3785ea198c825f6	install.sh								unclassified
+960a97ebb9dd1670	scripts/actas-claim.sh								unclassified
+e1f0b71edef884dd	scripts/actas-claim.sh								unclassified
+e4d380d2a1b010de	scripts/actas-claim.sh								unclassified
+0067766b5a89380a	scripts/actas-claim.sh								unclassified
+14d2fa1e45d009de	scripts/actas-claim.sh								unclassified
+53779d1b41370377	scripts/actas-claim.sh								unclassified
+1a487cfbfd12fe79	scripts/actas-claim.sh								unclassified
+c680f057de8ba823	scripts/actas-claim.sh								unclassified
+dcb501a9456b2c28	scripts/api.sh								unclassified
+ffd11d1cc087e1ed	scripts/api.sh								unclassified
+c889909e00250a1e	scripts/api.sh								unclassified
+b079760e63d40fca	scripts/api.sh								unclassified
+adad748e17ae2a42	scripts/api.sh								unclassified
+99a52065e75031ca	scripts/api.sh								unclassified
+3e2fa87beb8bd90e	scripts/check-inbox.sh								unclassified
+41265ac3f5b6b92e	scripts/check-inbox.sh								unclassified
+a0a1a140018f3401	scripts/claim.sh								unclassified
+4480542fd7d514d9	scripts/delivery.sh								unclassified
+debb3d7b1f8763a3	scripts/delivery.sh								unclassified
+18be5274b8dd46e9	scripts/delivery.sh								unclassified
+c06684aa21630461	scripts/delivery.sh								unclassified
+4f2ea7ebe57eef91	scripts/delivery.sh								unclassified
+f1b9aabcc88ec1b1	scripts/delivery.sh								unclassified
+877410922fba7a56	scripts/delivery.sh								unclassified
+354f9059f19391d8	scripts/delivery.sh								unclassified
+0d61c3cf1247db67	scripts/despawn.sh								unclassified
+1754d655e551c56c	scripts/despawn.sh								unclassified
+86a4eb1b28952335	scripts/despawn.sh								unclassified
+1d010f9b35ebadf2	scripts/despawn.sh								unclassified
+67b3849d2212c66e	scripts/despawn.sh								unclassified
+dfc2318680b893f5	scripts/despawn.sh								unclassified
+845ce8375f7abe3b	scripts/despawn.sh								unclassified
+e15ce555a28f6b00	scripts/despawn.sh								unclassified
+c55af21598cbef20	scripts/despawn.sh								unclassified
+6535593211f6fbe8	scripts/drivers/storage/sqlite.sh								unclassified
+250dbea6081ce1b4	scripts/drivers/storage/sqlite.sh								unclassified
+afd249817803acf9	scripts/drivers/storage/sqlite.sh								unclassified
+a0b5b84bdc42b706	scripts/drivers/storage/sqlite.sh								unclassified
+ea1f4f2b66ad37a3	scripts/drivers/storage/sqlite.sh								unclassified
+5d29bab60dfa7632	scripts/drivers/storage/sqlite.sh								unclassified
+a84a549ae8976404	scripts/drivers/storage/sqlite.sh								unclassified
+4db40bbfe92d7bef	scripts/drivers/storage/sqlite.sh								unclassified
+e088c1698d413ca3	scripts/drivers/storage/sqlite.sh								unclassified
+fc13b7aebfe35211	scripts/drivers/storage/sqlite.sh								unclassified
+805e459ab008657d	scripts/drivers/types/claude-code/template.md								unclassified
+766f019868735fc3	scripts/drivers/types/claude-code/template.md								unclassified
+bea58ce3724ea6aa	scripts/drivers/types/claude-code/template.md								unclassified
+c975d0db59ead7d3	scripts/drivers/types/claude-code/template.md								unclassified
+56cc6c63fde77078	scripts/drivers/types/claude-code/template.md								unclassified
+df818afe46a97f47	scripts/drivers/types/claude-code/type.conf								unclassified
+bd980f8217911943	scripts/drivers/types/codex/_session-start.sh								unclassified
+97b5504ba295ce74	scripts/drivers/types/codex/codex-bridge-launcher.sh								unclassified
+0181557af436c6a9	scripts/drivers/types/codex/codex-bridge.js								unclassified
+1548e15e0c9571ee	scripts/drivers/types/codex/codex-bridge.js								unclassified
+beb0f9719d74d730	scripts/drivers/types/codex/codex-bridge.js								unclassified
+9389a9bb95cb2beb	scripts/drivers/types/codex/codex-bridge.js								unclassified
+dc0b26f5777cf569	scripts/drivers/types/codex/codex-bridge.js								unclassified
+bdba912671e40906	scripts/drivers/types/codex/codex-bridge.js								unclassified
+d9f9ae4079addfa2	scripts/drivers/types/codex/codex-bridge.js								unclassified
+4d5dee0be793891f	scripts/drivers/types/codex/codex-bridge.js								unclassified
+ae4086b9a57da4dc	scripts/drivers/types/codex/codex-bridge.js								unclassified
+95767800b43222b0	scripts/drivers/types/codex/codex-bridge.js								unclassified
+d0338e606834cf2c	scripts/drivers/types/codex/template.md								unclassified
+4629e4184a39560c	scripts/drivers/types/codex/type.conf								unclassified
+2236df315549c181	scripts/drivers/types/codex/type.conf								unclassified
+8be6fc7701f086c2	scripts/drivers/types/codex/watch-once.sh								unclassified
+14b6ac342d95e073	scripts/drivers/types/codex/watch-once.sh								unclassified
+bb5c4aa95f77191a	scripts/drivers/types/codex/watch-once.sh								unclassified
+16ae34beb8150614	scripts/guards/gh-owner-guard-path.sh								unclassified
+b956af39cc84d785	scripts/guards/gh-write-owner-guard-launcher.sh								unclassified
+a35fb1fbcbe55e6d	scripts/guards/gh-write-owner-guard.sh								unclassified
+3637c227e7918971	scripts/guards/git-push-owner-guard-launcher.sh								unclassified
+033fe637d4772c0b	scripts/guards/git-push-owner-guard.sh								unclassified
+88f057d1bfe511dc	scripts/history.sh								unclassified
+48f45a952d78c575	scripts/history.sh								unclassified
+ebf9f7abbc7c9edf	scripts/identities.sh								unclassified
+988e1469f411fdd5	scripts/identities.sh								unclassified
+ea9f809c162deeb7	scripts/identities.sh								unclassified
+ec3f030fde8cebbe	scripts/identities.sh								unclassified
+6ed4c8646f2caf89	scripts/identities.sh								unclassified
+118a852f452dafd0	scripts/identities.sh								unclassified
+9d82f044c7d8b34e	scripts/inbox.sh								unclassified
+9a933a0751e02b57	scripts/inbox.sh								unclassified
+89219311144dba3b	scripts/inbox.sh								unclassified
+78a0f53eedd5f91a	scripts/internal/init-db.sh								unclassified
+b152b40fb9c7bdb8	scripts/internal/init-db.sh								unclassified
+fa53c8f6cb5d2fcf	scripts/internal/init-db.sh								unclassified
+7b09967c774e83e3	scripts/internal/init-db.sh								unclassified
+2cb6403c7cb2b5e5	scripts/internal/migrate-team-work-dispatch.sh								unclassified
+e1dbc5be1886d95d	scripts/internal/remote-sync.mjs								unclassified
+73b0b4d73c70a42d	scripts/internal/remote-sync.mjs								unclassified
+7b1ab854b07e4789	scripts/internal/remote-sync.mjs								unclassified
+f91441431d607672	scripts/internal/team-work-dispatch-schema.sql								unclassified
+d4e534147166757b	scripts/internal/team-work-dispatch-triggers.sql								unclassified
+2cda66134722b673	scripts/join.sh								unclassified
+39b561b9f1c03b77	scripts/join.sh								unclassified
+e2f82285bafc670c	scripts/join.sh								unclassified
+e7cc375b4053acb4	scripts/join.sh								unclassified
+88e83e30ab52898c	scripts/join.sh								unclassified
+64c8407c2ee5c268	scripts/join.sh								unclassified
+491546b72df3e88c	scripts/join.sh								unclassified
+4fe0d186f4d695a5	scripts/join.sh								unclassified
+c10809154f24504e	scripts/join.sh								unclassified
+b8e8fb0a9a75ca64	scripts/join.sh								unclassified
+08af618ab8968a37	scripts/join.sh								unclassified
+cd3d28579760bdf9	scripts/lib/actas-lock.sh								unclassified
+cd045dabf67d4cad	scripts/lib/actas-lock.sh								unclassified
+577d8b7e7e751ba8	scripts/lib/actas-lock.sh								unclassified
+6325f5a7d4aa72fa	scripts/lib/actas-lock.sh								unclassified
+69e6c03ea2b702f4	scripts/lib/actas-lock.sh								unclassified
+8e53d8049f163a9a	scripts/lib/actas-lock.sh								unclassified
+b74fec8bee48d88d	scripts/lib/actas-lock.sh								unclassified
+925e464b344167c8	scripts/lib/actas-lock.sh								unclassified
+58850063ac27828c	scripts/lib/actas-lock.sh								unclassified
+e0c7bda9eff29d7f	scripts/lib/actas-lock.sh								unclassified
+100f372048e36f95	scripts/lib/actas-lock.sh								unclassified
+22a7f3a10eb9470f	scripts/lib/actas-lock.sh								unclassified
+c37132d37dc709ed	scripts/lib/actas-lock.sh								unclassified
+3ad59e33d671da3e	scripts/lib/actas-lock.sh								unclassified
+f9267bab41c036cf	scripts/lib/actas-lock.sh								unclassified
+434fd718d5363a9e	scripts/lib/actas-lock.sh								unclassified
+012b6e27255afaa7	scripts/lib/actas-lock.sh								unclassified
+2a76b2aaa89b5a5c	scripts/lib/actas-lock.sh								unclassified
+2b477338a69a3178	scripts/lib/actas-lock.sh								unclassified
+2e5aca02e2cb0eab	scripts/lib/actas-lock.sh								unclassified
+9d6dd19091fda520	scripts/lib/actas-lock.sh								unclassified
+6cd2f57efecc3d38	scripts/lib/api-actas-owner.sh								unclassified
+f26af7b2f8701098	scripts/lib/api-registrations.sh								unclassified
+c15dcbad6b8a5020	scripts/lib/claims.sh								unclassified
+d4977aa2a6ac9d26	scripts/lib/cli-options.sh								unclassified
+b9674251fdd6dc04	scripts/lib/delivery-capability.sh								unclassified
+7425525f076afbc2	scripts/lib/g4-audit.js								unclassified
+d9f0f11f6479e680	scripts/lib/g4-contract.js								unclassified
+3454953d9fd1aaff	scripts/lib/g4-ledger.js								unclassified
+23f7645245c1fd1a	scripts/lib/pm-claim.js								unclassified
+59cf5bdb2885591b	scripts/lib/registry-lock.sh								unclassified
+c7a8f3cd4fe2ccf0	scripts/lib/registry-lock.sh								unclassified
+8ed2a3266cdf9531	scripts/lib/registry-lock.sh								unclassified
+688bcd6555469a9e	scripts/lib/registry-lock.sh								unclassified
+0bea98196efec491	scripts/lib/registry-lock.sh								unclassified
+1b6d75030d937420	scripts/lib/registry-lock.sh								unclassified
+f80e83ae3d23f09c	scripts/lib/registry-lock.sh								unclassified
+4685289e9dbf5a7f	scripts/lib/registry-lock.sh								unclassified
+7eca2189f1bd18fb	scripts/lib/registry-lock.sh								unclassified
+371eb2cb3e89eb99	scripts/lib/registry-lock.sh								unclassified
+7b0e5394db77801d	scripts/lib/resolve-project.sh								unclassified
+18d18408f3d906a9	scripts/lib/roster-contract.sh								unclassified
+d476828cede2d8f3	scripts/lib/safe-dir-sync.sh								unclassified
+ff4f88d645a5151a	scripts/lib/spawn-options.sh								unclassified
+5251959e359e78db	scripts/lib/spawn-options.sh								unclassified
+bbaf711e9424ce36	scripts/lib/spawn-options.sh								unclassified
+3108c4234bb629eb	scripts/lib/spawn-options.sh								unclassified
+3cd46c7d179695b3	scripts/lib/spawn-options.sh								unclassified
+fd57321b65eff0e6	scripts/lib/spawn-options.sh								unclassified
+8bb87a115015a7bd	scripts/lib/startup-path-resolver.sh								unclassified
+559b0193506ebf7f	scripts/lib/storage.sh								unclassified
+49903285db79ade8	scripts/lib/storage.sh								unclassified
+a511d434bb918c51	scripts/lib/storage.sh								unclassified
+4acc6f685fd6455b	scripts/lib/storage.sh								unclassified
+d8baed54a9e7ffed	scripts/lib/storage.sh								unclassified
+17a63cc7424b3141	scripts/lib/storage.sh								unclassified
+97bc8dfb3e8b75ff	scripts/lib/storage.sh								unclassified
+6e6c9d490495b285	scripts/lib/storage.sh								unclassified
+a78464771706de8b	scripts/lib/storage.sh								unclassified
+573be2bee135bdbf	scripts/lib/storage.sh								unclassified
+6903a8bdff22663d	scripts/lib/storage.sh								unclassified
+9639f15ee6216ce3	scripts/lib/storage.sh								unclassified
+0c81567fd2d4b71c	scripts/lib/storage.sh								unclassified
+2b21cd826a6cb6be	scripts/lib/storage.sh								unclassified
+08d29e050ca98e8a	scripts/lib/storage.sh								unclassified
+a8ebddd274405a57	scripts/lib/subscription.sh								unclassified
+ab47092f2202026b	scripts/lib/subscription.sh								unclassified
+438b4aa1e2ff9789	scripts/lib/subscription.sh								unclassified
+c306bb591c44219f	scripts/lib/subscription.sh								unclassified
+84a3481fe120152b	scripts/lib/subscription.sh								unclassified
+a966d85688984771	scripts/lib/subscription.sh								unclassified
+e45e53504f790255	scripts/lib/subscription.sh								unclassified
+43a88ced2f5d24af	scripts/lib/team-work-audit.js								unclassified
+a60160825ed92743	scripts/lib/team-work-reconciler.js								unclassified
+26e4ab520d816de2	scripts/lib/team-work.js								unclassified
+d74d728e093bf768	scripts/lib/utf8.sh								unclassified
+3ebfd58bab940242	scripts/lib/validate.sh								unclassified
+73ba93ba259fc0ba	scripts/message-status.sh								unclassified
+55e71dfefd3a7b41	scripts/pane-liveness.sh								unclassified
+37d119fd904ffc1e	scripts/pm-audit-loop.sh								unclassified
+a9f47c1c4f3a4be0	scripts/pm-audit-watchdog.js								unclassified
+1435027d75d39892	scripts/pm-audit-watchdog.sh								unclassified
+1ef7344870982821	scripts/pm-audit.js								unclassified
+af9fd5b3092e60a9	scripts/pm-audit.sh								unclassified
+25360861e7989d36	scripts/pm-broker.js								unclassified
+6ac5f920d01111b9	scripts/pm-broker.sh								unclassified
+dd5c3406bbb31530	scripts/pm-posttool-record								unclassified
+28206f6476d10260	scripts/pm-posttool-record.js								unclassified
+4385aa54f7cf885d	scripts/pm-pretool-guard								unclassified
+7c115a5c21ec7a68	scripts/remote.sh								unclassified
+90150724784dc6ee	scripts/remote.sh								unclassified
+0ab1f4211ed44973	scripts/remote.sh								unclassified
+65731daa83444f13	scripts/remote.sh								unclassified
+37ab18ead653475b	scripts/repair-invalid-utf8.sh								unclassified
+5914ada97355fc0f	scripts/reset.sh								unclassified
+876f8b22cae60554	scripts/reset.sh								unclassified
+bf7d03ead0b5a734	scripts/reset.sh								unclassified
+e3e3f0917773eb65	scripts/reset.sh								unclassified
+30be2932c4d89ffa	scripts/reset.sh								unclassified
+c9756ce3df9ac185	scripts/reset.sh								unclassified
+2516330f2948c406	scripts/reset.sh								unclassified
+46ab30b7fd370e42	scripts/roster-normalize.sh								unclassified
+44edfcdf27140e0c	scripts/send.sh								unclassified
+73329a65327b72ea	scripts/send.sh								unclassified
+1ad27af1a475698b	scripts/send.sh								unclassified
+e6f24991983117a1	scripts/send.sh								unclassified
+c5c1e0ae19bc0899	scripts/send.sh								unclassified
+53322b5561ec1cbb	scripts/session-identity.js								unclassified
+26c9abebc2b405e8	scripts/session-identity.sh								unclassified
+e76cc30525e6742a	scripts/session-start.sh								unclassified
+82eb7cae71c6a1aa	scripts/session-start.sh								unclassified
+3b4eed3353661482	scripts/spawn.sh								unclassified
+fd64cbce362aee51	scripts/spawn.sh								unclassified
+bfc74431222026fa	scripts/spawn.sh								unclassified
+9e9e538175df603c	scripts/spawn.sh								unclassified
+72b2d3198b5a270a	scripts/spawn.sh								unclassified
+5cca39ffc6b0bdd7	scripts/spawn.sh								unclassified
+2fca389d7a105642	scripts/spawn.sh								unclassified
+c1c40e74e86a2e3d	scripts/spawn.sh								unclassified
+bf9149090774e23e	scripts/spawn.sh								unclassified
+66d7d02ce85d23ff	scripts/spawn.sh								unclassified
+11b94ffd8dcd5644	scripts/team-work.sh								unclassified
+a5919c6a81a0b776	scripts/team.sh								unclassified
+699435d54e770773	scripts/team.sh								unclassified
+b2ca3bcaaba8f777	scripts/team.sh								unclassified
+966923c7c873301a	scripts/watch.sh								unclassified
+17cc2847f6e46a26	scripts/watch.sh								unclassified
+b16409d8dd07dda3	scripts/watch.sh								unclassified
+b3a4980290287a94	scripts/watch.sh								unclassified
+67b01b5cf7e1f531	scripts/watch.sh								unclassified
+14aeca4e3cdecfeb	scripts/watch.sh								unclassified
+a9c3866e261b94d9	scripts/watch.sh								unclassified
+97a7a7774b35fc31	scripts/watch.sh								unclassified
+854f45abf2ada3d7	scripts/watch.sh								unclassified
+80c08a4e10d4c5d6	scripts/watch.sh								unclassified
+19baebb11019382b	scripts/watch.sh								unclassified
+b39d426668119c39	scripts/watch.sh								unclassified
+c3c515f4da689b5c	scripts/watch.sh								unclassified
+24da1b60ad6872ae	scripts/watch.sh								unclassified
+7e74b47a41c85bce	scripts/watch.sh								unclassified
+2f9656590cb92913	scripts/watch.sh								unclassified
+696e7806914a17ca	scripts/watch.sh								unclassified
+0d01b683dd8cc4ea	scripts/watch.sh								unclassified
+883205a893f8defd	scripts/watch.sh								unclassified
+a0ffc4ffe247a042	scripts/watch.sh								unclassified
+5a0e5fe5e5f4685c	scripts/watch.sh								unclassified
+5c398ba66f44e019	scripts/watch.sh								unclassified
+bac2c080f9e639e2	scripts/watch.sh								unclassified
+e488babcad860c0d	scripts/watch.sh								unclassified
+38996bf8042cad7d	scripts/watch.sh								unclassified
+869b19d0ba389be3	scripts/watch.sh								unclassified
+809ea029b449eacd	scripts/watch.sh								unclassified
+ce803f378ab218d4	scripts/watch.sh								unclassified
+eac1fec1301458ba	scripts/watch.sh								unclassified
+6d1b3cd1d9203fa9	scripts/watch.sh								unclassified
+40d31e35863c4bc8	scripts/whoami.sh								unclassified
+39b2292a73ffd028	scripts/whoami.sh								unclassified
+b485eafe159ececf	scripts/whoami.sh								unclassified
+847bde44ac348242	scripts/whoami.sh								unclassified
+b31a12d0fdb79d5c	tests/fixtures/g4-audit/duplicate.json								unclassified
+1f28b26644640e1d	tests/fixtures/g4-audit/empty.json								unclassified
+84222bed34599b30	tests/fixtures/g4-audit/error.json								unclassified
+5066f862aebaeebf	tests/fixtures/g4-audit/gh								unclassified
+118ef02afbd7a529	tests/fixtures/g4-audit/one-open.json								unclassified
+c4ba4fe3a54efeb9	tests/fixtures/g4-audit/pagination-failure.json								unclassified
+6bb81291ef87c2a6	tests/fixtures/g4-audit/predicate-gh-failure.json								unclassified
+5728bb8a9dba457a	tests/fixtures/g4-audit/predicate-negative.json								unclassified
+d12bda8f6273e6a8	tests/fixtures/g4-audit/predicate-positive.json								unclassified
+00d2308b98b7f94b	tests/fixtures/g4-audit/two-open-two-pages.json								unclassified
+774d2453f5feb312	tests/fixtures/g4-audit/two-open.json								unclassified
+6fb1b4264d02dcef	tests/fixtures/pane-liveness/crashed-pane.txt								unclassified
+9df8f63d7a6ea379	tests/fixtures/pane-liveness/queued-live-pane.txt								unclassified
+7ab7bcdc5f0c618c	tests/fixtures/pane-liveness/quiet-pane.txt								unclassified
+546a0f5711b56365	tests/fixtures/pane-liveness/quoted-crash-terms-pane.txt								unclassified
+5bd4f78d0e3cda25	tests/fixtures/pm-broker/broker.js								unclassified
+e26486c2ada381f3	tests/fixtures/spawn_options_header_compat.yaml								unclassified
+a66b2b3146aadd07	tests/fixtures/spawn_options_header_compat_codex.tokens								unclassified
+4529d536880d7c45	tests/fixtures/spawn_options_legacy.yaml								unclassified
+0cef92b062defcee	tests/fixtures/spawn_options_legacy_claude-code.tokens								unclassified
+c9c24664b760ce47	tests/fixtures/spawn_options_legacy_codex.tokens								unclassified
+62d1041332ac5f98	tests/fixtures/team-work-audit/closed.json								unclassified
+af8aac96cae0be01	tests/fixtures/team-work-audit/complete-two-pages.json								unclassified
+90374ed9c648425a	tests/fixtures/team-work-audit/error.json								unclassified
+66f5cee74793c906	tests/fixtures/team-work-audit/gh								unclassified
+5f80f360bbb2f512	tests/fixtures/team-work-audit/incomplete-relation.json								unclassified
+b83d838477205b33	tests/fixtures/team-work-audit/open-two.json								unclassified
+bfbb27c136873a9c	tests/fixtures/team-work-audit/open.json								unclassified
+5ff26632d572dfc1	tests/helpers/g4-fixtures.bash								unclassified
+66f85ff3a5ad01f6	tests/isolated/test_pm_pretool_guard_real_cli.sh								unclassified
+610c88653724da2e	tests/test_actas_integration.bats								unclassified
+efb4b50a0472388b	tests/test_actas_integration.bats								unclassified
+c8906bdceecd44bc	tests/test_actas_integration.bats								unclassified
+79fdbde443fc3a21	tests/test_actas_integration.bats								unclassified
+fdd5d330f21d23a7	tests/test_actas_integration.bats								unclassified
+d7528f17999f8f33	tests/test_actas_integration.bats								unclassified
+778cdbb442491503	tests/test_actas_integration.bats								unclassified
+0a0522279334147f	tests/test_actas_integration.bats								unclassified
+85ea9ef291940317	tests/test_actas_integration.bats								unclassified
+0b3406cc11b50eef	tests/test_actas_integration.bats								unclassified
+ca9218dd461779ae	tests/test_actas_integration.bats								unclassified
+1f78cff4446ad04c	tests/test_actas_integration.bats								unclassified
+42d0e6c72f9922fa	tests/test_actas_integration.bats								unclassified
+b777fea728fe180f	tests/test_actas_integration.bats								unclassified
+407a9982198543ed	tests/test_actas_integration.bats								unclassified
+29be27cc6aba50ca	tests/test_actas_integration.bats								unclassified
+e8bf9b250ddecd05	tests/test_actas_integration.bats								unclassified
+68d952228373bafb	tests/test_actas_integration.bats								unclassified
+8b067f31a1317c9d	tests/test_actas_lock.bats								unclassified
+5d42d7cac7972617	tests/test_actas_lock.bats								unclassified
+0057991895d50013	tests/test_actas_lock.bats								unclassified
+e259257277842e00	tests/test_actas_lock.bats								unclassified
+0ddc18257521ad77	tests/test_actas_lock.bats								unclassified
+980b47a20555bd96	tests/test_actas_lock.bats								unclassified
+aa67f00e36e485fd	tests/test_api.bats								unclassified
+e4e7d8708d9ecd0b	tests/test_api_actas_owner.bats								unclassified
+04cd96a35cad875b	tests/test_api_registrations.bats								unclassified
+86080652faab9963	tests/test_binding_mode.bats								unclassified
+dacf29b58aebdca1	tests/test_boot_command.bats								unclassified
+d25d3c377e4a4f3e	tests/test_bundle_core.bats								unclassified
+8fdf738b6fa675f4	tests/test_claims.bats								unclassified
+ccc29534465cc0ac	tests/test_claude_template.bats								unclassified
+c203dfa92afa71b2	tests/test_claude_template.bats								unclassified
+23de0fb8ead5854d	tests/test_claude_template.bats								unclassified
+218aafe9b6879083	tests/test_codex_bridge.bats								unclassified
+7b158139ed0d5e4e	tests/test_codex_bridge.bats								unclassified
+e30bfa2a76001986	tests/test_codex_bridge.bats								unclassified
+95b50027c109d22b	tests/test_codex_bridge.bats								unclassified
+1eeab240a5e5f725	tests/test_codex_bridge.bats								unclassified
+a4f6d925656084be	tests/test_codex_bridge_launcher.bats								unclassified
+a1692768d7d371f2	tests/test_codex_bridge_launcher.bats								unclassified
+87eda6a831a45286	tests/test_codex_bridge_launcher.bats								unclassified
+9ae428417d4162ac	tests/test_codex_bridge_launcher.bats								unclassified
+88e00c04b3ba1cda	tests/test_codex_bridge_launcher.bats								unclassified
+e40a84692174f3c7	tests/test_codex_bridge_launcher.bats								unclassified
+46ebea77f5a7eff0	tests/test_codex_bridge_launcher.bats								unclassified
+427311b6271219f4	tests/test_codex_bridge_launcher.bats								unclassified
+e009caecea8b2eda	tests/test_codex_bridge_launcher.bats								unclassified
+205af5ed0685e77b	tests/test_codex_bridge_launcher.bats								unclassified
+3a7488cfe531537a	tests/test_codex_bridge_launcher.bats								unclassified
+501ba536903a8b9d	tests/test_codex_bridge_launcher.bats								unclassified
+c3449883abe7eae5	tests/test_codex_bridge_launcher.bats								unclassified
+02b0ccf1cafa918c	tests/test_codex_bridge_launcher.bats								unclassified
+e515b4c5071e319b	tests/test_codex_bridge_launcher.bats								unclassified
+e119471f362aed91	tests/test_codex_bridge_launcher.bats								unclassified
+b6b9c20e8e0a2dc0	tests/test_codex_bridge_launcher.bats								unclassified
+33f226fa17786fd7	tests/test_codex_bridge_launcher.bats								unclassified
+8e6aa8ac85bc732b	tests/test_codex_bridge_launcher.bats								unclassified
+d70d98fece46ab29	tests/test_codex_bridge_launcher.bats								unclassified
+84a1a2d985ec866c	tests/test_codex_bridge_launcher.bats								unclassified
+63131609abc9d544	tests/test_codex_bridge_launcher.bats								unclassified
+4455fdf9b987519e	tests/test_codex_bridge_launcher.bats								unclassified
+98b9639ba2854836	tests/test_codex_bridge_launcher.bats								unclassified
+6258e5623bbaac88	tests/test_codex_bridge_launcher.bats								unclassified
+196ac4f897d1c1da	tests/test_codex_bridge_launcher.bats								unclassified
+b399d0d09d2b784b	tests/test_codex_bridge_launcher.bats								unclassified
+1ee6ac7f160fd4f1	tests/test_codex_bridge_launcher.bats								unclassified
+059528bd8e4a14f7	tests/test_codex_bridge_launcher.bats								unclassified
+6da7dabb1226edb2	tests/test_codex_bridge_launcher.bats								unclassified
+94f3252ce530dd82	tests/test_codex_bridge_launcher.bats								unclassified
+f3a533fc8a06e4fa	tests/test_codex_bridge_launcher.bats								unclassified
+d663d3d6319a4476	tests/test_codex_bridge_launcher.bats								unclassified
+19c3206fde99a509	tests/test_codex_bridge_launcher.bats								unclassified
+ba03b6ca6f4ff458	tests/test_codex_bridge_launcher.bats								unclassified
+6f7909c7a79ab9b5	tests/test_codex_bridge_launcher.bats								unclassified
+3b4c9aa708458d83	tests/test_codex_bridge_launcher.bats								unclassified
+68eeec295bb8e64d	tests/test_codex_bridge_launcher.bats								unclassified
+92b1084f521e241d	tests/test_codex_bridge_launcher.bats								unclassified
+c62ff4ca6f489aab	tests/test_codex_bridge_launcher.bats								unclassified
+619a7280923b4fa8	tests/test_codex_bridge_launcher.bats								unclassified
+3421f89d30775827	tests/test_codex_bridge_launcher.bats								unclassified
+d101c7095e4ca544	tests/test_codex_bridge_launcher.bats								unclassified
+c65897e051b243f7	tests/test_codex_bridge_launcher.bats								unclassified
+542cc5efaa7803d5	tests/test_codex_bridge_launcher.bats								unclassified
+068cc83b9032dc92	tests/test_codex_bridge_launcher.bats								unclassified
+35e41aae6ed43380	tests/test_codex_bridge_launcher.bats								unclassified
+764e8ee4663fe20b	tests/test_codex_bridge_launcher.bats								unclassified
+154644ea30c35207	tests/test_codex_bridge_launcher.bats								unclassified
+4675e57b6abd9377	tests/test_codex_bridge_launcher.bats								unclassified
+f0da4ac075eb567a	tests/test_codex_bridge_launcher.bats								unclassified
+9d401a4d1047c7fa	tests/test_codex_bridge_launcher.bats								unclassified
+353a39f4275b00e4	tests/test_codex_bridge_launcher.bats								unclassified
+29b81ad795920ff9	tests/test_codex_bridge_launcher.bats								unclassified
+047fab9fcdc7b6b7	tests/test_codex_monitor.bats								unclassified
+7fcbdc1ad7d00e3a	tests/test_codex_monitor.bats								unclassified
+f66ca546df31bc46	tests/test_codex_monitor.bats								unclassified
+0b6b8ec590f1d176	tests/test_codex_monitor.bats								unclassified
+225db530d88aae5a	tests/test_codex_monitor.bats								unclassified
+786a904a6477e5b1	tests/test_codex_monitor.bats								unclassified
+3ac6973830a2c368	tests/test_codex_resume.bats								unclassified
+9e2c135551d0a9ba	tests/test_codex_watch_failure.bats								unclassified
+7b3af6e6b84d47a5	tests/test_cut_release.bats								unclassified
+6beced1841231780	tests/test_cut_release.bats								unclassified
+6905bcc2b990990d	tests/test_cut_release.bats								unclassified
+2fc20b6e66d21647	tests/test_cut_release.bats								unclassified
+26f46703bdf548d2	tests/test_cut_release.bats								unclassified
+2b3b1a29fa419233	tests/test_delivery.bats								unclassified
+5c44c95b8f1b73ed	tests/test_delivery.bats								unclassified
+6bfb8c64908a65ba	tests/test_delivery.bats								unclassified
+de15e0f19821cbc6	tests/test_delivery.bats								unclassified
+669670890d35e781	tests/test_delivery.bats								unclassified
+617cc12aab75665a	tests/test_delivery.bats								unclassified
+44b045e353da7be7	tests/test_delivery.bats								unclassified
+168db2d689995474	tests/test_delivery.bats								unclassified
+631178d3c7205668	tests/test_delivery.bats								unclassified
+a52884c4ad6d82e9	tests/test_delivery.bats								unclassified
+42fcfefc498f36d3	tests/test_delivery.bats								unclassified
+d6e3ff1b8402b89e	tests/test_delivery.bats								unclassified
+30f4fafea1a56dfd	tests/test_delivery.bats								unclassified
+5076b5b7cefc70b0	tests/test_delivery.bats								unclassified
+b1efa3d4705011f7	tests/test_delivery.bats								unclassified
+824415199f2e9079	tests/test_delivery.bats								unclassified
+a2c1cbcc66a36889	tests/test_delivery.bats								unclassified
+f4f1bac4e33b4c7d	tests/test_delivery.bats								unclassified
+4b701e32c17a7c06	tests/test_delivery.bats								unclassified
+809b6ee36a87e5b6	tests/test_delivery.bats								unclassified
+22186ab2776a69b9	tests/test_delivery.bats								unclassified
+8e3c8a0bdb1d1356	tests/test_delivery.bats								unclassified
+227088a852964fe6	tests/test_delivery.bats								unclassified
+01611cf0a671a7a6	tests/test_delivery.bats								unclassified
+c28c83994206ce39	tests/test_delivery.bats								unclassified
+61e0dc11d08fe6cf	tests/test_delivery.bats								unclassified
+d88e934d4496691e	tests/test_delivery.bats								unclassified
+5031ed1d88bfab60	tests/test_despawn.bats								unclassified
+bed8059aa09e7a3d	tests/test_despawn.bats								unclassified
+1ab3340e32b874f1	tests/test_despawn.bats								unclassified
+dfd54f892efaa9ff	tests/test_despawn.bats								unclassified
+b1ee4a34037ac0a7	tests/test_despawn.bats								unclassified
+578ba2a4c122901b	tests/test_despawn.bats								unclassified
+29932d0b60704f66	tests/test_despawn.bats								unclassified
+c69ccec817c8d16a	tests/test_despawn.bats								unclassified
+e8ecd489fe334b16	tests/test_doctor.bats								unclassified
+1e4ab99604485f43	tests/test_doctor.bats								unclassified
+3eadf882fdd9fe1f	tests/test_doctor.bats								unclassified
+0839f4f3be26cdfa	tests/test_doctor.bats								unclassified
+1c693fb0d0145039	tests/test_fixture_helpers.bats								unclassified
+dd9467975722bf87	tests/test_g4_audit.bats								unclassified
+b1ab46926e9e45ec	tests/test_g4_bootstrap.bats								unclassified
+8fe1f0dd4c2b609f	tests/test_g4_ledger.bats								unclassified
+4659d94ae41f9c85	tests/test_g4_transition.bats								unclassified
+6aa2cff5b47a970a	tests/test_gh_write_owner_guard.bats								unclassified
+00925b780c695c52	tests/test_git_push_owner_guard.bats								unclassified
+7e76b1b42c162ea5	tests/test_helper.bash								unclassified
+631e34dfb69c673b	tests/test_helper.bash								unclassified
+aaa85989c76039d6	tests/test_helper.bash								unclassified
+1bbd434773c4766e	tests/test_helper.bash								unclassified
+4e50ae3bdcc62efa	tests/test_helper.bash								unclassified
+5f3e6311057504ef	tests/test_helper.bash								unclassified
+fd8fb39cd581a0ba	tests/test_helper.bash								unclassified
+9807cb47b5947388	tests/test_helper.bash								unclassified
+3b40c9f59184f745	tests/test_helper.bash								unclassified
+201aabc1433ba222	tests/test_helper.bash								unclassified
+727f6e74604df830	tests/test_helper.bash								unclassified
+f3c7ab093ce4eee2	tests/test_helper.bash								unclassified
+c718d40dad2acb92	tests/test_helper.bash								unclassified
+01180c24f310c4be	tests/test_helper.bash								unclassified
+000c7695dfcfff18	tests/test_helper.bash								unclassified
+bca8a7047c372b00	tests/test_helper.bash								unclassified
+72adc6eb38c97494	tests/test_helper.bash								unclassified
+d11442f7c06ade7f	tests/test_helper.bash								unclassified
+c414b7e9704745ff	tests/test_helper.bash								unclassified
+00eb495a9f543fcd	tests/test_helper.bash								unclassified
+561db1999a537a50	tests/test_helper.bash								unclassified
+6aa1f5ceb7ee1fa8	tests/test_helper.bash								unclassified
+0271af7ec7c68f52	tests/test_helper.bash								unclassified
+0e4092e15db4f0c9	tests/test_identities.bats								unclassified
+61d9b63626251b76	tests/test_identity_path_forms.bats								unclassified
+83695b547607498c	tests/test_inbox.bats								unclassified
+a858e66c998079ee	tests/test_inbox.bats								unclassified
+5581c6cf8601206b	tests/test_inbox.bats								unclassified
+c7ada161abe6f7e5	tests/test_install.bats								unclassified
+6130b863daf4628d	tests/test_install.bats								unclassified
+349aa7254d79b953	tests/test_instance_id.bats								unclassified
+0a181bf215d99a78	tests/test_jsonl_remote_sync.bats								unclassified
+b7b6908dada6f187	tests/test_messaging.bats								unclassified
+d0fa53d42a93708e	tests/test_messaging.bats								unclassified
+b41ec2769198460d	tests/test_messaging.bats								unclassified
+93a7637a8c9d0711	tests/test_messaging.bats								unclassified
+2961a5eea5868ab2	tests/test_messaging.bats								unclassified
+e0690e1f56336b4c	tests/test_messaging.bats								unclassified
+6af0d97f1e3f4423	tests/test_messaging.bats								unclassified
+f3eb404e90fa6c3f	tests/test_migrate_team_store.bats								unclassified
+88bb7d095f24a349	tests/test_pane_liveness.bats								unclassified
+e8e0415989ff7a63	tests/test_pm_broker_fixture.bats								unclassified
+167b2945408d8df6	tests/test_pm_pretool_guard.bats								unclassified
+5477184cfbf1b746	tests/test_remote.bats								unclassified
+ad03e6e2239a0780	tests/test_remote.bats								unclassified
+cfe1339eb8f6f090	tests/test_remote_engine_start_refusal.bats								unclassified
+c64bf25c8632d354	tests/test_remote_ready_deadline.bats								unclassified
+149e771669cab067	tests/test_remote_sync.bats								unclassified
+9d20ac91c6cafcd0	tests/test_repair_invalid_utf8.bats								unclassified
+84cb05f63431e49e	tests/test_reset.bats								unclassified
+f402311272037fa0	tests/test_resolve_project.bats								unclassified
+913650af97760b0e	tests/test_resolve_project.bats								unclassified
+95ee1053547c2b39	tests/test_resurrect_panes.bats								unclassified
+bcee95171ced4922	tests/test_role_session.bats								unclassified
+3e7a8fef1f04140c	tests/test_safe_dir_sync.bats								unclassified
+e1520fd7e82a6e91	tests/test_spawn.bats								unclassified
+16bf8ee911de1e5a	tests/test_spawn.bats								unclassified
+e21221c143dd541a	tests/test_spawn.bats								unclassified
+16e161085649e3a1	tests/test_spawn.bats								unclassified
+67b0ff5f00fe6183	tests/test_spawn.bats								unclassified
+5f8eac43331d892b	tests/test_spawn.bats								unclassified
+36d31c35aa232d29	tests/test_spawn.bats								unclassified
+2d93f0a5f0975aea	tests/test_spawn.bats								unclassified
+fea17e2e11ec8901	tests/test_spawn.bats								unclassified
+1276196db8fd293d	tests/test_spawn.bats								unclassified
+c551d4f2d5fa982c	tests/test_spawn.bats								unclassified
+e52c16a8f12b4709	tests/test_spawn.bats								unclassified
+3e342ebdd8339d1b	tests/test_spawn.bats								unclassified
+dcf3e52c9af35d18	tests/test_spawn.bats								unclassified
+613fe3962357025e	tests/test_spawn.bats								unclassified
+6f871d4ed1edc770	tests/test_spawn.bats								unclassified
+49e88e81c9aa279e	tests/test_spawn.bats								unclassified
+b718c71e3cc63a58	tests/test_spawn_options.bats								unclassified
+377a0ec2749534fb	tests/test_spawn_options.bats								unclassified
+46fd3ebfc722971e	tests/test_spawn_options.bats								unclassified
+90b75d9e95da5af3	tests/test_spawn_options.bats								unclassified
+d84ae3bb80450d98	tests/test_sqlite_sync_jq_binary.bats								unclassified
+812a1f77190e5d3c	tests/test_storage.bats								unclassified
+51c236cdc64f16b9	tests/test_storage.bats								unclassified
+0ffd1cc21220e797	tests/test_storage.bats								unclassified
+1d293e3deec4bfa3	tests/test_storage.bats								unclassified
+100a9e6b37cc4fbe	tests/test_storage.bats								unclassified
+ce35ea4080e50c20	tests/test_storage.bats								unclassified
+d0eed7941590f43c	tests/test_storage.bats								unclassified
+0ebeb9b321b397c0	tests/test_storage.bats								unclassified
+de2a5843a9e12550	tests/test_storage_contract.bats								unclassified
+918a728372a6b92b	tests/test_sync_autostart.bats								unclassified
+b30876199f0ec402	tests/test_sync_cipher.bats								unclassified
+77e99abc960bf600	tests/test_team.bats								unclassified
+4076e4431b6faa40	tests/test_team.bats								unclassified
+6f8791823e621b5a	tests/test_team.bats								unclassified
+a498609fe816906a	tests/test_team.bats								unclassified
+e1f388a3b27336a5	tests/test_team.bats								unclassified
+095dba2152bc9729	tests/test_team.bats								unclassified
+46701fd513630a17	tests/test_team.bats								unclassified
+ae55705b0d0f9d0b	tests/test_team.bats								unclassified
+0726bb1eab4b2063	tests/test_team.bats								unclassified
+c69c2779e2cbc57e	tests/test_team.bats								unclassified
+68d04c4537c73772	tests/test_team.bats								unclassified
+ef3cd0cfbc3f690b	tests/test_team_work.bats								unclassified
+3d5d53eeb48f4323	tests/test_team_work_audit.bats								unclassified
+1219e92a0d521c3d	tests/test_team_work_dispatch_migration.bats								unclassified
+2972da4e92cd3b04	tests/test_team_work_reconciler.bats								unclassified
+ee24e09701983bd1	tests/test_team_work_state.bats								unclassified
+abe318d7caecff7c	tests/test_wait_helpers.bats								unclassified
+1f16cdacfd21c699	tests/test_wait_helpers.bats								unclassified
+b8b7ac74576d64ff	tests/test_watch.bats								unclassified
+2652d2fbd89c8b6c	tests/test_watch.bats								unclassified
+ad4ee9a2f2fd1991	tests/test_watch.bats								unclassified
+42365c2b23fc4c45	tests/test_watch.bats								unclassified
+20eb80dbc09a29eb	tests/test_watch.bats								unclassified
+ae9f3371eb8cfbe0	tests/test_watch.bats								unclassified
+3462673700e2dcc8	tests/test_watch.bats								unclassified
+087a8520fc6bce40	tests/test_watch.bats								unclassified
+c025e4d79de58906	tests/test_watch.bats								unclassified
+b6d2fd38c1b278ee	tests/test_watch.bats								unclassified
+50dbe66e94da78fe	tests/test_watch.bats								unclassified
+128d3358324d5514	tests/test_watch.bats								unclassified
+5859087f9b44ef64	tests/test_watch.bats								unclassified
+7e592a584f534541	tests/test_watch.bats								unclassified
+63e8f8af6d3e9e7b	tests/test_watch.bats								unclassified
+ad253bddd1daee66	tests/test_watch.bats								unclassified
+a5ebf6e52557a490	tests/test_watch.bats								unclassified
+2fb23ce2c8c4422c	tests/test_watch.bats								unclassified
+59c13b7f19aceecc	tests/test_watch.bats								unclassified
+83c94f7441337ce8	tests/test_watch.bats								unclassified
+d139a30cfb5dfd24	tests/test_watch.bats								unclassified
+d224ffc5888422a7	tests/test_watch.bats								unclassified
+df7e415e0cffa07f	tests/test_watch.bats								unclassified
+4a462abf249b655f	tests/test_watch.bats								unclassified
+a970cf8caa579457	tests/test_watch.bats								unclassified
+7dc3d6bec896cfe4	tests/test_watch.bats								unclassified
+bd6bf272b3b3a622	tests/test_watch.bats								unclassified
+c29617b2209fa593	tests/test_watch.bats								unclassified
+33bf7fb538a72f55	tests/test_watch.bats								unclassified
+71a12c51e9cb3def	tests/test_watch.bats								unclassified
+2c0e74992710b106	tests/test_watch.bats								unclassified
+f4235325f423fee2	tests/test_watch.bats								unclassified
+f4f3015f4e11aeb2	tests/test_watch_install_changed.bats								unclassified
+06cefbbfb1942667	tests/test_watch_once.bats								unclassified
+b63945588cad2f66	tests/test_watch_ownership_log.bats								unclassified
+075637b6ce5ac87c	uninstall.sh								unclassified
+f354b140f8ea7e57	uninstall.sh								unclassified
+d299832e354173e6	uninstall.sh								unclassified
+235fc78947d8b365	uninstall.sh								unclassified
