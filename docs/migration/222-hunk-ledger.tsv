@@ -470,12 +470,12 @@ b777fea728fe180f	tests/test_actas_integration.bats	agguild	port	lock を直接�
 29be27cc6aba50ca	tests/test_actas_integration.bats	agguild	port	gate の barrier の解放と強制中断の分岐。gate 固有	none	needed	no	agmsg_architect_claude	classified
 e8bf9b250ddecd05	tests/test_actas_integration.bats	agguild	port	引き継ぎ後の送信の確認。gate 試験の一部	none	needed	no	agmsg_architect_claude	classified
 68d952228373bafb	tests/test_actas_integration.bats	agguild	port	assertion 中断で子を刈り取る試験。hunk の先頭 2 行が gate 試験の末尾（untrack と閉じ括弧）であり、gate の hunk 無しには適用できない	none	needed	no	agmsg_architect_claude	classified
-8b067f31a1317c9d	tests/test_actas_lock.bats								unclassified
-5d42d7cac7972617	tests/test_actas_lock.bats								unclassified
-0057991895d50013	tests/test_actas_lock.bats								unclassified
-e259257277842e00	tests/test_actas_lock.bats								unclassified
-0ddc18257521ad77	tests/test_actas_lock.bats								unclassified
-980b47a20555bd96	tests/test_actas_lock.bats								unclassified
+8b067f31a1317c9d	tests/test_actas_lock.bats	official	adopt	owner を読めない場合の扱いの試験。actas-lock.sh の official な修正に対応	none	needed	no	agmsg_architect_claude	classified
+5d42d7cac7972617	tests/test_actas_lock.bats	official	adopt	owner を読めない場合の扱いの試験。actas-lock.sh の official な修正に対応	none	needed	no	agmsg_architect_claude	classified
+0057991895d50013	tests/test_actas_lock.bats	agguild	port	gate のエラー分類試験のための SQLite の継ぎ目。delivery gate 固有	none	needed	no	agmsg_architect_claude	classified
+e259257277842e00	tests/test_actas_lock.bats	official	adopt	owner を読めない場合の扱いの試験。actas-lock.sh の official な修正に対応	none	needed	no	agmsg_architect_claude	classified
+0ddc18257521ad77	tests/test_actas_lock.bats	agguild	port	delivery gate の SQLITE_BUSY 再試行の試験の追加。gate 固有	none	needed	no	agmsg_architect_claude	classified
+980b47a20555bd96	tests/test_actas_lock.bats	official	adopt	owner を読めない場合の扱いの試験。actas-lock.sh の official な修正に対応	none	needed	no	agmsg_architect_claude	classified
 aa67f00e36e485fd	tests/test_api.bats	agguild	port	test follows the implementation it exercises: scripts/api.sh, scripts/lib/api-actas-owner.sh, scripts/lib/api-registrations.sh					classified
 e4e7d8708d9ecd0b	tests/test_api_actas_owner.bats	agguild	port	test follows the implementation it exercises: scripts/api.sh, scripts/lib/api-actas-owner.sh					classified
 04cd96a35cad875b	tests/test_api_registrations.bats	agguild	port	test follows the implementation it exercises: scripts/api.sh, scripts/lib/api-registrations.sh					classified
@@ -486,65 +486,65 @@ d25d3c377e4a4f3e	tests/test_bundle_core.bats	agguild	port	test follows the imple
 ccc29534465cc0ac	tests/test_claude_template.bats	official	adopt	unknown と off を黙って同一視しない旨をテンプレートが述べている試験	none	needed	no	agmsg_architect_claude	classified
 c203dfa92afa71b2	tests/test_claude_template.bats	official	adopt	テンプレート内の unknown の記述の件数の確認	none	needed	no	agmsg_architect_claude	classified
 23de0fb8ead5854d	tests/test_claude_template.bats	official	adopt	unknown の記述が 2 箇所あることの診断つき確認	none	needed	no	agmsg_architect_claude	classified
-218aafe9b6879083	tests/test_codex_bridge.bats								unclassified
-7b158139ed0d5e4e	tests/test_codex_bridge.bats								unclassified
-e30bfa2a76001986	tests/test_codex_bridge.bats								unclassified
-95b50027c109d22b	tests/test_codex_bridge.bats								unclassified
-1eeab240a5e5f725	tests/test_codex_bridge.bats								unclassified
-a4f6d925656084be	tests/test_codex_bridge_launcher.bats								unclassified
-a1692768d7d371f2	tests/test_codex_bridge_launcher.bats								unclassified
-87eda6a831a45286	tests/test_codex_bridge_launcher.bats								unclassified
-9ae428417d4162ac	tests/test_codex_bridge_launcher.bats								unclassified
-88e00c04b3ba1cda	tests/test_codex_bridge_launcher.bats								unclassified
-e40a84692174f3c7	tests/test_codex_bridge_launcher.bats								unclassified
-46ebea77f5a7eff0	tests/test_codex_bridge_launcher.bats								unclassified
-427311b6271219f4	tests/test_codex_bridge_launcher.bats								unclassified
-e009caecea8b2eda	tests/test_codex_bridge_launcher.bats								unclassified
-205af5ed0685e77b	tests/test_codex_bridge_launcher.bats								unclassified
-3a7488cfe531537a	tests/test_codex_bridge_launcher.bats								unclassified
-501ba536903a8b9d	tests/test_codex_bridge_launcher.bats								unclassified
-c3449883abe7eae5	tests/test_codex_bridge_launcher.bats								unclassified
-02b0ccf1cafa918c	tests/test_codex_bridge_launcher.bats								unclassified
-e515b4c5071e319b	tests/test_codex_bridge_launcher.bats								unclassified
-e119471f362aed91	tests/test_codex_bridge_launcher.bats								unclassified
-b6b9c20e8e0a2dc0	tests/test_codex_bridge_launcher.bats								unclassified
-33f226fa17786fd7	tests/test_codex_bridge_launcher.bats								unclassified
-8e6aa8ac85bc732b	tests/test_codex_bridge_launcher.bats								unclassified
-d70d98fece46ab29	tests/test_codex_bridge_launcher.bats								unclassified
-84a1a2d985ec866c	tests/test_codex_bridge_launcher.bats								unclassified
-63131609abc9d544	tests/test_codex_bridge_launcher.bats								unclassified
-4455fdf9b987519e	tests/test_codex_bridge_launcher.bats								unclassified
-98b9639ba2854836	tests/test_codex_bridge_launcher.bats								unclassified
-6258e5623bbaac88	tests/test_codex_bridge_launcher.bats								unclassified
-196ac4f897d1c1da	tests/test_codex_bridge_launcher.bats								unclassified
-b399d0d09d2b784b	tests/test_codex_bridge_launcher.bats								unclassified
-1ee6ac7f160fd4f1	tests/test_codex_bridge_launcher.bats								unclassified
-059528bd8e4a14f7	tests/test_codex_bridge_launcher.bats								unclassified
-6da7dabb1226edb2	tests/test_codex_bridge_launcher.bats								unclassified
-94f3252ce530dd82	tests/test_codex_bridge_launcher.bats								unclassified
-f3a533fc8a06e4fa	tests/test_codex_bridge_launcher.bats								unclassified
-d663d3d6319a4476	tests/test_codex_bridge_launcher.bats								unclassified
-19c3206fde99a509	tests/test_codex_bridge_launcher.bats								unclassified
-ba03b6ca6f4ff458	tests/test_codex_bridge_launcher.bats								unclassified
-6f7909c7a79ab9b5	tests/test_codex_bridge_launcher.bats								unclassified
-3b4c9aa708458d83	tests/test_codex_bridge_launcher.bats								unclassified
-68eeec295bb8e64d	tests/test_codex_bridge_launcher.bats								unclassified
-92b1084f521e241d	tests/test_codex_bridge_launcher.bats								unclassified
-c62ff4ca6f489aab	tests/test_codex_bridge_launcher.bats								unclassified
-619a7280923b4fa8	tests/test_codex_bridge_launcher.bats								unclassified
-3421f89d30775827	tests/test_codex_bridge_launcher.bats								unclassified
-d101c7095e4ca544	tests/test_codex_bridge_launcher.bats								unclassified
-c65897e051b243f7	tests/test_codex_bridge_launcher.bats								unclassified
-542cc5efaa7803d5	tests/test_codex_bridge_launcher.bats								unclassified
-068cc83b9032dc92	tests/test_codex_bridge_launcher.bats								unclassified
-35e41aae6ed43380	tests/test_codex_bridge_launcher.bats								unclassified
-764e8ee4663fe20b	tests/test_codex_bridge_launcher.bats								unclassified
-154644ea30c35207	tests/test_codex_bridge_launcher.bats								unclassified
-4675e57b6abd9377	tests/test_codex_bridge_launcher.bats								unclassified
-f0da4ac075eb567a	tests/test_codex_bridge_launcher.bats								unclassified
-9d401a4d1047c7fa	tests/test_codex_bridge_launcher.bats								unclassified
-353a39f4275b00e4	tests/test_codex_bridge_launcher.bats								unclassified
-29b81ad795920ff9	tests/test_codex_bridge_launcher.bats								unclassified
+218aafe9b6879083	tests/test_codex_bridge.bats	agguild	port	既定の wake が queued のままである試験。gate の受領記録を前提とする	none	needed	no	agmsg_architect_claude	classified
+7b158139ed0d5e4e	tests/test_codex_bridge.bats	agguild	port	message_receipts が 0 件であることの確認。gate の表	none	needed	no	agmsg_architect_claude	classified
+e30bfa2a76001986	tests/test_codex_bridge.bats	agguild	port	receipts を数えるための spawnSync の読み込み。次の hunk と対	none	needed	no	agmsg_architect_claude	classified
+95b50027c109d22b	tests/test_codex_bridge.bats	agguild	port	message_receipts を数える。gate の表	none	needed	no	agmsg_architect_claude	classified
+1eeab240a5e5f725	tests/test_codex_bridge.bats	agguild	port	message_receipts の evidence が codex_inline_turn_start である確認。inline claim 固有	none	needed	no	agmsg_architect_claude	classified
+a4f6d925656084be	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+a1692768d7d371f2	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+87eda6a831a45286	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+9ae428417d4162ac	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+88e00c04b3ba1cda	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+e40a84692174f3c7	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+46ebea77f5a7eff0	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+427311b6271219f4	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+e009caecea8b2eda	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+205af5ed0685e77b	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+3a7488cfe531537a	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+501ba536903a8b9d	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+c3449883abe7eae5	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+02b0ccf1cafa918c	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+e515b4c5071e319b	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+e119471f362aed91	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+b6b9c20e8e0a2dc0	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+33f226fa17786fd7	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+8e6aa8ac85bc732b	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+d70d98fece46ab29	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+84a1a2d985ec866c	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+63131609abc9d544	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+4455fdf9b987519e	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+98b9639ba2854836	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+6258e5623bbaac88	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+196ac4f897d1c1da	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+b399d0d09d2b784b	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+1ee6ac7f160fd4f1	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+059528bd8e4a14f7	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+6da7dabb1226edb2	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+94f3252ce530dd82	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+f3a533fc8a06e4fa	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+d663d3d6319a4476	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+19c3206fde99a509	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+ba03b6ca6f4ff458	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+6f7909c7a79ab9b5	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+3b4c9aa708458d83	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+68eeec295bb8e64d	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+92b1084f521e241d	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+c62ff4ca6f489aab	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+619a7280923b4fa8	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+3421f89d30775827	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+d101c7095e4ca544	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+c65897e051b243f7	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+542cc5efaa7803d5	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+068cc83b9032dc92	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+35e41aae6ed43380	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+764e8ee4663fe20b	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+154644ea30c35207	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+4675e57b6abd9377	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+f0da4ac075eb567a	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+9d401a4d1047c7fa	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+353a39f4275b00e4	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+29b81ad795920ff9	tests/test_codex_bridge_launcher.bats	official	adopt	上流の試験の待機を決定化し、失敗時の診断を足す。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
 047fab9fcdc7b6b7	tests/test_codex_monitor.bats	official	adopt	fake codex を保留させる試験用の継ぎ目。一般の試験制御	none	needed	no	agmsg_architect_claude	classified
 7fcbdc1ad7d00e3a	tests/test_codex_monitor.bats	official	adopt	argv と pidfile の検査が妥当な POSIX 環境だけで成功させる。MSYS での一般の差異	none	needed	no	agmsg_architect_claude	classified
 f66ca546df31bc46	tests/test_codex_monitor.bats	official	adopt	中断された試験の TERM trap を解放する後始末。一般の試験衛生	none	needed	no	agmsg_architect_claude	classified
@@ -558,33 +558,33 @@ f66ca546df31bc46	tests/test_codex_monitor.bats	official	adopt	中断された試
 6905bcc2b990990d	tests/test_cut_release.bats	agguild	port	push を実 git で行う。fork の push owner guard の迂回	none	needed	no	agmsg_architect_claude	classified
 2fc20b6e66d21647	tests/test_cut_release.bats	agguild	port	PATH へ実 git のディレクトリを足す。fork の push owner guard の迂回	none	needed	no	agmsg_architect_claude	classified
 26f46703bdf548d2	tests/test_cut_release.bats	agguild	port	push を実 git で行う。fork の push owner guard の迂回	none	needed	no	agmsg_architect_claude	classified
-2b3b1a29fa419233	tests/test_delivery.bats								unclassified
-5c44c95b8f1b73ed	tests/test_delivery.bats								unclassified
-6bfb8c64908a65ba	tests/test_delivery.bats								unclassified
-de15e0f19821cbc6	tests/test_delivery.bats								unclassified
-669670890d35e781	tests/test_delivery.bats								unclassified
-617cc12aab75665a	tests/test_delivery.bats								unclassified
-44b045e353da7be7	tests/test_delivery.bats								unclassified
-168db2d689995474	tests/test_delivery.bats								unclassified
-631178d3c7205668	tests/test_delivery.bats								unclassified
-a52884c4ad6d82e9	tests/test_delivery.bats								unclassified
-42fcfefc498f36d3	tests/test_delivery.bats								unclassified
-d6e3ff1b8402b89e	tests/test_delivery.bats								unclassified
-30f4fafea1a56dfd	tests/test_delivery.bats								unclassified
-5076b5b7cefc70b0	tests/test_delivery.bats								unclassified
-b1efa3d4705011f7	tests/test_delivery.bats								unclassified
-824415199f2e9079	tests/test_delivery.bats								unclassified
-a2c1cbcc66a36889	tests/test_delivery.bats								unclassified
-f4f1bac4e33b4c7d	tests/test_delivery.bats								unclassified
-4b701e32c17a7c06	tests/test_delivery.bats								unclassified
-809b6ee36a87e5b6	tests/test_delivery.bats								unclassified
-22186ab2776a69b9	tests/test_delivery.bats								unclassified
-8e3c8a0bdb1d1356	tests/test_delivery.bats								unclassified
-227088a852964fe6	tests/test_delivery.bats								unclassified
-01611cf0a671a7a6	tests/test_delivery.bats								unclassified
-c28c83994206ce39	tests/test_delivery.bats								unclassified
-61e0dc11d08fe6cf	tests/test_delivery.bats								unclassified
-d88e934d4496691e	tests/test_delivery.bats								unclassified
+2b3b1a29fa419233	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
+5c44c95b8f1b73ed	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
+6bfb8c64908a65ba	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
+de15e0f19821cbc6	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
+669670890d35e781	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
+617cc12aab75665a	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
+44b045e353da7be7	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
+168db2d689995474	tests/test_delivery.bats	agguild	port	475 行の hunk で、team-work dispatch の試験を含む。AGMSG_TEAM_WORK_DELIVERY_BIN と classificationBasis はいずれも定義が agguild	none	needed	no	agmsg_architect_claude	classified
+631178d3c7205668	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
+a52884c4ad6d82e9	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
+42fcfefc498f36d3	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
+d6e3ff1b8402b89e	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
+30f4fafea1a56dfd	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
+5076b5b7cefc70b0	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
+b1efa3d4705011f7	tests/test_delivery.bats	agguild	port	bridge meta へ identities を足す。読むのは fork の delivery-capability.sh だけ	none	needed	no	agmsg_architect_claude	classified
+824415199f2e9079	tests/test_delivery.bats	agguild	port	同上。上流の delivery.sh は identities を読まない	none	needed	no	agmsg_architect_claude	classified
+a2c1cbcc66a36889	tests/test_delivery.bats	agguild	port	同上。上流の delivery.sh は identities を読まない	none	needed	no	agmsg_architect_claude	classified
+f4f1bac4e33b4c7d	tests/test_delivery.bats	agguild	port	同上。上流の delivery.sh は identities を読まない	none	needed	no	agmsg_architect_claude	classified
+4b701e32c17a7c06	tests/test_delivery.bats	agguild	port	同上。上流の delivery.sh は identities を読まない	none	needed	no	agmsg_architect_claude	classified
+809b6ee36a87e5b6	tests/test_delivery.bats	agguild	port	同上。上流の delivery.sh は identities を読まない	none	needed	no	agmsg_architect_claude	classified
+22186ab2776a69b9	tests/test_delivery.bats	agguild	port	同上。上流の delivery.sh は identities を読まない	none	needed	no	agmsg_architect_claude	classified
+8e3c8a0bdb1d1356	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
+227088a852964fe6	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
+01611cf0a671a7a6	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
+c28c83994206ce39	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
+61e0dc11d08fe6cf	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
+d88e934d4496691e	tests/test_delivery.bats	official	adopt	上流の試験の後始末と診断の改善、および unknown / codex の JSON 契約の確認	none	needed	no	agmsg_architect_claude	classified
 5031ed1d88bfab60	tests/test_despawn.bats	official	adopt	test follows the implementation it exercises: scripts/despawn.sh					classified
 bed8059aa09e7a3d	tests/test_despawn.bats	official	adopt	test follows the implementation it exercises: scripts/despawn.sh					classified
 1ab3340e32b874f1	tests/test_despawn.bats	official	adopt	test follows the implementation it exercises: scripts/despawn.sh					classified
@@ -632,8 +632,8 @@ c414b7e9704745ff	tests/test_helper.bash	official	adopt	上流にも在る共有�
 83695b547607498c	tests/test_inbox.bats	agguild	port	test follows the implementation it exercises: scripts/inbox.sh					classified
 a858e66c998079ee	tests/test_inbox.bats	agguild	port	test follows the implementation it exercises: scripts/inbox.sh					classified
 5581c6cf8601206b	tests/test_inbox.bats	agguild	port	test follows the implementation it exercises: scripts/inbox.sh					classified
-c7ada161abe6f7e5	tests/test_install.bats								unclassified
-6130b863daf4628d	tests/test_install.bats								unclassified
+c7ada161abe6f7e5	tests/test_install.bats	official	adopt	startup-path-resolver.sh が同梱されることの確認。同ファイルは official	none	needed	no	agmsg_architect_claude	classified
+6130b863daf4628d	tests/test_install.bats	agguild	port	gh owner guard が絶対パスへ直す試験。fork のアカウント分離	none	needed	no	agmsg_architect_claude	classified
 349aa7254d79b953	tests/test_instance_id.bats	official	adopt	SKILL_DIR と RUN_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
 0a181bf215d99a78	tests/test_jsonl_remote_sync.bats	official	adopt	SKILL_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
 b7b6908dada6f187	tests/test_messaging.bats	official	adopt	不正 UTF-8 の表示用イベントを仕込むヘルパ。UTF-8 の一般の不具合の試験	none	needed	no	agmsg_architect_claude	classified
@@ -680,16 +680,16 @@ b718c71e3cc63a58	tests/test_spawn_options.bats	agguild	port	test follows the imp
 377a0ec2749534fb	tests/test_spawn_options.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
 46fd3ebfc722971e	tests/test_spawn_options.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
 90b75d9e95da5af3	tests/test_spawn_options.bats	agguild	port	test follows the implementation it exercises: scripts/lib/spawn-options.sh, scripts/spawn.sh					classified
-d84ae3bb80450d98	tests/test_sqlite_sync_jq_binary.bats								unclassified
-812a1f77190e5d3c	tests/test_storage.bats								unclassified
-51c236cdc64f16b9	tests/test_storage.bats								unclassified
-0ffd1cc21220e797	tests/test_storage.bats								unclassified
-1d293e3deec4bfa3	tests/test_storage.bats								unclassified
-100a9e6b37cc4fbe	tests/test_storage.bats								unclassified
-ce35ea4080e50c20	tests/test_storage.bats								unclassified
-d0eed7941590f43c	tests/test_storage.bats								unclassified
-0ebeb9b321b397c0	tests/test_storage.bats								unclassified
-de2a5843a9e12550	tests/test_storage_contract.bats								unclassified
+d84ae3bb80450d98	tests/test_sqlite_sync_jq_binary.bats	official	adopt	SKILL_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
+812a1f77190e5d3c	tests/test_storage.bats	official	adopt	上流の試験の継ぎ目と診断の改善。runtime lock の初期化契約の確認	none	needed	no	agmsg_architect_claude	classified
+51c236cdc64f16b9	tests/test_storage.bats	official	adopt	上流の試験の継ぎ目と診断の改善。runtime lock の初期化契約の確認	none	needed	no	agmsg_architect_claude	classified
+0ffd1cc21220e797	tests/test_storage.bats	official	adopt	上流の試験の継ぎ目と診断の改善。runtime lock の初期化契約の確認	none	needed	no	agmsg_architect_claude	classified
+1d293e3deec4bfa3	tests/test_storage.bats	official	adopt	上流の試験の継ぎ目と診断の改善。runtime lock の初期化契約の確認	none	needed	no	agmsg_architect_claude	classified
+100a9e6b37cc4fbe	tests/test_storage.bats	agguild	port	runtime lock の各入口が未初期化ストアを拒む試験。agmsg_runtime_lock_release_owned は上流に 0 件で、定義する storage.sh の hunk は agguild	none	needed	no	agmsg_architect_claude	classified
+ce35ea4080e50c20	tests/test_storage.bats	agguild	port	runtime locks スキーマと移行失敗時の停止の試験。agmsg_runtime_lock_release_owned に依存し、その定義は agguild	none	needed	no	agmsg_architect_claude	classified
+d0eed7941590f43c	tests/test_storage.bats	official	adopt	上流の試験の継ぎ目と診断の改善。runtime lock の初期化契約の確認	none	needed	no	agmsg_architect_claude	classified
+0ebeb9b321b397c0	tests/test_storage.bats	official	adopt	上流の試験の継ぎ目と診断の改善。runtime lock の初期化契約の確認	none	needed	no	agmsg_architect_claude	classified
+de2a5843a9e12550	tests/test_storage_contract.bats	official	adopt	SKILL_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
 918a728372a6b92b	tests/test_sync_autostart.bats	official	adopt	SKILL_DIR と RUN_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
 b30876199f0ec402	tests/test_sync_cipher.bats	official	adopt	SKILL_DIR の明示 export の削除。共有 setup へ寄せる一般の整理	none	needed	no	agmsg_architect_claude	classified
 77e99abc960bf600	tests/test_team.bats	agguild	port	test follows the implementation it exercises: scripts/internal/team-work-dispatch-schema.sql, scripts/internal/team-work-dispatch-triggers.sql, scripts/lib/team-work-audit.js, scripts/lib/team-work-reconciler.js, scripts/lib/team-work.js, scripts/team-work.sh, scripts/team.sh					classified
@@ -710,41 +710,41 @@ ef3cd0cfbc3f690b	tests/test_team_work.bats	agguild	port	test follows the impleme
 ee24e09701983bd1	tests/test_team_work_state.bats	agguild	port	test follows the implementation it exercises: scripts/lib/team-work.js, scripts/team-work.sh, scripts/team.sh					classified
 abe318d7caecff7c	tests/test_wait_helpers.bats	official	adopt	wait_for_pid_exit の timeout の試験。上流の待機ヘルパへの改善に対応	none	needed	no	agmsg_architect_claude	classified
 1f16cdacfd21c699	tests/test_wait_helpers.bats	official	adopt	wait_for_file の timeout が実時間の期限である試験。上流の待機ヘルパへの改善に対応	none	needed	no	agmsg_architect_claude	classified
-b8b7ac74576d64ff	tests/test_watch.bats								unclassified
-2652d2fbd89c8b6c	tests/test_watch.bats								unclassified
-ad4ee9a2f2fd1991	tests/test_watch.bats								unclassified
-42365c2b23fc4c45	tests/test_watch.bats								unclassified
-20eb80dbc09a29eb	tests/test_watch.bats								unclassified
-ae9f3371eb8cfbe0	tests/test_watch.bats								unclassified
-3462673700e2dcc8	tests/test_watch.bats								unclassified
-087a8520fc6bce40	tests/test_watch.bats								unclassified
-c025e4d79de58906	tests/test_watch.bats								unclassified
-b6d2fd38c1b278ee	tests/test_watch.bats								unclassified
-50dbe66e94da78fe	tests/test_watch.bats								unclassified
-128d3358324d5514	tests/test_watch.bats								unclassified
-5859087f9b44ef64	tests/test_watch.bats								unclassified
-7e592a584f534541	tests/test_watch.bats								unclassified
-63e8f8af6d3e9e7b	tests/test_watch.bats								unclassified
-ad253bddd1daee66	tests/test_watch.bats								unclassified
-a5ebf6e52557a490	tests/test_watch.bats								unclassified
-2fb23ce2c8c4422c	tests/test_watch.bats								unclassified
-59c13b7f19aceecc	tests/test_watch.bats								unclassified
-83c94f7441337ce8	tests/test_watch.bats								unclassified
-d139a30cfb5dfd24	tests/test_watch.bats								unclassified
-d224ffc5888422a7	tests/test_watch.bats								unclassified
-df7e415e0cffa07f	tests/test_watch.bats								unclassified
-4a462abf249b655f	tests/test_watch.bats								unclassified
-a970cf8caa579457	tests/test_watch.bats								unclassified
-7dc3d6bec896cfe4	tests/test_watch.bats								unclassified
-bd6bf272b3b3a622	tests/test_watch.bats								unclassified
-c29617b2209fa593	tests/test_watch.bats								unclassified
-33bf7fb538a72f55	tests/test_watch.bats								unclassified
-71a12c51e9cb3def	tests/test_watch.bats								unclassified
-2c0e74992710b106	tests/test_watch.bats								unclassified
-f4235325f423fee2	tests/test_watch.bats								unclassified
-f4f3015f4e11aeb2	tests/test_watch_install_changed.bats								unclassified
-06cefbbfb1942667	tests/test_watch_once.bats								unclassified
-b63945588cad2f66	tests/test_watch_ownership_log.bats								unclassified
+b8b7ac74576d64ff	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+2652d2fbd89c8b6c	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+ad4ee9a2f2fd1991	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+42365c2b23fc4c45	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+20eb80dbc09a29eb	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+ae9f3371eb8cfbe0	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+3462673700e2dcc8	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+087a8520fc6bce40	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+c025e4d79de58906	tests/test_watch.bats	agguild	port	_team_store ヘルパ。消費者は全チーム試験と gate 試験の 2 つだけ	none	needed	no	agmsg_architect_claude	classified
+b6d2fd38c1b278ee	tests/test_watch.bats	agguild	port	actas 名が全登録チームを受ける試験の追加。fork の全チーム pair 解決	none	needed	no	agmsg_architect_claude	classified
+50dbe66e94da78fe	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+128d3358324d5514	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+5859087f9b44ef64	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+7e592a584f534541	tests/test_watch.bats	agguild	port	gate の holder を用意する試験の変数。delivery gate 固有	none	needed	no	agmsg_architect_claude	classified
+63e8f8af6d3e9e7b	tests/test_watch.bats	agguild	port	gate 試験の fd 指定。delivery gate 固有	none	needed	no	agmsg_architect_claude	classified
+ad253bddd1daee66	tests/test_watch.bats	agguild	port	ownership_gate_unavailable を待つ。gate の語彙	none	needed	no	agmsg_architect_claude	classified
+a5ebf6e52557a490	tests/test_watch.bats	agguild	port	gate の holder を解放する。delivery gate 固有	none	needed	no	agmsg_architect_claude	classified
+2fb23ce2c8c4422c	tests/test_watch.bats	agguild	port	gate 試験の失敗時の診断出力。delivery gate 固有	none	needed	no	agmsg_architect_claude	classified
+59c13b7f19aceecc	tests/test_watch.bats	agguild	port	gate barrier を使う試験の追加。AGMSG_TEST_ACTAS_DELIVERY_GATE_* は上流に無い	none	needed	no	agmsg_architect_claude	classified
+83c94f7441337ce8	tests/test_watch.bats	agguild	port	#683（delivery gate）の filter metadata 試験の変数。gate 固有	none	needed	no	agmsg_architect_claude	classified
+d139a30cfb5dfd24	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+d224ffc5888422a7	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+df7e415e0cffa07f	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+4a462abf249b655f	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+a970cf8caa579457	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+7dc3d6bec896cfe4	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+bd6bf272b3b3a622	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+c29617b2209fa593	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+33bf7fb538a72f55	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+71a12c51e9cb3def	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+2c0e74992710b106	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+f4235325f423fee2	tests/test_watch.bats	official	adopt	上流の試験の診断と待機の改善。fork の実装識別子を参照しない	none	needed	no	agmsg_architect_claude	classified
+f4f3015f4e11aeb2	tests/test_watch_install_changed.bats	official	adopt	MSYS 向けの AGMSG_AGENT_PID の明示指定の削除。共有 setup へ寄せる整理	none	needed	no	agmsg_architect_claude	classified
+06cefbbfb1942667	tests/test_watch_once.bats	agguild	port	watch-once の active name が複数チームへ広がる試験。fork の全チーム pair 解決	none	needed	no	agmsg_architect_claude	classified
+b63945588cad2f66	tests/test_watch_ownership_log.bats	agguild	port	所有権遷移の診断ログの試験。上流に無いファイルで storage_record_receipts を参照する	none	needed	no	agmsg_architect_claude	classified
 075637b6ce5ac87c	uninstall.sh	official	adopt	SCRIPT_DIR の定義。startup-path-resolver.sh を読み込むために必要で official と対	none	needed	no	agmsg_architect_claude	classified
 f354b140f8ea7e57	uninstall.sh	official	adopt	startup-path-resolver.sh の読み込み。同ファイルは official	none	needed	no	agmsg_architect_claude	classified
 d299832e354173e6	uninstall.sh	agguild	port	gh owner guard の PATH マーカーの定義。fork のアカウント分離	none	needed	no	agmsg_architect_claude	classified
