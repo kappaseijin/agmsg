@@ -217,6 +217,67 @@ build_ledger() {
   grep -Fq -- "{'duplicate': 1}" <<<"$output"
 }
 
+@test "a freshly generated ledger is unclassified, not malformed" {
+  # The two are different states in the design, and only one of them is a
+  # defect. `--emit-rows` used to write two columns, so the ledger a person had
+  # just generated came back as 734 malformed rows -- which reads as "the file
+  # is broken" rather than "nobody has classified these yet".
+  local fresh="$BATS_TEST_TMPDIR/fresh.tsv"
+  emit_header > "$fresh"
+  emit_rows >> "$fresh"
+  local columns
+  columns="$(grep -v '^#' "$fresh" | head -1 | awk -F'\t' '{print NF}')"
+  [ "$columns" -eq 10 ]
+
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$fresh"
+  [ "$status" -eq 1 ]
+  grep -Fq -- "'unclassified': 734" <<<"$output"
+  refute grep -Fq -- "malformed" <<<"$output"
+}
+
+@test "a row with the wrong number of columns is still malformed" {
+  # The negative control for the test above: `malformed` has to stay reachable,
+  # or that test would pass just as well against a check that never reports it.
+  local broken="$BATS_TEST_TMPDIR/short.tsv"
+  emit_header > "$broken"
+  emit_rows | head -1 | cut -f1,2 >> "$broken"
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
+  [ "$status" -eq 1 ]
+  grep -Fq -- "malformed" <<<"$output"
+}
+
+@test "a status outside the three the design defines is reported" {
+  local broken="$BATS_TEST_TMPDIR/status.tsv"
+  build_ledger "$broken"
+  local first
+  first="$(grep -v '^#' "$broken" | head -1 | cut -f1)"
+  awk -F'\t' -v id="$first" 'BEGIN{OFS="\t"} $1==id{$10="probably-fine"} {print}' "$broken" \
+    > "$broken.tmp" && mv "$broken.tmp" "$broken"
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
+  [ "$status" -eq 1 ]
+  grep -Fq -- "{'invalid-status': 1}" <<<"$output"
+}
+
+@test "the execution gate asks for verified, and the check deliberately does not" {
+  # Splitting these is the point. `unclassified` is where the design starts
+  # every row, so a check that demanded `verified` would report the planned
+  # state as a failure for the whole classification period. The gate is a
+  # separate question, asked once, by a person.
+  local ledger="$BATS_TEST_TMPDIR/gate.tsv"
+  build_ledger "$ledger"
+
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$ledger"
+  [ "$status" -eq 0 ]
+
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --gate "$ledger"
+  [ "$status" -eq 1 ]
+  grep -Fq -- "'not-verified': 734" <<<"$output"
+
+  sed 's/\tclassified$/\tverified/' "$ledger" > "$ledger.v"
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --gate "$ledger.v"
+  [ "$status" -eq 0 ]
+}
+
 @test "a header that disagrees with a fresh count is rejected" {
   # The reason the header is emitted rather than typed: a hand-edited header
   # records what someone believed, and only a separate count disagrees with it.

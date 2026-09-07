@@ -31,6 +31,11 @@ LEDGER_PATH = 'docs/migration/222-hunk-ledger.tsv'
 COLUMNS = ('hunk_id', 'path', 'owner', 'disposition', 'rationale', 'public_dep',
            'regression', 'conflict_risk', 'assignee', 'status')
 OWNERS = frozenset({'official', 'agguild', 'pool', 'exception'})
+STATUSES = ('unclassified', 'classified', 'verified')
+# What `--emit-rows` writes into the columns a person still has to fill in.
+# `unclassified` is the default state the design gives them, so the freshly
+# generated ledger is an unclassified ledger rather than a malformed one.
+BLANK_ROW = ('',) * (len(COLUMNS) - 3) + (STATUSES[0],)
 
 # -U0 decides the context INSIDE a hunk; --inter-hunk-context decides how far
 # apart two hunks may be before they merge. Different axes: setting only one
@@ -231,6 +236,8 @@ def check(ledger_path, repo='.', base_merge=BASE_MERGE, base_fork=BASE_FORK):
             add('unclassified', f"{hunk_id} owner={row['owner'] or '(empty)'}")
         if not row['disposition']:
             add('no-disposition', hunk_id)
+        if row['status'] not in STATUSES:
+            add('invalid-status', f"{hunk_id} status={row['status'] or '(empty)'}")
 
     expected = {
         'base-merge': base_merge,
@@ -251,11 +258,38 @@ def check(ledger_path, repo='.', base_merge=BASE_MERGE, base_fork=BASE_FORK):
     return findings, notes
 
 
+def gate(ledger_path, repo='.', base_merge=BASE_MERGE, base_fork=BASE_FORK):
+    """Execution-gate condition 1: every row verified, on top of a passing check.
+
+    Deliberately not part of `--check`. The check runs in CI from the moment the
+    ledger exists, and `unclassified` is the state the design gives every row to
+    start in -- folding this in would paint CI red for the whole classification
+    period and call a planned state a defect. The other three conditions in the
+    design's gate are not machine-readable at all, so this is one input to that
+    decision, not the decision.
+    """
+    findings, notes = check(ledger_path, repo, base_merge, base_fork)
+    unverified = []
+    with open(ledger_path, encoding='utf8') as handle:
+        for line in handle.read().split('\n'):
+            if line.startswith('#') or not line.strip():
+                continue
+            fields = line.split('\t')
+            if len(fields) == len(COLUMNS) and fields[-1] != 'verified':
+                unverified.append(f'{fields[0]} status={fields[-1] or "(empty)"}')
+    for detail in unverified:
+        findings.setdefault('not-verified', []).append(detail)
+    return findings, notes
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--emit-header', action='store_true')
     parser.add_argument('--emit-rows', action='store_true')
     parser.add_argument('--check', metavar='LEDGER')
+    parser.add_argument('--gate', metavar='LEDGER',
+                        help='--check, plus the design\'s execution-gate condition that '
+                             'every row is verified. Not run by CI; see gate().')
     parser.add_argument('--repo', default='.')
     parser.add_argument('--base-merge', default=BASE_MERGE)
     parser.add_argument('--base-fork', default=BASE_FORK)
@@ -268,12 +302,14 @@ def main(argv=None):
         if args.emit_rows:
             hunks, _ = enumerate_hunks(run_diff(args.repo, args.base_merge, args.base_fork))
             for hunk_id, path, _, _ in hunks:
-                print(f'{hunk_id}\t{path}')
+                print('\t'.join((hunk_id, path) + BLANK_ROW))
             return 0
         if args.check:
             findings, notes = check(args.check, args.repo, args.base_merge, args.base_fork)
+        elif args.gate:
+            findings, notes = gate(args.gate, args.repo, args.base_merge, args.base_fork)
         else:
-            parser.error('one of --emit-header, --emit-rows, --check is required')
+            parser.error('one of --emit-header, --emit-rows, --check, --gate is required')
     except LedgerError as error:
         print(f'FAIL {error}', file=sys.stderr)
         return 1
