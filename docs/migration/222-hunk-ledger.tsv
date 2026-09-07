@@ -188,7 +188,7 @@ f1b9aabcc88ec1b1	scripts/delivery.sh	official	adopt	settings を読めない場�
 86a4eb1b28952335	scripts/despawn.sh	official	adopt	status_unavailable / status_partial の定義。上流の変数のみ参照	none	needed	no	agmsg_architect_claude	classified
 1d010f9b35ebadf2	scripts/despawn.sh	official	adopt	reset_status の初期化。失敗を伝播させるために必要で上流の識別子のみ	none	needed	no	agmsg_architect_claude	classified
 67b3849d2212c66e	scripts/despawn.sh	official	adopt	reset と lock release の失敗を握りつぶさず保持する。一般の正しさ	none	needed	no	agmsg_architect_claude	classified
-dfc2318680b893f5	scripts/despawn.sh	official	adopt	握りつぶしていた旧経路の削除。前 hunk と対で単独適用可	none	needed	no	agmsg_architect_claude	classified
+dfc2318680b893f5	scripts/despawn.sh	official	adopt	握りつぶしていた旧経路の削除。対になる hunk も official で、集合として適用できる	none	needed	no	agmsg_architect_claude	classified
 845ce8375f7abe3b	scripts/despawn.sh	official	adopt	lock 状態を読めないときに free と偽らず止まる。fail-closed の一般の正しさ	none	needed	no	agmsg_architect_claude	classified
 e15ce555a28f6b00	scripts/despawn.sh	official	adopt	free が「未取得」と「所有者が死亡」の両方を指す曖昧さの説明。一般の記述	none	needed	no	agmsg_architect_claude	classified
 c55af21598cbef20	scripts/despawn.sh	official	adopt	待機ループでも lock 状態の読み取り失敗を free と偽らない。一般の正しさ	none	needed	no	agmsg_architect_claude	classified
@@ -224,7 +224,7 @@ d0338e606834cf2c	scripts/drivers/types/codex/template.md	official	adopt	despawn 
 4629e4184a39560c	scripts/drivers/types/codex/type.conf	agguild	port	vendor= キーの追加。--role 由来の役割導出のために存在する	none	needed	no	agmsg_architect_claude	classified
 2236df315549c181	scripts/drivers/types/codex/type.conf	agguild	port	role_overlay_* キーの追加。fork の role overlay の契約	none	needed	no	agmsg_architect_claude	classified
 8be6fc7701f086c2	scripts/drivers/types/codex/watch-once.sh	official	adopt	未読照会の失敗を握りつぶさず終了コードごと報告する。一般の正しさ	none	needed	no	agmsg_architect_claude	classified
-14b6ac342d95e073	scripts/drivers/types/codex/watch-once.sh	official	adopt	id 照会を条件式へ入れる。次の hunk の失敗報告と対で単独適用可	none	needed	no	agmsg_architect_claude	classified
+14b6ac342d95e073	scripts/drivers/types/codex/watch-once.sh	official	adopt	id 照会を条件式へ入れる。失敗報告を足す次の hunk も official で、集合として適用できる	none	needed	no	agmsg_architect_claude	classified
 bb5c4aa95f77191a	scripts/drivers/types/codex/watch-once.sh	official	adopt	id 照会の失敗を握りつぶさず終了コードごと報告する。一般の正しさ	none	needed	no	agmsg_architect_claude	classified
 16ae34beb8150614	scripts/guards/gh-owner-guard-path.sh	agguild	port	gh ガードのパス解決。fork の GitHub アカウント分離に属する	none	needed	no	agmsg_architect_claude	classified
 b956af39cc84d785	scripts/guards/gh-write-owner-guard-launcher.sh	agguild	port	gh ガードの起動。fork のアカウント分離に属する	none	needed	no	agmsg_architect_claude	classified
@@ -355,7 +355,7 @@ dd5c3406bbb31530	scripts/pm-posttool-record	agguild	port	pm の PostToolUse 記�
 7c115a5c21ec7a68	scripts/remote.sh	official	adopt	readiness の待ちを反復回数から実時間へ変えるための局所変数。上流の識別子のみ	none	needed	no	agmsg_architect_claude	classified
 90150724784dc6ee	scripts/remote.sh	official	adopt	timeout 環境変数の検証。8 を 8 進数と解さない配慮も含む一般の正しさ	none	needed	no	agmsg_architect_claude	classified
 0ab1f4211ed44973	scripts/remote.sh	official	adopt	1600 回の反復から実時間の期限へ。反復回数は待ち時間を表さない	none	needed	no	agmsg_architect_claude	classified
-65731daa83444f13	scripts/remote.sh	official	adopt	不要になった反復カウンタの削除。前 hunk と対で単独適用可	none	needed	no	agmsg_architect_claude	classified
+65731daa83444f13	scripts/remote.sh	official	adopt	不要になった反復カウンタの削除。実時間の期限を入れる hunk も official で、集合として適用できる	none	needed	no	agmsg_architect_claude	classified
 37ab18ead653475b	scripts/repair-invalid-utf8.sh	official	adopt	保存済みの不正な UTF-8 を修復する運用者向けコマンド。上流の message store に対する一般の修復	none	needed	no	agmsg_architect_claude	classified
 5914ada97355fc0f	scripts/reset.sh	agguild	port	--no-resolve の usage 行。resolve-project は fork 追加	none	needed	no	agmsg_architect_claude	classified
 876f8b22cae60554	scripts/reset.sh	agguild	port	位置引数の直接読みの削除。fork 追加の cli-options.sh へ移すため	none	needed	no	agmsg_architect_claude	classified
