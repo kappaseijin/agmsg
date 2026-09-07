@@ -21,6 +21,7 @@ partition also changes the digest, and the check compares the digest.
 import argparse
 import hashlib
 import os
+import re
 import subprocess
 import sys
 
@@ -204,6 +205,207 @@ def implementations_for(test_path, paths):
 
 
 UNCLASSIFIED = ''
+
+
+# Dependency reading, used only by the official-depends-on-agguild verdict.
+#
+# Restricted to code: a name in prose is a word, not a reference. Without that
+# restriction README.ja.md alone reports hundreds of hits on words like `name`
+# and `state` (measured: 1044 findings across the ledger, against 8 with the
+# restrictions below).
+CODE_SUFFIXES = ('.sh', '.bash', '.bats', '.js', '.mjs', '.py', '.awk')
+FUNCTION = re.compile(r'(?m)^\+\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{')
+# Upper case only. A lower-case assignment is almost always a local, and reading
+# one file's local as another hunk's definition produced most of the noise
+# (measured: 75 findings, against 26 when limited to these).
+GLOBAL = re.compile(r'(?m)^\+\s*(?:export\s+|readonly\s+)?([A-Z][A-Z0-9_]{2,})=')
+# A use, not an occurrence: an expansion, or a name in command position. The
+# same shape the HELPER scan in lifetime_case.py uses, for the same reason -- a
+# bare word anywhere in a line is usually prose or an argument.
+USES = re.compile(r"""\$\{?([A-Za-z_][A-Za-z0-9_]*)
+                    | (?:^|&&|\|\||[;|(`]|\$\(|\bif\b|\bthen\b|\belse\b|\bdo\b|\buntil\b|\bwhile\b)
+                      \s*(?:!\s+)?([A-Za-z_][A-Za-z0-9_]*)(?![=\w])""", re.X | re.M)
+
+
+# Names that a test fixture defines in order to stand in for an external
+# command. A hunk calling one of these is calling the command, not the stub, so
+# the stub is not something it depends on.
+#
+# A list, because there is nothing to derive it from: whether a definition
+# shadows a command is a fact about the machine, and reading it from the machine
+# would make this check answer differently on different runners. Only honoured
+# when the definition lives under tests/ -- if product code ever defines
+# `mktemp`, that is a real dependency and this must not hide it.
+SHADOWED_COMMANDS = {
+    'mktemp': 'test fixtures replace mktemp to control where temp dirs land',
+    'rm': 'test fixtures replace rm to assert what a teardown removes',
+}
+
+
+def is_code(path):
+    """Whether names in this file are names rather than words."""
+    return path.endswith(CODE_SUFFIXES) or '.' not in path.rsplit('/', 1)[-1]
+
+
+def used_names(body):
+    """Names a hunk's lines expand or call.
+
+    The `+`/`-` marker is stripped first. Leaving it on makes every call that
+    starts a line invisible, because the name is no longer in command position:
+    measured, `agmsg_validate_utf8` -- the design note's own example of a real
+    dependency -- was found nowhere at all.
+    """
+    stripped = '\n'.join(line[1:] if line[:1] in '+- ' else line
+                         for line in body.split('\n'))
+    return {name for match in USES.finditer(stripped) for name in match.groups() if name}
+
+
+# `source x`, `. x`, and bats' `load x`. The argument is taken as written: a
+# name built from a variable cannot be followed, and that case is handled by
+# reporting rather than by guessing (see `visible_files`).
+SOURCES = re.compile(r'(?m)^\s*(?:source|\.|load)\s+(\S+)')
+
+
+def _file_at(path, repo, revision, cache):
+    key = (revision, path)
+    if key not in cache:
+        done = subprocess.run(['git', '-C', repo, 'show', f'{revision}:{path}'],
+                              capture_output=True, text=True)
+        cache[key] = done.stdout if done.returncode == 0 else ''
+    return cache[key]
+
+
+def visible_files(path, known_paths, repo, revision, cache):
+    """(files reachable from `path` by sourcing, whether anything was unresolved).
+
+    Transitive: a library that sources another library brings the second one's
+    names along, and stopping at one level would call the second invisible.
+
+    An argument that cannot be resolved statically -- `source "$LIB_DIR/x.sh"`,
+    or a name matching no file here -- makes the answer unknown for that file.
+    Unknown is reported as visible: a dependency that is real and hidden costs a
+    patch that does not build, while one that is visible and false costs a look.
+    Which of the two happened is recorded rather than folded into the result.
+    """
+    by_name = {}
+    for candidate in known_paths:
+        by_name.setdefault(candidate.rsplit('/', 1)[-1], set()).add(candidate)
+    seen, frontier, unresolved = {path}, [path], False
+    while frontier:
+        current = frontier.pop()
+        for argument in SOURCES.findall(_file_at(current, repo, revision, cache)):
+            argument = argument.strip('\'"')
+            name = argument.rsplit('/', 1)[-1]
+            if '$' in argument or name not in by_name:
+                unresolved = True
+                continue
+            for target in by_name[name] - seen:
+                seen.add(target)
+                frontier.append(target)
+    return seen, unresolved
+
+
+def _defined_at_base(name, paths, repo, base_merge, cache):
+    """Whether the name already exists at the merge base, so nobody added it.
+
+    Across every file the caller can reach, not just its own. A test stubbing
+    `storage_init` defines a name that upstream already provides in
+    drivers/storage/*.sh; looking only at the stub's own file makes the stub
+    look like the origin of the name and the caller look dependent on it.
+
+    This is the general form of the shadowed-command list: there, the thing
+    being covered is an external command and cannot be read from the tree; here
+    it is an upstream function and can, so it is read rather than listed.
+    """
+    quoted = re.escape(name)
+    pattern = re.compile(r'(?m)^\s*(?:function\s+)?' + quoted + r'\s*\(\)'
+                         r'|^\s*(?:export\s+|readonly\s+)?' + quoted + '=')
+    return any(pattern.search(_file_at(candidate, repo, base_merge, cache))
+               for candidate in paths)
+
+
+def depends_on_agguild(hunks, owners_by_id, repo='.', base_merge=BASE_MERGE,
+                       base_fork=BASE_FORK):
+    """official hunks that use a name only agguild hunks introduce.
+
+    NOT a decision procedure for the invariant it serves. The invariant is that
+    an official hunk must not depend on an agguild one; what this finds is the
+    subset of those dependencies that show up as a name. A hunk can carry a
+    fork-only subject without borrowing a single name -- a 475-line hunk whose
+    body is a fork feature's tests reads as independent here -- so a clean run
+    means "no dependency of this shape", never "no dependency". Reading the
+    official hunks by hand stays necessary.
+
+    Four narrowings, each measured against the ledger rather than reasoned about:
+
+      code files only            1044 -> 287
+      every definer is agguild    287 ->  75   (SCRIPT_DIR is assigned in a
+                                                dozen places; one of them being
+                                                agguild does not make it theirs)
+      functions and globals only   75 ->  26
+      globals within one file,     26 ->   8   (a local in another script is not
+      names absent from the base                a definition of anything here)
+
+    Still an approximation: no scoping, no ordering, and a definition that
+    shadows an external command reads as a definition. A false positive costs
+    one person one look; a false negative ships a patch that does not build.
+    """
+    functions, globals_, files, cache = {}, {}, {}, {}
+    for hunk_id, path, _, body in hunks:
+        files[hunk_id] = path
+        if not is_code(path):
+            continue
+        for name in FUNCTION.findall(body):
+            functions.setdefault(name, set()).add(hunk_id)
+        for name in GLOBAL.findall(body):
+            globals_.setdefault((path, name), set()).add(hunk_id)
+
+    known = {path for path in files.values() if is_code(path)}
+    reach, unresolved = {}, set()
+    found = []
+    for hunk_id, path, _, body in hunks:
+        if owners_by_id.get(hunk_id) != 'official' or not is_code(path):
+            continue
+        if path not in reach:
+            reach[path], blind = visible_files(path, known, repo, base_fork, cache)
+            if blind:
+                # Unknown, not empty. Filtering this file by a set that is known
+                # to be incomplete would read "could not tell" as "not visible",
+                # which is the reading that hides real dependencies.
+                unresolved.add(path)
+                reach[path] = known
+        for name in sorted(used_names(body)):
+            # Only names this file could see. Environment variables are a gap:
+            # `env FOO=bar cmd` reaches a child that sourced nothing, so a
+            # cross-file variable dependency is invisible here. Modelling it was
+            # measured rather than assumed -- matching variables across files
+            # adds two false positives on the current ledger (BATS_TEST_DIRNAME,
+            # which bats itself sets) and finds nothing real, because the case
+            # that prompted it is an agguild hunk and outside this verdict.
+            # Left unmodelled, and recorded as a gap rather than closed badly.
+            for definers in (functions.get(name, set()), globals_.get((path, name), set())):
+                others = definers - {hunk_id}
+                if not others or {owners_by_id.get(o) for o in others} != {'agguild'}:
+                    continue
+                # A definition in this same file wins over anything sourced, so
+                # the name is this file's own. `repair-invalid-utf8.sh` defines
+                # and calls its own `usage`; another script's `usage` is a
+                # coincidence of naming, not a dependency.
+                if any(files[o] == path for o in definers):
+                    continue
+                # A function defined in a file this one never sources is not the
+                # function being called; two scripts each defining `usage` are
+                # not a dependency.
+                if path in reach and not (reach[path] & {files[o] for o in others}):
+                    continue
+                if name in SHADOWED_COMMANDS and all(
+                        files[o].startswith('tests/') for o in others):
+                    continue
+                if _defined_at_base(name, reach.get(path, {path}), repo, base_merge, cache):
+                    continue
+                found.append((hunk_id, path, name, sorted(others)))
+                break
+    return found, sorted(unresolved)
 
 
 def owners_by_path(rows):
@@ -465,6 +667,16 @@ def check(ledger_path, repo='.', base_merge=BASE_MERGE, base_fork=BASE_FORK):
         got = header.get(key)
         if got != want:
             add('header-mismatch', f'{key}: ledger={got!r} recounted={want!r}')
+
+    dependent, unresolved = depends_on_agguild(
+        hunks, {row['hunk_id']: row['owner'] for row in rows.values()},
+        repo, base_merge, base_fork)
+    for hunk_id, path, name, sources in dependent:
+        add('official-depends-on-agguild',
+            f'{hunk_id} {path} uses {name}, added by ' + ', '.join(sources))
+    if unresolved:
+        notes.append('diagnostic: sources not statically resolvable, so everything '
+                     'counts as visible from: ' + ', '.join(unresolved))
 
     stray = diff_config_keys(repo)
     notes.append(f'diagnostic: {len(stray)} diff.* config keys survive blanking global/system'
