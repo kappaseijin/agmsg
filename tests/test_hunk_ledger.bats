@@ -200,10 +200,15 @@ build_ledger() {
   [ "$status" -eq 1 ]
   grep -Fq -- "{'stale': 1}" <<<"$output"
 
-  awk -F'\t' -v id="$first" 'BEGIN{OFS="\t"} $1==id{$3=""} {print}' "$ledger" > "$broken"
+  awk -F'\t' -v id="$first" 'BEGIN{OFS="\t"} $1==id{$3="offical"} {print}' "$ledger" > "$broken"
   run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
   [ "$status" -eq 1 ]
-  grep -Fq -- "{'unclassified': 1}" <<<"$output"
+  grep -Fq -- "{'invalid-owner': 1}" <<<"$output"
+
+  awk -F'\t' -v id="$first" 'BEGIN{OFS="\t"} $1==id{$4="portt"} {print}' "$ledger" > "$broken"
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
+  [ "$status" -eq 1 ]
+  grep -Fq -- "{'invalid-disposition': 1}" <<<"$output"
 
   awk -F'\t' -v id="$first" 'BEGIN{OFS="\t"} $1==id{$2="wrong/path"} {print}' "$ledger" > "$broken"
   run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
@@ -215,6 +220,74 @@ build_ledger() {
   run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
   [ "$status" -eq 1 ]
   grep -Fq -- "{'duplicate': 1}" <<<"$output"
+}
+
+@test "a freshly generated ledger passes the check and only fails the gate" {
+  # An empty column means nobody has classified that row yet. That is the state
+  # the design starts every row in, so reporting it would keep CI red for the
+  # whole classification period -- the exact thing splitting check from gate was
+  # for. A wrong value in that column is a different thing, and the check keeps
+  # it (see the invalid-owner/invalid-disposition rows next door).
+  local fresh="$BATS_TEST_TMPDIR/fresh.tsv"
+  emit_header > "$fresh"
+  emit_rows >> "$fresh"
+  local columns
+  columns="$(grep -v '^#' "$fresh" | head -1 | awk -F'\t' '{print NF}')"
+  [ "$columns" -eq 10 ]
+
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$fresh"
+  [ "$status" -eq 0 ]
+
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --gate "$fresh"
+  [ "$status" -eq 1 ]
+  # The judgment key, not the bare word: every not-verified row carries
+  # `status=unclassified` in its detail line, so matching the word alone passes
+  # even when the empty-column check has been removed entirely (measured).
+  grep -Fq -- "'unclassified':" <<<"$output"
+  grep -Fq -- "'not-verified':" <<<"$output"
+}
+
+@test "a row with the wrong number of columns is still malformed" {
+  # The negative control for the test above: `malformed` has to stay reachable,
+  # or that test would pass just as well against a check that never reports it.
+  local broken="$BATS_TEST_TMPDIR/short.tsv"
+  emit_header > "$broken"
+  emit_rows | head -1 | cut -f1,2 >> "$broken"
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
+  [ "$status" -eq 1 ]
+  grep -Fq -- "malformed" <<<"$output"
+}
+
+@test "a status outside the three the design defines is reported" {
+  local broken="$BATS_TEST_TMPDIR/status.tsv"
+  build_ledger "$broken"
+  local first
+  first="$(grep -v '^#' "$broken" | head -1 | cut -f1)"
+  awk -F'\t' -v id="$first" 'BEGIN{OFS="\t"} $1==id{$10="probably-fine"} {print}' "$broken" \
+    > "$broken.tmp" && mv "$broken.tmp" "$broken"
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
+  [ "$status" -eq 1 ]
+  grep -Fq -- "{'invalid-status': 1}" <<<"$output"
+}
+
+@test "the execution gate asks for verified, and the check deliberately does not" {
+  # Splitting these is the point. `unclassified` is where the design starts
+  # every row, so a check that demanded `verified` would report the planned
+  # state as a failure for the whole classification period. The gate is a
+  # separate question, asked once, by a person.
+  local ledger="$BATS_TEST_TMPDIR/gate.tsv"
+  build_ledger "$ledger"
+
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$ledger"
+  [ "$status" -eq 0 ]
+
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --gate "$ledger"
+  [ "$status" -eq 1 ]
+  grep -Fq -- "'not-verified': 734" <<<"$output"
+
+  sed 's/\tclassified$/\tverified/' "$ledger" > "$ledger.v"
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --gate "$ledger.v"
+  [ "$status" -eq 0 ]
 }
 
 @test "a header that disagrees with a fresh count is rejected" {
