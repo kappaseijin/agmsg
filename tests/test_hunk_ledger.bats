@@ -357,31 +357,15 @@ mechanical_ledger() {
   mechanical_ledger "$ledger"
   refute grep -q "^[^#]*	tests/test_watch.bats	official" "$ledger"
 
+  # Both files the name points at, not just the obvious one: an unjudged
+  # candidate is an unknown, and the rule waits for it.
   awk -F'\t' 'BEGIN{OFS="\t"} /^#/{print;next}
-    $2=="scripts/watch.sh"{$3="official";$4="adopt";$5="upstream behaviour fix";$10="classified"}
+    $2=="scripts/watch.sh" || $2=="scripts/drivers/types/codex/watch-once.sh" {
+      $3="official";$4="adopt";$5="upstream behaviour fix";$10="classified"}
     {print}' "$ledger" > "$judged"
   run python3 "$LEDGER_TOOL" --classify-mechanical "$judged"
   [ "$status" -eq 0 ]
   grep -Fq -- "	tests/test_watch.bats	official	adopt	test follows the implementation" <<<"$output"
-}
-
-@test "a test whose implementations disagree is left for a person" {
-  # Prefix matching points test_api.bats at three files at once. When those
-  # disagree there is no tie to break: the rule says a test follows its
-  # implementation, and which one that is has stopped being mechanical.
-  local ledger="$BATS_TEST_TMPDIR/split.tsv" judged="$BATS_TEST_TMPDIR/split-judged.tsv"
-  mechanical_ledger "$ledger"
-  awk -F'\t' 'BEGIN{OFS="\t"} /^#/{print;next}
-    $2=="scripts/api.sh"{$3="official";$4="adopt";$5="upstream behaviour fix";$10="classified"}
-    $2=="scripts/lib/api-registrations.sh"{$3="agguild";$4="port";$5="fork-only concept";$10="classified"}
-    {print}' "$ledger" > "$judged"
-  run python3 "$LEDGER_TOOL" --classify-mechanical "$judged"
-  [ "$status" -eq 0 ]
-  # The disagreeing one stays empty. The positive control sits next to it:
-  # test_api_actas_owner.bats also points at several files, but only one of them
-  # has been judged, so there is nothing to disagree with and it inherits.
-  refute grep -Eq "	tests/test_api\.bats	(official|agguild)" <<<"$output"
-  grep -Eq -- "	tests/test_api_actas_owner\.bats	official" <<<"$output"
 }
 
 # A ledger of exactly the rows a test needs, written by hand. The real one is
@@ -401,35 +385,42 @@ tiny_ledger() {  # $1=out $2..=owner for each actas-lock hunk, in order
   printf 'bbbbbbbbbbbbbb01\ttests/test_actas_lock.bats\t\t\t\t\t\t\t\tunclassified\n' >> "$out"
 }
 
-@test "a test does not inherit from an implementation whose hunks disagree" {
-  # `owner` is decided per hunk, and a file's hunks routinely disagree --
-  # scripts/lib/actas-lock.sh carries 19 agguild and 2 official in the real
-  # ledger. Reading one owner per path keeps whichever hunk sorts last, so this
-  # test inherited `official` from two hunks out of twenty-one.
-  #
-  # The check did not notice: the rule and the check read the same collapsed
-  # value and agreed with each other. Comparing two things says whether they
-  # match, never whether either is right.
-  local ledger="$BATS_TEST_TMPDIR/disagree.tsv"
-  tiny_ledger "$ledger" agguild agguild official
+@test "a test whose implementations disagree, or are half judged, waits" {
+  # Prefix matching points test_api.bats at three files at once. When those
+  # disagree there is no tie to break. And a file only partly judged is not a
+  # majority to follow: the hunks nobody has looked at can still overturn it.
+  local ledger="$BATS_TEST_TMPDIR/split.tsv" judged="$BATS_TEST_TMPDIR/split-judged.tsv"
+  mechanical_ledger "$ledger"
+  awk -F'\t' 'BEGIN{OFS="\t"} /^#/{print;next}
+    $2=="scripts/api.sh"{$3="official";$4="adopt";$5="upstream behaviour fix";$10="classified"}
+    $2=="scripts/lib/api-registrations.sh"{$3="agguild";$4="port";$5="fork-only concept";$10="classified"}
+    {print}' "$ledger" > "$judged"
+  run python3 "$LEDGER_TOOL" --classify-mechanical "$judged"
+  [ "$status" -eq 0 ]
+
+  # Disagreeing candidates.
+  refute grep -Eq "	tests/test_api\.bats	(official|agguild)" <<<"$output"
+  # One candidate judged, the other untouched: still not decided.
+  refute grep -Eq "	tests/test_api_actas_owner\.bats	(official|agguild)" <<<"$output"
+  # And the reason is readable. Three different situations leave the same blank
+  # row -- one file internally split, two files disagreeing, hunks not yet
+  # judged -- so the line names the candidates and what each of them carries.
+  grep -Fq -- "not inherited: tests/test_api.bats <- scripts/api.sh carries official" <<<"$output"
+  grep -Fq -- "scripts/lib/api-actas-owner.sh carries (unclassified)" <<<"$output"
+}
+
+@test "a partly judged implementation is not a majority to follow" {
+  # Seven agguild hunks and three nobody has looked at do not make an agguild
+  # file. The three are unknown, not agreeing, and deciding on the seven means
+  # the answer can be overturned when they are judged. The set of owners used
+  # to have blanks intersected out of it, which turned "unknown" into "absent".
+  local ledger="$BATS_TEST_TMPDIR/partial.tsv"
+  tiny_ledger "$ledger" agguild agguild ''
 
   run python3 "$LEDGER_TOOL" --classify-mechanical "$ledger"
   [ "$status" -eq 0 ]
   refute grep -Eq "	tests/test_actas_lock\.bats	(official|agguild)" <<<"$output"
-  # Named, so that "did not inherit" can be told from "no rule reached it".
-  grep -Fq -- "not inherited: scripts/lib/actas-lock.sh carries agguild/official" <<<"$output"
-}
-
-@test "a test inherits when every hunk of its implementation agrees" {
-  # The positive control for the test above: disagreement has to be what stops
-  # the inheritance, not the inheritance having stopped working.
-  local ledger="$BATS_TEST_TMPDIR/agree.tsv"
-  tiny_ledger "$ledger" agguild agguild agguild
-
-  run python3 "$LEDGER_TOOL" --classify-mechanical "$ledger"
-  [ "$status" -eq 0 ]
-  grep -Fq -- "	tests/test_actas_lock.bats	agguild	port	test follows the implementation" <<<"$output"
-  refute grep -Fq -- "not inherited" <<<"$output"
+  grep -Fq -- "carries (unclassified)/agguild" <<<"$output"
 }
 
 @test "reordering the rows does not change what is classified" {
