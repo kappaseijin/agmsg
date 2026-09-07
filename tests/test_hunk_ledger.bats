@@ -38,9 +38,9 @@ emit_rows() { python3 "$LEDGER_TOOL" --repo "$REPO" --emit-rows; }
 @test "the fixed bases still count the hunks the design note contracted for" {
   run emit_header
   [ "$status" -eq 0 ]
-  [[ "$output" == *"expected-hunks: $EXPECTED_HUNKS"* ]]
-  [[ "$output" == *"expected-files: $EXPECTED_FILES"* ]]
-  [[ "$output" == *"expected-digest: $EXPECTED_DIGEST"* ]]
+  grep -Fq -- "expected-hunks: $EXPECTED_HUNKS" <<<"$output"
+  grep -Fq -- "expected-files: $EXPECTED_FILES" <<<"$output"
+  grep -Fq -- "expected-digest: $EXPECTED_DIGEST" <<<"$output"
 }
 
 @test "the digest matches the shell one-liner the design note publishes" {
@@ -57,7 +57,7 @@ emit_rows() { python3 "$LEDGER_TOOL" --repo "$REPO" --emit-rows; }
   # canonical command pins the setting; this is the row that would notice.
   run emit_rows
   [ "$status" -eq 0 ]
-  [[ "$output" == *"$QUOTED_PATH_HUNK	docs/decisions/2026-08-17T060000_codex"* ]]
+  grep -Fq -- "$QUOTED_PATH_HUNK	docs/decisions/2026-08-17T060000_codex" <<<"$output"
 }
 
 @test "rule 4.5 refuses a hunk whose body disagrees with its own header" {
@@ -79,8 +79,8 @@ except hl.LedgerError as error:
 sys.exit(0)
 PY
   [ "$status" -eq 3 ]
-  [[ "$output" == *"rule 4.5"* ]]
-  [[ "$output" == *"declares 2 lines, body has 1"* ]]
+  grep -Fq -- "rule 4.5" <<<"$output"
+  grep -Fq -- "declares 2 lines, body has 1" <<<"$output"
 }
 
 @test "rule 1 refuses a diff --git line it cannot take a path from" {
@@ -99,7 +99,7 @@ except hl.LedgerError as error:
 sys.exit(0)
 PY
   [ "$status" -eq 3 ]
-  [[ "$output" == *"rule 1"* ]]
+  grep -Fq -- "rule 1" <<<"$output"
 }
 
 @test "rules the current bases never exercise are reported when they appear" {
@@ -131,8 +131,8 @@ PY
   run env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.bigFileThreshold GIT_CONFIG_VALUE_0=1k \
     python3 "$LEDGER_TOOL" --repo "$REPO" --emit-header
   [ "$status" -eq 0 ]
-  [[ "$output" != *"expected-hunks: $EXPECTED_HUNKS"* ]]
-  [[ "$output" != *"expected-digest: $EXPECTED_DIGEST"* ]]
+  refute grep -Fq -- "expected-hunks: $EXPECTED_HUNKS" <<<"$output"
+  refute grep -Fq -- "expected-digest: $EXPECTED_DIGEST" <<<"$output"
 }
 
 @test "an attributes file that marks a tracked file binary moves the count too" {
@@ -141,8 +141,8 @@ PY
   run env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.attributesFile GIT_CONFIG_VALUE_0="$attrs" \
     python3 "$LEDGER_TOOL" --repo "$REPO" --emit-header
   [ "$status" -eq 0 ]
-  [[ "$output" != *"expected-hunks: $EXPECTED_HUNKS"* ]]
-  [[ "$output" != *"expected-digest: $EXPECTED_DIGEST"* ]]
+  refute grep -Fq -- "expected-hunks: $EXPECTED_HUNKS" <<<"$output"
+  refute grep -Fq -- "expected-digest: $EXPECTED_DIGEST" <<<"$output"
 }
 
 @test "a setting that breaks path parsing stops instead of guessing" {
@@ -153,7 +153,7 @@ PY
   run env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.noprefix GIT_CONFIG_VALUE_0=true \
     python3 "$LEDGER_TOOL" --repo "$REPO" --emit-header
   [ "$status" -eq 1 ]
-  [[ "$output" == *"rule 1"* ]]
+  grep -Fq -- "rule 1" <<<"$output"
 }
 
 # A complete, classified ledger built from the current bases. The real one is a
@@ -181,30 +181,30 @@ build_ledger() {
   grep -v "^$first	" "$ledger" > "$broken"
   run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"{'missing': 1}"* ]]
-  [[ "$output" == *"missing: $first"* ]]
+  grep -Fq -- "{'missing': 1}" <<<"$output"
+  grep -Fq -- "missing: $first" <<<"$output"
 
   cp "$ledger" "$broken"
   printf 'deadbeefdeadbeef\tno/such/file\tpool\tport\tp\tnone\tneeded\tno\tworker\tclassified\n' >> "$broken"
   run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"{'stale': 1}"* ]]
+  grep -Fq -- "{'stale': 1}" <<<"$output"
 
   awk -F'\t' -v id="$first" 'BEGIN{OFS="\t"} $1==id{$3=""} {print}' "$ledger" > "$broken"
   run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"{'unclassified': 1}"* ]]
+  grep -Fq -- "{'unclassified': 1}" <<<"$output"
 
   awk -F'\t' -v id="$first" 'BEGIN{OFS="\t"} $1==id{$2="wrong/path"} {print}' "$ledger" > "$broken"
   run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"{'path-mismatch': 1}"* ]]
+  grep -Fq -- "{'path-mismatch': 1}" <<<"$output"
 
   cp "$ledger" "$broken"
   grep "^$first	" "$ledger" >> "$broken"
   run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"{'duplicate': 1}"* ]]
+  grep -Fq -- "{'duplicate': 1}" <<<"$output"
 }
 
 @test "a header that disagrees with a fresh count is rejected" {
@@ -215,8 +215,8 @@ build_ledger() {
   sed 's/^# expected-hunks: .*/# expected-hunks: 484/' "$ledger" > "$broken"
   run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"{'header-mismatch': 1}"* ]]
-  [[ "$output" == *"expected-hunks"* ]]
+  grep -Fq -- "{'header-mismatch': 1}" <<<"$output"
+  grep -Fq -- "expected-hunks" <<<"$output"
 }
 
 @test "the ledger, once present, covers every hunk and classifies each one" {
