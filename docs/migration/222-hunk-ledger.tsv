@@ -437,13 +437,13 @@ d12bda8f6273e6a8	tests/fixtures/g4-audit/predicate-positive.json	agguild	port	fo
 9df8f63d7a6ea379	tests/fixtures/pane-liveness/queued-live-pane.txt	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
 7ab7bcdc5f0c618c	tests/fixtures/pane-liveness/quiet-pane.txt	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
 546a0f5711b56365	tests/fixtures/pane-liveness/quoted-crash-terms-pane.txt	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
-5bd4f78d0e3cda25	tests/fixtures/pm-broker/broker.js								unclassified
+5bd4f78d0e3cda25	tests/fixtures/pm-broker/broker.js	agguild	port	pm-broker の試験データ。pm 系は fork 固有の運用機構	none	needed	no	agmsg_architect_claude	classified
 e26486c2ada381f3	tests/fixtures/spawn_options_header_compat.yaml	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
 a66b2b3146aadd07	tests/fixtures/spawn_options_header_compat_codex.tokens	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
 4529d536880d7c45	tests/fixtures/spawn_options_legacy.yaml	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
 0cef92b062defcee	tests/fixtures/spawn_options_legacy_claude-code.tokens	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
 c9c24664b760ce47	tests/fixtures/spawn_options_legacy_codex.tokens	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
-62d1041332ac5f98	tests/fixtures/team-work-audit/closed.json								unclassified
+62d1041332ac5f98	tests/fixtures/team-work-audit/closed.json	agguild	port	team-work-audit の試験データ。team-work は fork 固有の機能	none	needed	no	agmsg_architect_claude	classified
 af8aac96cae0be01	tests/fixtures/team-work-audit/complete-two-pages.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
 90374ed9c648425a	tests/fixtures/team-work-audit/error.json	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
 66f5cee74793c906	tests/fixtures/team-work-audit/gh	agguild	port	fork 固有の機構（g4 / team-work / pane-liveness / role overlay）の試験データ	none	needed	no	agmsg_architect_claude	classified
