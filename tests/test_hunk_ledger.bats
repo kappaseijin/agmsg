@@ -172,7 +172,10 @@ PY
 build_ledger() {
   local out="$1"
   emit_header > "$out"
-  emit_rows | awk -F'\t' 'BEGIN{OFS="\t"} {print $1,$2,"pool","port","placeholder","none","needed","no","worker","classified"}' >> "$out"
+  # agguild/port because that is what the mechanical rule decides for the rows
+  # it reaches, so a fixture using anything else trips rule-mismatch before the
+  # test gets to whatever it was actually about.
+  emit_rows | awk -F'\t' 'BEGIN{OFS="\t"} {print $1,$2,"agguild","port","fixture rationale","none","needed","no","worker","classified"}' >> "$out"
 }
 
 @test "a complete ledger passes, and each way of breaking it is named once" {
@@ -203,12 +206,15 @@ build_ledger() {
   awk -F'\t' -v id="$first" 'BEGIN{OFS="\t"} $1==id{$3="offical"} {print}' "$ledger" > "$broken"
   run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
   [ "$status" -eq 1 ]
-  grep -Fq -- "{'invalid-owner': 1}" <<<"$output"
+  # Not the whole dict: a wrong value can be wrong in more than one way at once
+  # (an owner outside the four also contradicts the disposition beside it), and
+  # this test is about the one judgment it is named after.
+  grep -Fq -- "'invalid-owner': 1" <<<"$output"
 
   awk -F'\t' -v id="$first" 'BEGIN{OFS="\t"} $1==id{$4="portt"} {print}' "$ledger" > "$broken"
   run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
   [ "$status" -eq 1 ]
-  grep -Fq -- "{'invalid-disposition': 1}" <<<"$output"
+  grep -Fq -- "'invalid-disposition': 1" <<<"$output"
 
   awk -F'\t' -v id="$first" 'BEGIN{OFS="\t"} $1==id{$2="wrong/path"} {print}' "$ledger" > "$broken"
   run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
@@ -300,6 +306,166 @@ build_ledger() {
   [ "$status" -eq 1 ]
   grep -Fq -- "{'header-mismatch': 1}" <<<"$output"
   grep -Fq -- "expected-hunks" <<<"$output"
+}
+
+# A ledger with the mechanical rules applied, and nothing else. This is the
+# state the classification actually starts from, so it is what the rules below
+# are measured against.
+mechanical_ledger() {
+  local out="$1" raw="$BATS_TEST_TMPDIR/raw-$RANDOM.tsv"
+  emit_header > "$raw"
+  emit_rows >> "$raw"
+  python3 "$LEDGER_TOOL" --classify-mechanical "$raw" > "$out" 2>/dev/null
+}
+
+@test "the fork's own records are classified by rule, and nothing else is yet" {
+  # docs/decisions and friends are the fork writing about itself, which is not
+  # something upstream has an opinion about. Everything else -- including the
+  # tests, whose owner depends on an implementation nobody has classified yet --
+  # is left alone rather than guessed at.
+  local ledger="$BATS_TEST_TMPDIR/mech.tsv"
+  mechanical_ledger "$ledger"
+
+  local classified
+  classified="$(grep -v '^#' "$ledger" | awk -F'\t' '$3 != "" {print $2}' | sort -u)"
+  [ -n "$classified" ]
+  refute grep -qv '^docs/' <<<"$classified"
+
+  local owners
+  owners="$(grep -v '^#' "$ledger" | awk -F'\t' '$3 != "" {print $3"/"$4"/"$10}' | sort -u)"
+  [ "$owners" = "agguild/port/classified" ]
+}
+
+@test "a rule firing is not a person checking" {
+  # `classified`, not `verified`. The execution gate asks whether somebody
+  # confirmed each row; a rule having matched is a different claim, and folding
+  # the two would open the gate on nobody's say-so.
+  local ledger="$BATS_TEST_TMPDIR/status.tsv"
+  mechanical_ledger "$ledger"
+  refute grep -q "	verified$" "$ledger"
+
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --gate "$ledger"
+  [ "$status" -eq 1 ]
+  grep -Fq -- "'not-verified':" <<<"$output"
+}
+
+@test "a test follows its implementation once that implementation is judged" {
+  # The rule cannot fire on a fresh ledger: which owner a test inherits depends
+  # on a judgement nobody has made yet. It fills in behind the judged rows, so
+  # it is re-run rather than run once.
+  local ledger="$BATS_TEST_TMPDIR/inherit.tsv" judged="$BATS_TEST_TMPDIR/judged.tsv"
+  mechanical_ledger "$ledger"
+  refute grep -q "^[^#]*	tests/test_watch.bats	official" "$ledger"
+
+  awk -F'\t' 'BEGIN{OFS="\t"} /^#/{print;next}
+    $2=="scripts/watch.sh"{$3="official";$4="adopt";$5="upstream behaviour fix";$10="classified"}
+    {print}' "$ledger" > "$judged"
+  run python3 "$LEDGER_TOOL" --classify-mechanical "$judged"
+  [ "$status" -eq 0 ]
+  grep -Fq -- "	tests/test_watch.bats	official	adopt	test follows the implementation" <<<"$output"
+}
+
+@test "a test whose implementations disagree is left for a person" {
+  # Prefix matching points test_api.bats at three files at once. When those
+  # disagree there is no tie to break: the rule says a test follows its
+  # implementation, and which one that is has stopped being mechanical.
+  local ledger="$BATS_TEST_TMPDIR/split.tsv" judged="$BATS_TEST_TMPDIR/split-judged.tsv"
+  mechanical_ledger "$ledger"
+  awk -F'\t' 'BEGIN{OFS="\t"} /^#/{print;next}
+    $2=="scripts/api.sh"{$3="official";$4="adopt";$5="upstream behaviour fix";$10="classified"}
+    $2=="scripts/lib/api-registrations.sh"{$3="agguild";$4="port";$5="fork-only concept";$10="classified"}
+    {print}' "$ledger" > "$judged"
+  run python3 "$LEDGER_TOOL" --classify-mechanical "$judged"
+  [ "$status" -eq 0 ]
+  # The disagreeing one stays empty. The positive control sits next to it:
+  # test_api_actas_owner.bats also points at several files, but only one of them
+  # has been judged, so there is nothing to disagree with and it inherits.
+  refute grep -Eq "	tests/test_api\.bats	(official|agguild)" <<<"$output"
+  grep -Eq -- "	tests/test_api_actas_owner\.bats	official" <<<"$output"
+}
+
+@test "the correspondence the design counted is the one the code finds" {
+  # 44 files / 211 hunks. Pinned because the number moves with the reading:
+  # searching only scripts/ gives 42, and skipping the -/_ normalisation gives
+  # 28. A change to any of those is a change to which tests are mechanical.
+  local ledger="$BATS_TEST_TMPDIR/count.tsv"
+  mechanical_ledger "$ledger"
+  run python3 "$BATS_TEST_DIRNAME/ledger_correspondence.py" "$LEDGER_TOOL" "$ledger"
+  [ "$status" -eq 0 ]
+  [ "$output" = "44 211" ]
+}
+
+@test "contradictions between two written values are reported by the check" {
+  # Every one of these is a value somebody wrote disagreeing with another value
+  # somebody wrote, which is data rather than progress -- so the check owns them
+  # and the gate does not.
+  local ledger="$BATS_TEST_TMPDIR/contra.tsv" broken="$BATS_TEST_TMPDIR/contra-broken.tsv"
+  build_ledger "$ledger"
+  local first
+  first="$(grep -v '^#' "$ledger" | head -1 | cut -f1)"
+
+  bad_row() {  # $1=column index, $2=value, $3=expected judgment
+    awk -F'\t' -v id="$first" -v c="$1" -v v="$2" 'BEGIN{OFS="\t"} $1==id{$c=v} {print}' \
+      "$ledger" > "$broken"
+    run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
+    [ "$status" -eq 1 ]
+    grep -Fq -- "'$3': 1" <<<"$output"
+  }
+
+  # owner=pool, which the design expects zero of: personas live elsewhere.
+  bad_row 3 pool unexpected-pool
+  # rationale present but saying nothing.
+  bad_row 5 port rationale-too-short
+
+  awk -F'\t' -v id="$first" 'BEGIN{OFS="\t"} $1==id{$3="official";$4="port"} {print}' \
+    "$ledger" > "$broken"
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
+  [ "$status" -eq 1 ]
+  grep -Fq -- "'owner-disposition-mismatch': 1" <<<"$output"
+
+  awk -F'\t' -v id="$first" 'BEGIN{OFS="\t"} $1==id{$3="exception";$4="adopt"} {print}' \
+    "$ledger" > "$broken"
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
+  [ "$status" -eq 1 ]
+  grep -Fq -- "'owner-disposition-mismatch': 1" <<<"$output"
+}
+
+@test "a row the rules cover cannot be given a different owner by hand" {
+  # The rule is recomputed and compared, the way the header digest is. Writing
+  # a value the rule contradicts is caught; writing one for a row no rule
+  # reaches is a judgement and is left alone.
+  local ledger="$BATS_TEST_TMPDIR/rule.tsv" broken="$BATS_TEST_TMPDIR/rule-broken.tsv"
+  mechanical_ledger "$ledger"
+
+  local doc_row
+  doc_row="$(grep -v '^#' "$ledger" | awk -F'\t' '$2 ~ /^docs\/decisions\// {print $1; exit}')"
+  [ -n "$doc_row" ]
+  awk -F'\t' -v id="$doc_row" 'BEGIN{OFS="\t"} $1==id{$3="official";$4="adopt"} {print}' \
+    "$ledger" > "$broken"
+  run python3 "$LEDGER_TOOL" --repo "$REPO" --check "$broken"
+  [ "$status" -eq 1 ]
+  grep -Fq -- "'rule-mismatch': 1" <<<"$output"
+}
+
+@test "every judgment the code reports is named in the design note" {
+  # Suggested after the design and the implementation drifted apart once
+  # already. The names are how a CI failure is traced back to a decision, so a
+  # judgment nobody documented is one nobody can look up.
+  local pairs="$BATS_TEST_TMPDIR/judgments.txt"
+  python3 "$BATS_TEST_DIRNAME/ledger_judgments.py" \
+    "$BATS_TEST_DIRNAME/../scripts/internal/hunk-ledger.py" \
+    "$BATS_TEST_DIRNAME/../docs/decisions/*issue-254*.md" > "$pairs"
+
+  # Both sides non-empty first. The docs side is read by matching the table's
+  # shape, so a reformatted table returns nothing and the comparison below would
+  # otherwise report perfect agreement with nothing at all.
+  [ "$(grep -c '^impl ' "$pairs")" -gt 0 ]
+  [ "$(grep -c '^docs ' "$pairs")" -gt 0 ]
+
+  local difference
+  difference="$(comm -3 <(grep '^impl ' "$pairs" | cut -d' ' -f2 | sort) \
+                        <(grep '^docs ' "$pairs" | cut -d' ' -f2 | sort))"
+  [ -z "$difference" ]
 }
 
 @test "the ledger, once present, covers every hunk and classifies each one" {
