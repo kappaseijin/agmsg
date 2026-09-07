@@ -252,38 +252,38 @@ e1dbc5be1886d95d	scripts/internal/remote-sync.mjs								unclassified
 7b1ab854b07e4789	scripts/internal/remote-sync.mjs								unclassified
 f91441431d607672	scripts/internal/team-work-dispatch-schema.sql								unclassified
 d4e534147166757b	scripts/internal/team-work-dispatch-triggers.sql								unclassified
-2cda66134722b673	scripts/join.sh								unclassified
-39b561b9f1c03b77	scripts/join.sh								unclassified
-e2f82285bafc670c	scripts/join.sh								unclassified
-e7cc375b4053acb4	scripts/join.sh								unclassified
-88e83e30ab52898c	scripts/join.sh								unclassified
-64c8407c2ee5c268	scripts/join.sh								unclassified
-491546b72df3e88c	scripts/join.sh								unclassified
-4fe0d186f4d695a5	scripts/join.sh								unclassified
-c10809154f24504e	scripts/join.sh								unclassified
-b8e8fb0a9a75ca64	scripts/join.sh								unclassified
-08af618ab8968a37	scripts/join.sh								unclassified
-cd3d28579760bdf9	scripts/lib/actas-lock.sh								unclassified
-cd045dabf67d4cad	scripts/lib/actas-lock.sh								unclassified
-577d8b7e7e751ba8	scripts/lib/actas-lock.sh								unclassified
-6325f5a7d4aa72fa	scripts/lib/actas-lock.sh								unclassified
-69e6c03ea2b702f4	scripts/lib/actas-lock.sh								unclassified
-8e53d8049f163a9a	scripts/lib/actas-lock.sh								unclassified
-b74fec8bee48d88d	scripts/lib/actas-lock.sh								unclassified
-925e464b344167c8	scripts/lib/actas-lock.sh								unclassified
-58850063ac27828c	scripts/lib/actas-lock.sh								unclassified
-e0c7bda9eff29d7f	scripts/lib/actas-lock.sh								unclassified
-100f372048e36f95	scripts/lib/actas-lock.sh								unclassified
-22a7f3a10eb9470f	scripts/lib/actas-lock.sh								unclassified
-c37132d37dc709ed	scripts/lib/actas-lock.sh								unclassified
-3ad59e33d671da3e	scripts/lib/actas-lock.sh								unclassified
-f9267bab41c036cf	scripts/lib/actas-lock.sh								unclassified
-434fd718d5363a9e	scripts/lib/actas-lock.sh								unclassified
-012b6e27255afaa7	scripts/lib/actas-lock.sh								unclassified
-2a76b2aaa89b5a5c	scripts/lib/actas-lock.sh								unclassified
-2b477338a69a3178	scripts/lib/actas-lock.sh								unclassified
-2e5aca02e2cb0eab	scripts/lib/actas-lock.sh								unclassified
-9d6dd19091fda520	scripts/lib/actas-lock.sh								unclassified
+2cda66134722b673	scripts/join.sh	agguild	port	--role / --kind を載せる usage 行。fork 固有の座席属性(#248 で上流移植対象外)	none	needed	no	agmsg_architect_claude	classified
+39b561b9f1c03b77	scripts/join.sh	agguild	port	--role / --kind の引数解析。fork 固有の座席属性	none	needed	no	agmsg_architect_claude	classified
+e2f82285bafc670c	scripts/join.sh	agguild	port	上流に無い識別子 MEMBER_ROLE を参照する。単独適用不可	none	needed	no	agmsg_architect_claude	classified
+e7cc375b4053acb4	scripts/join.sh	agguild	port	上流に無い識別子 MEMBER_KIND を参照する。単独適用不可	none	needed	no	agmsg_architect_claude	classified
+88e83e30ab52898c	scripts/join.sh	agguild	port	AGMSG_RESOLVE_PROJECT_SKIP_MARKER が上流に 0 件。fork の resolve-project.sh が定義する knob で単独適用不可	none	needed	no	agmsg_architect_claude	classified
+64c8407c2ee5c268	scripts/join.sh	agguild	port	上流に無い識別子 TEAM_ID_SQL を参照する。単独適用不可	none	needed	no	agmsg_architect_claude	classified
+491546b72df3e88c	scripts/join.sh	agguild	port	上流に無い識別子 MEMBER_KIND を参照する。単独適用不可	none	needed	no	agmsg_architect_claude	classified
+4fe0d186f4d695a5	scripts/join.sh	official	adopt	MEMBER_ID の SQL エスケープ。一般の SQL 混入対策で単独適用可	none	needed	no	agmsg_architect_claude	classified
+c10809154f24504e	scripts/join.sh	agguild	port	上流に無い識別子 MEMBER_ID_SQL を参照する。単独適用不可	none	needed	no	agmsg_architect_claude	classified
+b8e8fb0a9a75ca64	scripts/join.sh	agguild	port	上流に無い識別子 MEMBER_KIND_SQL を参照する。単独適用不可	none	needed	no	agmsg_architect_claude	classified
+08af618ab8968a37	scripts/join.sh	agguild	port	上流に無い識別子 KIND_SET を参照する。単独適用不可	none	needed	no	agmsg_architect_claude	classified
+cd3d28579760bdf9	scripts/lib/actas-lock.sh	agguild	port	delivery gate の ABI を得るために storage.sh を読み込む。gate のために存在する	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+cd045dabf67d4cad	scripts/lib/actas-lock.sh	agguild	port	上流に無い識別子 ACTAS_LOCK_GATE_LAST_OWNER を参照する。単独適用不可	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+577d8b7e7e751ba8	scripts/lib/actas-lock.sh	agguild	port	戻り値 3(gate 不可)の説明。gate 専用	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+6325f5a7d4aa72fa	scripts/lib/actas-lock.sh	agguild	port	上流に無い識別子 mutation_rc を参照する。単独適用不可	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+69e6c03ea2b702f4	scripts/lib/actas-lock.sh	agguild	port	上流に無い識別子 actas_lock_gate_acquire を参照する。単独適用不可	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+8e53d8049f163a9a	scripts/lib/actas-lock.sh	agguild	port	gate 版の制御フローへ合わせる変更	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+b74fec8bee48d88d	scripts/lib/actas-lock.sh	agguild	port	上流に無い識別子 mutation_rc を参照する。単独適用不可	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+925e464b344167c8	scripts/lib/actas-lock.sh	agguild	port	上流に無い識別子 mutation_rc を参照する。単独適用不可	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+58850063ac27828c	scripts/lib/actas-lock.sh	agguild	port	上流に無い識別子 actas_lock_gate_release を参照する。単独適用不可	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+e0c7bda9eff29d7f	scripts/lib/actas-lock.sh	agguild	port	delivery gate で直列化する旨の説明。gate 専用	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+100f372048e36f95	scripts/lib/actas-lock.sh	agguild	port	gate 版 release に従属する局所変数の宣言。単独では意味を持たない	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+22a7f3a10eb9470f	scripts/lib/actas-lock.sh	agguild	port	混在。gate の取得解放と rm 失敗の伝播が同一 hunk。gate 失敗の return 3 が分離不可	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+c37132d37dc709ed	scripts/lib/actas-lock.sh	agguild	port	gate の失敗を溜める局所変数の宣言	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+3ad59e33d671da3e	scripts/lib/actas-lock.sh	agguild	port	上流に無い識別子 actas_lock_gate_acquire を参照する。単独適用不可	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+f9267bab41c036cf	scripts/lib/actas-lock.sh	agguild	port	常に 0 を返していたのを failed で返す。failed は gate 由来	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+434fd718d5363a9e	scripts/lib/actas-lock.sh	agguild	port	gate の失敗と stale を溜める局所変数の宣言	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+012b6e27255afaa7	scripts/lib/actas-lock.sh	agguild	port	混在。stale GC を gate で囲う変更と head -1 の失敗処理が同一 hunk で分離不可	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+2a76b2aaa89b5a5c	scripts/lib/actas-lock.sh	agguild	port	gate の解放のみ	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+2b477338a69a3178	scripts/lib/actas-lock.sh	agguild	port	常に 0 を返していた GC を failed で返す。failed は gate 由来で単独適用不可	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+2e5aca02e2cb0eab	scripts/lib/actas-lock.sh	official	adopt	owner を読めない lock を unknown として非 0 で返す契約の説明。一般の正しさ	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
+9d6dd19091fda520	scripts/lib/actas-lock.sh	official	adopt	owner が読めない場合を unknown として扱う。参照関数は上流。単独適用可	none	tests/test_actas_lock.bats	no	agmsg_architect_claude	classified
 6cd2f57efecc3d38	scripts/lib/api-actas-owner.sh								unclassified
 f26af7b2f8701098	scripts/lib/api-registrations.sh								unclassified
 c15dcbad6b8a5020	scripts/lib/claims.sh								unclassified
@@ -313,21 +313,21 @@ bbaf711e9424ce36	scripts/lib/spawn-options.sh								unclassified
 3cd46c7d179695b3	scripts/lib/spawn-options.sh								unclassified
 fd57321b65eff0e6	scripts/lib/spawn-options.sh								unclassified
 8bb87a115015a7bd	scripts/lib/startup-path-resolver.sh								unclassified
-559b0193506ebf7f	scripts/lib/storage.sh								unclassified
-49903285db79ade8	scripts/lib/storage.sh								unclassified
-a511d434bb918c51	scripts/lib/storage.sh								unclassified
-4acc6f685fd6455b	scripts/lib/storage.sh								unclassified
-d8baed54a9e7ffed	scripts/lib/storage.sh								unclassified
-17a63cc7424b3141	scripts/lib/storage.sh								unclassified
-97bc8dfb3e8b75ff	scripts/lib/storage.sh								unclassified
-6e6c9d490495b285	scripts/lib/storage.sh								unclassified
-a78464771706de8b	scripts/lib/storage.sh								unclassified
-573be2bee135bdbf	scripts/lib/storage.sh								unclassified
-6903a8bdff22663d	scripts/lib/storage.sh								unclassified
-9639f15ee6216ce3	scripts/lib/storage.sh								unclassified
-0c81567fd2d4b71c	scripts/lib/storage.sh								unclassified
-2b21cd826a6cb6be	scripts/lib/storage.sh								unclassified
-08d29e050ca98e8a	scripts/lib/storage.sh								unclassified
+559b0193506ebf7f	scripts/lib/storage.sh	official	adopt	agmsg_runtime_db_path の定義を補う。上流に呼び出し側が 4 ファイルあり定義が欠けていた	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
+49903285db79ade8	scripts/lib/storage.sh	official	adopt	sqlite3 の能力判定に </dev/null を足す。標準入力を奪う不具合の修正	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
+a511d434bb918c51	scripts/lib/storage.sh	agguild	port	上流に無い識別子 migration_script を参照する。単独適用不可	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
+4acc6f685fd6455b	scripts/lib/storage.sh	agguild	port	上流に無い識別子 _agmsg_runtime_db_exists を参照する。単独適用不可	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
+d8baed54a9e7ffed	scripts/lib/storage.sh	agguild	port	_agmsg_runtime_sql_result 版へ合わせる局所変数。同関数は fork 追加	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
+17a63cc7424b3141	scripts/lib/storage.sh	agguild	port	初期化呼び出しを外す。fork 追加の _agmsg_runtime_db_exists と対	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
+97bc8dfb3e8b75ff	scripts/lib/storage.sh	agguild	port	上流に無い識別子 _agmsg_runtime_db_exists を参照する。単独適用不可	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
+6e6c9d490495b285	scripts/lib/storage.sh	agguild	port	heredoc を .bail on 付き文字列へ。fork 追加の _agmsg_runtime_sql_result 用	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
+a78464771706de8b	scripts/lib/storage.sh	agguild	port	上流に無い識別子 _agmsg_runtime_sql_result を参照する。単独適用不可	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
+573be2bee135bdbf	scripts/lib/storage.sh	agguild	port	同上の局所変数。fork 追加の関数へ渡すため	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
+6903a8bdff22663d	scripts/lib/storage.sh	agguild	port	上流に無い識別子 _agmsg_runtime_db_exists を参照する。単独適用不可	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
+9639f15ee6216ce3	scripts/lib/storage.sh	official	adopt	owner を局所変数へ。次の hunk の失敗伝播に必要で、両方とも上流の関数のみ参照	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
+0c81567fd2d4b71c	scripts/lib/storage.sh	official	adopt	agmsg_runtime_lock_owner の失敗を || true で握りつぶさず伝播する。一般の正しさ	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
+2b21cd826a6cb6be	scripts/lib/storage.sh	agguild	port	上流に無い識別子 _agmsg_runtime_db_exists を参照する。単独適用不可	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
+08d29e050ca98e8a	scripts/lib/storage.sh	agguild	port	上流に無い識別子 _agmsg_runtime_db_exists を参照する。単独適用不可	none	tests/test_storage.bats	touched	agmsg_architect_claude	classified
 a8ebddd274405a57	scripts/lib/subscription.sh								unclassified
 ab47092f2202026b	scripts/lib/subscription.sh								unclassified
 438b4aa1e2ff9789	scripts/lib/subscription.sh								unclassified
@@ -388,36 +388,36 @@ bf9149090774e23e	scripts/spawn.sh								unclassified
 a5919c6a81a0b776	scripts/team.sh								unclassified
 699435d54e770773	scripts/team.sh								unclassified
 b2ca3bcaaba8f777	scripts/team.sh								unclassified
-966923c7c873301a	scripts/watch.sh								unclassified
-17cc2847f6e46a26	scripts/watch.sh								unclassified
-b16409d8dd07dda3	scripts/watch.sh								unclassified
-b3a4980290287a94	scripts/watch.sh								unclassified
-67b01b5cf7e1f531	scripts/watch.sh								unclassified
-14aeca4e3cdecfeb	scripts/watch.sh								unclassified
-a9c3866e261b94d9	scripts/watch.sh								unclassified
-97a7a7774b35fc31	scripts/watch.sh								unclassified
-854f45abf2ada3d7	scripts/watch.sh								unclassified
-80c08a4e10d4c5d6	scripts/watch.sh								unclassified
-19baebb11019382b	scripts/watch.sh								unclassified
-b39d426668119c39	scripts/watch.sh								unclassified
-c3c515f4da689b5c	scripts/watch.sh								unclassified
-24da1b60ad6872ae	scripts/watch.sh								unclassified
-7e74b47a41c85bce	scripts/watch.sh								unclassified
-2f9656590cb92913	scripts/watch.sh								unclassified
-696e7806914a17ca	scripts/watch.sh								unclassified
-0d01b683dd8cc4ea	scripts/watch.sh								unclassified
-883205a893f8defd	scripts/watch.sh								unclassified
-a0ffc4ffe247a042	scripts/watch.sh								unclassified
-5a0e5fe5e5f4685c	scripts/watch.sh								unclassified
-5c398ba66f44e019	scripts/watch.sh								unclassified
-bac2c080f9e639e2	scripts/watch.sh								unclassified
-e488babcad860c0d	scripts/watch.sh								unclassified
-38996bf8042cad7d	scripts/watch.sh								unclassified
-869b19d0ba389be3	scripts/watch.sh								unclassified
-809ea029b449eacd	scripts/watch.sh								unclassified
-ce803f378ab218d4	scripts/watch.sh								unclassified
-eac1fec1301458ba	scripts/watch.sh								unclassified
-6d1b3cd1d9203fa9	scripts/watch.sh								unclassified
+966923c7c873301a	scripts/watch.sh	agguild	port	active_name が全登録チームの pair へ広がる旨の説明。fork の全チーム化	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+17cc2847f6e46a26	scripts/watch.sh	official	adopt	"-" sentinel の説明。sentinel の処理自体が上流にある(#477)ので上流挙動の説明	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+b16409d8dd07dda3	scripts/watch.sh	official	adopt	${n:?} をやめ必須引数の判定を後段へ回す。次の hunk の明示的な検査と対で一般の堅牢化	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+b3a4980290287a94	scripts/watch.sh	official	adopt	必須引数の不足を stdout で報告する。monitor が stderr を拾わない環境向けの一般の修正	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+67b01b5cf7e1f531	scripts/watch.sh	agguild	port	lib/claims.sh を読み込む。同ファイルは上流に無い	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+14aeca4e3cdecfeb	scripts/watch.sh	official	adopt	不正な agent type を弾き無言のゼロ購読 watcher を防ぐ。identities.sh/type.conf は上流	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+a9c3866e261b94d9	scripts/watch.sh	agguild	port	GATE_UNAVAILABLE_REPORTED 等の gate 用の状態変数。いずれも上流に無い	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+97a7a7774b35fc31	scripts/watch.sh	agguild	port	上流に無い識別子 WATCH_HELD_GATE_PATH を参照する。単独適用不可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+854f45abf2ada3d7	scripts/watch.sh	agguild	port	購読解決を全チーム対応の共有ヘルパへ置き換える。fork の全チーム化	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+80c08a4e10d4c5d6	scripts/watch.sh	agguild	port	上流に無い識別子 watch_check_existing_db を参照する。単独適用不可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+19baebb11019382b	scripts/watch.sh	agguild	port	watch_check_existing_db / RUNTIME_DB / agmsg_storage_ensure_initialized が上流 watch.sh に無い	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+b39d426668119c39	scripts/watch.sh	agguild	port	全チームの claim とロールバックの方針の説明。fork の全チーム化	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+c3c515f4da689b5c	scripts/watch.sh	agguild	port	上流に無い識別子 HEALTH_TEAMS を参照する。単独適用不可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+24da1b60ad6872ae	scripts/watch.sh	agguild	port	gate 不可を一度だけ報告する仕組み。gate 専用	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+7e74b47a41c85bce	scripts/watch.sh	agguild	port	上流に無い識別子 GATE_LABEL を参照する。単独適用不可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+2f9656590cb92913	scripts/watch.sh	agguild	port	上流に無い識別子 GATE_LABEL を参照する。単独適用不可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+696e7806914a17ca	scripts/watch.sh	agguild	port	上流に無い識別子 _watch_release_gate を参照する。単独適用不可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+0d01b683dd8cc4ea	scripts/watch.sh	official	adopt	上流の echo を上流の watch_log へ替えるのみ。参照変数も上流由来で単独適用可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+883205a893f8defd	scripts/watch.sh	agguild	port	上流に無い識別子 _watch_release_gate を参照する。単独適用不可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+a0ffc4ffe247a042	scripts/watch.sh	agguild	port	既定分岐を free|mine へ絞る。unknown 状態の導入に従属	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+5a0e5fe5e5f4685c	scripts/watch.sh	official	adopt	上流の echo を上流の watch_log へ替えるのみ。単独適用可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+5c398ba66f44e019	scripts/watch.sh	agguild	port	上流に無い識別子 GATE_LABEL を参照する。単独適用不可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+bac2c080f9e639e2	scripts/watch.sh	agguild	port	上流に無い識別子 GATE_LABEL を参照する。単独適用不可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+e488babcad860c0d	scripts/watch.sh	agguild	port	読み出し処理を fork 追加の共有ヘルパへ移したことによる削除	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+38996bf8042cad7d	scripts/watch.sh	agguild	port	上流に無い識別子 _watch_release_gate を参照する。単独適用不可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+869b19d0ba389be3	scripts/watch.sh	agguild	port	上流に無い識別子 _consume_status を参照する。単独適用不可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+809ea029b449eacd	scripts/watch.sh	agguild	port	上流に無い識別子 GATE_LABEL を参照する。単独適用不可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+ce803f378ab218d4	scripts/watch.sh	agguild	port	上流に無い識別子 _watch_release_gate を参照する。単独適用不可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+eac1fec1301458ba	scripts/watch.sh	agguild	port	上流に無い識別子 placed_id を参照する。単独適用不可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
+6d1b3cd1d9203fa9	scripts/watch.sh	agguild	port	上流に無い識別子 _watch_release_gate を参照する。単独適用不可	none	tests/test_watch.bats	no	agmsg_architect_claude	classified
 40d31e35863c4bc8	scripts/whoami.sh								unclassified
 39b2292a73ffd028	scripts/whoami.sh								unclassified
 b485eafe159ececf	scripts/whoami.sh								unclassified
