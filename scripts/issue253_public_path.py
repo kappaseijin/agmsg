@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import threading
 import time
@@ -46,6 +47,27 @@ def ack_verdict(rc, evidence, interrupted=False, fault=False):
     return "pass"
 
 
+def layer_a_verdict(observed):
+    handoff = observed["receipt_after_handoff"]
+    failure = observed["record_failure"]
+    passed = (handoff == {"status": "receipt", "count": 1, "evidence": "inbox_stdout"}
+              and observed["handoff_observed"] is True
+              and observed["idempotent_count"] == 1
+              and observed["legacy_without_receipt"] == "legacy_read"
+              and failure.get("delivered") is True
+              and failure.get("diagnostic") is True
+              and observed["deleted_receipt_status"] == "legacy_read")
+    return "pass" if passed else "incompatible"
+
+
+def interruption_verdict(before_consume, before_receipt):
+    first = {"receipt_count": 0, "receipt_status": "none",
+             "consumed": False, "replayed": True}
+    second = {"receipt_count": 0, "receipt_status": "legacy_read",
+              "consumed": True, "replayed": False}
+    return "pass" if before_consume == first and before_receipt == second else "incompatible"
+
+
 class Fixture:
     def __init__(self, source, root, watch_only=False):
         self.root = root
@@ -62,6 +84,12 @@ class Fixture:
         self.commands = []
         self.lock = threading.Lock()
         self.injections = []
+        (root / "scripts/issue253-storage-call.sh").write_text(
+            '#!/usr/bin/env bash\nset -u\n'
+            'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"\n'
+            'source "$SCRIPT_DIR/lib/storage.sh"\n'
+            'agmsg_storage_load\n'
+            'operation="$1"\nshift\n"$operation" "$@"\n')
         for team in (("team",) if watch_only else ("team", "other")):
             for agent in (("sender", "receiver") if watch_only else ("sender", "receiver", "delegate")):
                 kind = "codex" if watch_only and agent == "sender" else "claude-code"
@@ -110,6 +138,42 @@ class Fixture:
             raise RuntimeError(f"fixture send failed: {result}")
         return request, team, recipient, body
 
+    def storage(self, operation, *args):
+        return self.call("issue253-storage-call.sh", operation, *args)
+
+    def message_id(self, item):
+        rows, complete = self.history(item[1])
+        result = correlate(rows, [item], complete)
+        if result["status"] != "pass":
+            raise RuntimeError(f"fixture id correlation failed: {result}")
+        return result["ids"][item[0]]
+
+    def database_query(self, sql, parameters=()):
+        with sqlite3.connect(self.root / "db/messages.db") as database:
+            return database.execute(sql, parameters).fetchone()
+
+    def receipt_row(self, message_id):
+        row = self.database_query(
+            """SELECT COUNT(r.message_id), COALESCE(MIN(r.evidence), '')
+                 FROM events e LEFT JOIN message_receipts r ON r.message_id=e.legacy_id
+                WHERE e.type='message_sent' AND e.team='team' AND e.id=?""", (message_id,))
+        return {"count": row[0], "evidence": row[1]}
+
+    def consumed(self, message_id, agent="receiver"):
+        row = self.database_query(
+            """SELECT EXISTS(SELECT 1 FROM events
+                               WHERE type='message_read' AND team='team'
+                                 AND agent=? AND msg_id=?)""", (agent, message_id))
+        return bool(row[0])
+
+    def delete_receipt(self, message_id):
+        with sqlite3.connect(self.root / "db/messages.db") as database:
+            database.execute(
+                """DELETE FROM message_receipts
+                    WHERE message_id=(SELECT legacy_id FROM events
+                                       WHERE type='message_sent' AND team='team' AND id=?)""",
+                (message_id,))
+
     def history(self, team="team", max_pages=30):
         rows, seen, cursor = [], set(), None
         for _ in range(max_pages):
@@ -155,6 +219,155 @@ def wait_for(predicate, seconds=8):
             return True
         time.sleep(0.05)
     return False
+
+
+def restore_storage_driver(fixture, source):
+    restored = fixture.root / "scripts/drivers/storage/sqlite.sh"
+    shutil.copyfile(source / "scripts/drivers/storage/sqlite.sh", restored)
+    fixture.injections[-1]["restored_sha256"] = hashlib.sha256(restored.read_bytes()).hexdigest()
+
+
+def start_fixture_watch(fixture, hosts, sid="fixture-sid"):
+    host = subprocess.Popen(["sleep", "60"], env=fixture.env)
+    hosts.append(host)
+    return fixture.start(
+        "watch.sh", sid, str(fixture.root / "project"), "claude-code",
+        extra={"AGMSG_AGENT_PID": str(host.pid), "AGMSG_TEST_RECEIVER_TAG": str(host.pid)})
+
+
+def finish_fixture_hosts(hosts):
+    for host in hosts:
+        if host.poll() is None:
+            host.terminate()
+        host.wait(timeout=5)
+
+
+def run_inbox_interruption(source, root, point):
+    f = Fixture(source, root / ("inbox_" + point))
+    item = f.send("inbox-" + point)
+    message_id = f.message_id(item)
+    if point == "before_consume":
+        barrier = f.root / "before-consume"
+        handle = f.start("inbox.sh", "team", "receiver", extra={"AGMSG_TEST_MARK_BARRIER": str(barrier)})
+        reached = wait_for(lambda: Path(str(barrier) + ".reached").exists())
+    else:
+        f.inject("storage_record_receipts", 'touch "$TMPDIR/receipt.reached"\nwhile [ ! -e "$TMPDIR/receipt.release" ]; do sleep 0.05; done')
+        handle = f.start("inbox.sh", "team", "receiver")
+        reached = wait_for(lambda: (f.root / "tmp/receipt.reached").exists())
+    observed = f.finish(handle, stop=True)
+    state = {"receipt_count": f.receipt_row(message_id)["count"],
+             "receipt_status": f.storage("storage_receipt_status", "team", message_id)["stdout"].strip(),
+             "consumed": f.consumed(message_id)}
+    if point == "before_receipt":
+        restore_storage_driver(f, source)
+    replay = f.call("inbox.sh", "team", "receiver")
+    state["replayed"] = item[0] in replay["stdout"]
+    state.update(reached=reached, handoff=item[0] in observed["stdout"])
+    f.save()
+    return state
+
+
+def run_watch_interruption(source, root, point):
+    f = Fixture(source, root / ("watch_" + point), watch_only=True)
+    f.send("bootstrap", recipient="sender")
+    f.call("inbox.sh", "team", "sender")
+    f.inject("storage_watch_after", '_issue253_original_storage_watch_after "$@"\nlocal result=$?\nif [ "$2" = "team:receiver" ]; then touch "$TMPDIR/watch-poll.$AGMSG_TEST_RECEIVER_TAG"; fi\nreturn "$result"')
+    target = "storage_read_cursor_consume" if point == "before_consume" else "storage_record_receipts"
+    f.inject(target, 'touch "$TMPDIR/interruption.reached"\nwhile [ ! -e "$TMPDIR/interruption.release" ]; do sleep 0.05; done')
+    hosts = []
+    handle = start_fixture_watch(f, hosts)
+    ready = wait_for(lambda: (f.root / f"tmp/watch-poll.{hosts[0].pid}").exists())
+    item = f.send("watch-" + point)
+    message_id = f.message_id(item)
+    handoff = wait_for(lambda: item[0] in Path(str(handle[2]) + ".stdout").read_text())
+    reached = wait_for(lambda: (f.root / "tmp/interruption.reached").exists())
+    observed = f.finish(handle, stop=True)
+    state = {"receipt_count": f.receipt_row(message_id)["count"],
+             "receipt_status": f.storage("storage_receipt_status", "team", message_id)["stdout"].strip(),
+             "consumed": f.consumed(message_id)}
+    restore_storage_driver(f, source)
+    f.inject("storage_watch_after", '_issue253_original_storage_watch_after "$@"\nlocal result=$?\nif [ "$2" = "team:receiver" ]; then touch "$TMPDIR/watch-poll.$AGMSG_TEST_RECEIVER_TAG"; fi\nreturn "$result"')
+    hosts[0].terminate()
+    hosts[0].wait(timeout=5)
+    resumed = start_fixture_watch(f, hosts)
+    resume_ready = wait_for(lambda: (f.root / f"tmp/watch-poll.{hosts[-1].pid}").exists())
+    state["replayed"] = wait_for(
+        lambda: item[0] in Path(str(resumed[2]) + ".stdout").read_text(), seconds=2)
+    f.finish(resumed, stop=True)
+    finish_fixture_hosts(hosts)
+    state.update(reached=reached, handoff=handoff and item[0] in observed["stdout"],
+                 ready=ready, resume_ready=resume_ready)
+    f.save()
+    return state
+
+
+def run_receipt_failure(source, root):
+    f = Fixture(source, root / "watch_receipt_failure", watch_only=True)
+    f.send("bootstrap", recipient="sender")
+    f.call("inbox.sh", "team", "sender")
+    f.inject("storage_watch_after", '_issue253_original_storage_watch_after "$@"\nlocal result=$?\nif [ "$2" = "team:receiver" ]; then touch "$TMPDIR/watch-poll.$AGMSG_TEST_RECEIVER_TAG"; fi\nreturn "$result"')
+    f.inject("storage_record_receipts", "return 73")
+    hosts = []
+    handle = start_fixture_watch(f, hosts)
+    ready = wait_for(lambda: (f.root / f"tmp/watch-poll.{hosts[0].pid}").exists())
+    item = f.send("watch-receipt-failure")
+    delivered = wait_for(lambda: item[0] in Path(str(handle[2]) + ".stdout").read_text())
+    diagnostic = wait_for(lambda: "storage_record_receipts failed after stdout delivery (status 73)"
+                          in Path(str(handle[2]) + ".stderr").read_text())
+    observed = f.finish(handle, stop=True)
+    finish_fixture_hosts(hosts)
+    f.save()
+    return {"delivered": delivered and item[0] in observed["stdout"],
+            "diagnostic": diagnostic, "ready": ready}
+
+
+def run_layer_a_cases(source, root):
+    print(f"{root.name}: layer_a", flush=True)
+    normal = Fixture(source, root / "receipt_normal")
+    item = normal.send("receipt-normal")
+    message_id = normal.message_id(item)
+    delivery = normal.call("inbox.sh", "team", "receiver")
+    status = normal.storage("storage_receipt_status", "team", message_id)["stdout"].strip()
+    receipt = normal.receipt_row(message_id)
+    normal.storage("storage_record_receipts", "team", "receiver", "duplicate_attempt", message_id)
+    normal.storage("storage_record_receipts", "team", "receiver", "duplicate_attempt", message_id)
+    idempotent_count = normal.receipt_row(message_id)["count"]
+    normal.delete_receipt(message_id)
+    deleted_status = normal.storage("storage_receipt_status", "team", message_id)["stdout"].strip()
+    normal.save()
+
+    legacy = Fixture(source, root / "legacy_read")
+    legacy_item = legacy.send("legacy-read")
+    legacy_id = legacy.message_id(legacy_item)
+    legacy.storage("storage_mark_read_batch", "team", "receiver", legacy_id)
+    legacy_status = legacy.storage("storage_receipt_status", "team", legacy_id)["stdout"].strip()
+    legacy.save()
+
+    observed = {
+        "receipt_after_handoff": {"status": status, "count": receipt["count"],
+                                  "evidence": receipt["evidence"]},
+        "handoff_observed": item[0] in delivery["stdout"],
+        "idempotent_count": idempotent_count,
+        "legacy_without_receipt": legacy_status,
+        "record_failure": run_receipt_failure(source, root),
+        "deleted_receipt_status": deleted_status,
+    }
+    observed["status"] = layer_a_verdict({key: observed[key] for key in (
+        "receipt_after_handoff", "handoff_observed", "idempotent_count", "legacy_without_receipt",
+        "record_failure", "deleted_receipt_status")})
+    inbox_first = run_inbox_interruption(source, root, "before_consume")
+    inbox_second = run_inbox_interruption(source, root, "before_receipt")
+    watch_first = run_watch_interruption(source, root, "before_consume")
+    watch_second = run_watch_interruption(source, root, "before_receipt")
+    observed["inbox_interrupted"] = {"before_consume": inbox_first, "before_receipt": inbox_second,
+                                     "status": interruption_verdict(
+                                         {key: inbox_first[key] for key in ("receipt_count", "receipt_status", "consumed", "replayed")},
+                                         {key: inbox_second[key] for key in ("receipt_count", "receipt_status", "consumed", "replayed")})}
+    observed["watch_interrupted"] = {"before_consume": watch_first, "before_receipt": watch_second,
+                                     "status": interruption_verdict(
+                                         {key: watch_first[key] for key in ("receipt_count", "receipt_status", "consumed", "replayed")},
+                                         {key: watch_second[key] for key in ("receipt_count", "receipt_status", "consumed", "replayed")})}
+    return observed
 
 
 def run_route(source, root):
@@ -407,6 +620,11 @@ def main():
                     errors.append(f"{route}: required control was not exercised; inspect command packet")
                 statuses = [value["status"] for value in cases.values()]
                 report["compatibility"][route] = "incompatible" if "incompatible" in statuses else "unknown"
+        report["layer_a"] = run_layer_a_cases(sources["F"], args.output / "layer-a")
+        if (report["layer_a"]["status"] != "pass"
+                or report["layer_a"]["inbox_interrupted"]["status"] != "pass"
+                or report["layer_a"]["watch_interrupted"]["status"] != "pass"):
+            errors.append("F: layer A receipt controls did not pass; inspect command packet")
         if errors:
             raise RuntimeError("; ".join(errors))
         reference = subprocess.run(["bats", str(sources["F"] / "tests/test_claims.bats")],

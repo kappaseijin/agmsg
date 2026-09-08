@@ -1,4 +1,5 @@
 """Fail-closed evaluator controls; these are not the real F/O experiment."""
+import copy
 import importlib.util
 from pathlib import Path
 import unittest
@@ -30,12 +31,17 @@ class Controls(unittest.TestCase):
     def test_ambiguous_duplicate_request(self):
         self.assertEqual(harness.correlate(self.rows + [self.rows[0]], self.expected, True)["status"], "unknown")
 
+    def test_reused_message_id(self):
+        self.rows[1]["id"] = self.rows[0]["id"]
+        self.assertEqual(harness.correlate(self.rows, self.expected, True)["status"], "unknown")
+
     def test_scope(self):
         self.rows[0]["team"] = "other"
         self.assertEqual(harness.correlate(self.rows, self.expected, True)["status"], "unknown")
 
     def test_rc_zero_not_ack(self):
         self.assertEqual(harness.ack_verdict(0, None), "unknown")
+        self.assertEqual(harness.ack_verdict(73, "handedOff"), "unknown")
         self.assertEqual(harness.ack_verdict(0, "handedOff", fault=True), "unknown")
         self.assertEqual(harness.ack_verdict(0, "handedOff", interrupted=True), "unknown")
         self.assertEqual(harness.ack_verdict(0, "handedOff"), "pass")
@@ -44,6 +50,39 @@ class Controls(unittest.TestCase):
         observations = [{"stdout": "requestId=A"}] * 2
         self.assertEqual(harness.receiver_verdict(observations, 2, "requestId=A"), "incompatible")
         self.assertEqual(harness.receiver_verdict(observations[:1], 2, "requestId=A"), "unknown")
+
+    def test_layer_a_requires_every_receipt_control(self):
+        observed = {
+            "receipt_after_handoff": {"status": "receipt", "count": 1, "evidence": "inbox_stdout"},
+            "handoff_observed": True,
+            "idempotent_count": 1,
+            "legacy_without_receipt": "legacy_read",
+            "record_failure": {"delivered": True, "diagnostic": True},
+            "deleted_receipt_status": "legacy_read",
+        }
+        self.assertEqual(harness.layer_a_verdict(observed), "pass")
+        mutations = (
+            lambda row: row["receipt_after_handoff"].update(evidence="wrong_path"),
+            lambda row: row.update(handoff_observed=False),
+            lambda row: row.update(idempotent_count=2),
+            lambda row: row.update(legacy_without_receipt="none"),
+            lambda row: row["record_failure"].update(delivered=False),
+            lambda row: row["record_failure"].update(diagnostic=False),
+            lambda row: row.update(deleted_receipt_status="receipt"),
+        )
+        for mutate in mutations:
+            candidate = copy.deepcopy(observed)
+            mutate(candidate)
+            self.assertEqual(harness.layer_a_verdict(candidate), "incompatible")
+
+    def test_interruption_points_require_opposite_read_and_replay_states(self):
+        before_consume = {"receipt_count": 0, "receipt_status": "none",
+                          "consumed": False, "replayed": True}
+        before_receipt = {"receipt_count": 0, "receipt_status": "legacy_read",
+                          "consumed": True, "replayed": False}
+        self.assertEqual(harness.interruption_verdict(before_consume, before_receipt), "pass")
+        before_receipt["replayed"] = True
+        self.assertEqual(harness.interruption_verdict(before_consume, before_receipt), "incompatible")
 
 
 if __name__ == "__main__":
