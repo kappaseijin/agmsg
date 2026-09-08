@@ -5,10 +5,13 @@ description: >-
   official registrations query の隔離適合試験で、session record と禁止対象 process の
   意味的な不変性を、偽陰性なく検証するための限定契約を定める。
 timestamp: "2026-09-09T03:13:06+09:00"
-updated: "2026-09-09T03:13:06+09:00"
+updated: "2026-09-09T03:20:25+09:00"
 issues: [246, 222]
 source_design: docs/decisions/2026-09-08T203900_issue-246-official-registration照会契約と適合計画.md
-fixed_failure_head: 3b39c7620e57345dc8a724aa0f6cd43c2f6f4d7c
+failure_observation_ref: >-
+  unpublished local programmer worktree only:
+  feat/issue-246-registration-fixture@3b39c7620e57345dc8a724aa0f6cd43c2f6f4d7c
+failure_observation_availability: not_pushed_not_github_reviewable
 producer: agmsg_architect_codex
 reviewer: agmsg_reviewer_claude
 ---
@@ -24,6 +27,12 @@ session は対象 run 配下の record の同一性集合、process は fixture 
 
 この補足は、Issue #246 の provider patch、5ファイル境界、8変異、公開契約、または
 README を変更しない。設計差分は本 `docs/decisions/` 文書だけである。
+
+`3b39c7620e57345dc8a724aa0f6cd43c2f6f4d7c` は、偽陰性を観測した未公開の
+programmer ローカル worktree `feat/issue-246-registration-fixture` の commit である。
+GitHub、origin、または formal review の取得対象ではない。この commit は問題発見の観測参照だけであり、
+本書の受入根拠や次工程の固定 HEAD には使わない。後者は programmer が本設計の実装後に提示し、
+verifier が隔離 export で再測定できる公開済みの固定 commit とする。
 
 ## 1. 対象と非対象
 
