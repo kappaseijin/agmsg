@@ -34,6 +34,8 @@ issues: [246, 222, 236, 239, 244]
 
 `tests/issue246_mutations.py`は各ケースごとにcutoffを新規exportしてpatchを適用し、source anchorを一度だけ置換する。`bash -n`が成功し、対応するBats caseが非0となるときだけKILLEDである。対象は LIMIT 1、rows DISTINCT、validation bypass、early stdout、schema bypass、target scope、final snapshot bypass、tuple pairの8件である。
 
+report.jsonは`sourceCutoff`、`patchHead`、`patchApplied`、`contractStatus`、`mutationStatus`、`readOnlyStatus`、`officialAvailability`を持つ。公式採用前であることは`officialAvailability: not_adopted`で明示する。
+
 実行:
 
 ```sh

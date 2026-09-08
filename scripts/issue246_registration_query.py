@@ -4,6 +4,7 @@ import argparse, hashlib, io, json, subprocess, tarfile
 from pathlib import Path
 
 CUTOFF = "e58dbafad5a84be625f070385bb0c076c3daa4db"
+PATCH_HEAD = "eb850a6698ab81986b9ac49830b7dddbdeb75d83"
 PATCH = Path("patches/issue246-registration.patch")
 FILES = {"README.md", "scripts/api.sh", "scripts/lib/api-registrations.sh", "tests/test_api.bats", "tests/test_api_registrations.bats"}
 
@@ -38,8 +39,15 @@ def main():
     syntax = run(["bash", "-n", "scripts/lib/api-registrations.sh"], tree)
     registrations = run(["bats", "tests/test_api_registrations.bats"], tree)
     api = run(["bats", "tests/test_api.bats"], tree)
-    report = {"cutoff": CUTOFF, "patch": str(PATCH), "patch_sha256": hashlib.sha256(patch.read_bytes()).hexdigest(), "patch_files": sorted(patch_files(text)), "apply": applied, "syntax": syntax, "registrations": registrations, "api": api}
-    report["status"] = "pass" if all(x["rc"] == 0 for x in (applied, syntax, registrations, api)) else "fail"
+    mutations = run(["python3", "tests/issue246_mutations.py"], repo)
+    contract = all(x["rc"] == 0 for x in (applied, syntax, registrations, api))
+    report = {"sourceCutoff": CUTOFF, "patchHead": PATCH_HEAD,
+              "patchApplied": applied["rc"] == 0, "contractStatus": "pass" if contract else "fail",
+              "mutationStatus": "pass" if mutations["rc"] == 0 else "fail",
+              "readOnlyStatus": "pass" if registrations["rc"] == 0 else "fail",
+              "officialAvailability": "not_adopted",
+              "cutoff": CUTOFF, "patch": str(PATCH), "patch_sha256": hashlib.sha256(patch.read_bytes()).hexdigest(), "patch_files": sorted(patch_files(text)), "apply": applied, "syntax": syntax, "registrations": registrations, "api": api, "mutations": mutations}
+    report["status"] = "pass" if contract and mutations["rc"] == 0 else "fail"
     output.mkdir(parents=True, exist_ok=True)
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
