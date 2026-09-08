@@ -1,0 +1,772 @@
+diff --git a/scripts/api.sh b/scripts/api.sh
+index 85c0f2b..dd61d22 100755
+--- a/scripts/api.sh
++++ b/scripts/api.sh
+@@ -26,6 +26,7 @@ set -euo pipefail
+ # Usage:
+ #   api.sh get teams
+ #   api.sh get teams <team> members
++#   api.sh get teams <team> registrations --schema-version 1
+ #   api.sh get teams <team> messages [--agent <name>] [--limit N] [--before-id <id>]
+ #
+ # Output is always JSONL — one JSON object per line, UTF-8, no
+@@ -36,10 +37,15 @@ set -euo pipefail
+ # interface spec, and today's sqlite integer ids are no exception.
+
+ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
++export SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ source "$SCRIPT_DIR/lib/storage.sh"
+ agmsg_storage_load
+ # shellcheck disable=SC1091
+ source "$SCRIPT_DIR/lib/validate.sh"
++# shellcheck disable=SC1091
++source "$SCRIPT_DIR/lib/resolve-project.sh"
++# shellcheck disable=SC1091
++source "$SCRIPT_DIR/lib/api-registrations.sh"
+
+ _agmsg_sqlesc() { printf %s "$1" | sed "s/'/''/g"; }
+
+@@ -211,7 +217,7 @@ get_messages() {
+ }
+
+ route_get() {
+-  local resource="${1:?Usage: api.sh get teams [<team> store|members|messages ...]}"
++  local resource="${1:?Usage: api.sh get teams [<team> store|members|registrations|messages ...]}"
+   shift
+   case "$resource" in
+     teams)
+@@ -223,10 +229,11 @@ route_get() {
+       # Validate before the value is used by the members filesystem path.
+       agmsg_validate_team_name "$team" || exit 1
+       shift
+-      local sub="${1:?Usage: api.sh get teams <team> members|messages ...}"
++      local sub="${1:?Usage: api.sh get teams <team> store|members|registrations|messages ...}"
+       shift
+       case "$sub" in
+         members) get_members "$team" ;;
++        registrations) get_registrations "$team" "$@" ;;
+         messages) get_messages "$team" "$@" ;;
+         store) get_store "$team" ;;
+         *) echo "Unknown resource: teams $team $sub" >&2; exit 1 ;;
+diff --git a/scripts/lib/api-registrations.sh b/scripts/lib/api-registrations.sh
+new file mode 100644
+index 0000000..12b44f6
+--- /dev/null
++++ b/scripts/lib/api-registrations.sh
+@@ -0,0 +1,386 @@
++#!/usr/bin/env bash
++# Read-only implementation of api.sh's versioned registrations resource.
++#
++# This helper deliberately reads one team's source only. It snapshots and
++# validates the complete source before emitting anything, then checks the
++# source identity and bytes again before returning a successful envelope.
++
++[ -n "${_AGMSG_API_REGISTRATIONS_SH:-}" ] && return 0
++_AGMSG_API_REGISTRATIONS_SH=1
++
++_api_registrations_emit() {
++  local team="$1" status="$2" reason="$3" complete="$4" registrations="${5:-}"
++  local team_sql status_sql reason_sql complete_expr registrations_expr
++  team_sql="$(_agmsg_sqlesc "$team")"
++  status_sql="$(_agmsg_sqlesc "$status")"
++  if [ -n "$reason" ]; then
++    reason_sql="'$(_agmsg_sqlesc "$reason")'"
++  else
++    reason_sql='NULL'
++  fi
++  if [ "$complete" = true ]; then
++    complete_expr="json('true')"
++  else
++    complete_expr="json('false')"
++  fi
++  if [ "$registrations" = null ] || [ -z "$registrations" ]; then
++    registrations_expr='NULL'
++  else
++    registrations_expr="json('$(_agmsg_sqlesc "$registrations")')"
++  fi
++  agmsg_sqlite_mem "SELECT json_object(
++    'schemaVersion', 1,
++    'resource', 'registrations',
++    'team', '$team_sql',
++    'status', '$status_sql',
++    'reason', $reason_sql,
++    'complete', $complete_expr,
++    'registrations', $registrations_expr
++  );"
++}
++
++_api_registrations_fail() {
++  local team="$1" status="$2" reason="$3" exit_code="$4"
++  _api_registrations_emit "$team" "$status" "$reason" false null
++  printf 'api: registrations: status=%s reason=%s\n' "$status" "$reason" >&2
++  return "$exit_code"
++}
++
++_api_registrations_fingerprint() {
++  case "$(uname -s 2>/dev/null || printf '%s' unknown)" in
++    Darwin*) stat -f '%d:%i:%z:%m' "$1" 2>/dev/null ;;
++    *)       stat -c '%d:%i:%s:%Y' "$1" 2>/dev/null ;;
++  esac
++}
++
++_api_registrations_validate_snapshot() {
++  local snapshot="$1" team="$2" source_sql team_sql error
++  source_sql="$(agmsg_sql_readfile_path "$snapshot")"
++  team_sql="$(_agmsg_sqlesc "$team")"
++  if ! error="$(sqlite3 -batch -noheader :memory: "
++    WITH raw(json) AS (
++      SELECT CAST(readfile('$source_sql') AS TEXT)
++    ),
++    cfg(json) AS (
++      SELECT json
++      FROM raw
++      WHERE json_valid(json) AND json_type(json) = 'object'
++    ),
++    root_keys(key) AS (
++      SELECT key
++      FROM cfg, json_each(cfg.json)
++    ),
++    agents(name, member) AS (
++      SELECT a.key, a.value
++      FROM cfg, json_each(json_extract(cfg.json, '\$.agents')) AS a
++      WHERE json_type(cfg.json, '\$.agents') = 'object'
++    ),
++    member_keys(name, key) AS (
++      SELECT agents.name, k.key
++      FROM agents, json_each(agents.member) AS k
++    ),
++    registrations(name, idx, registration) AS (
++      SELECT agents.name, r.key, r.value
++      FROM agents, json_each(json_extract(agents.member, '\$.registrations')) AS r
++      WHERE json_type(agents.member, '\$.registrations') = 'array'
++    ),
++    errors(priority, reason) AS (
++      SELECT 1, 'data_invalid'
++      WHERE NOT EXISTS (SELECT 1 FROM cfg)
++      UNION ALL
++      SELECT 2, 'storage_schema_unsupported'
++      FROM cfg
++      WHERE EXISTS (SELECT 1 FROM root_keys WHERE key = 'schemaVersion')
++        AND (COALESCE(json_type(cfg.json, '\$.schemaVersion'), '') != 'integer'
++          OR json_extract(cfg.json, '\$.schemaVersion') != 1)
++      UNION ALL
++      SELECT 3, 'data_invalid'
++      FROM cfg
++      WHERE EXISTS (SELECT 1 FROM root_keys WHERE key = 'name')
++        AND (COALESCE(json_type(cfg.json, '\$.name'), '') != 'text'
++          OR length(COALESCE(json_extract(cfg.json, '\$.name'), '')) = 0
++          OR json_extract(cfg.json, '\$.name') != '$team_sql')
++      UNION ALL
++      SELECT 4, 'data_invalid'
++      FROM cfg
++      WHERE COALESCE(json_type(cfg.json, '\$.agents'), '') != 'object'
++    UNION ALL
++      SELECT 5, 'data_invalid'
++      FROM agents
++      WHERE json_type(member) != 'object'
++      UNION ALL
++      SELECT 5, 'data_invalid'
++      FROM agents
++      WHERE length(name) = 0
++        OR name IN ('.', '..')
++        OR substr(name, 1, 1) = '-'
++        OR instr(name, '.') > 0
++        OR instr(name, '/') > 0
++        OR instr(name, char(92)) > 0
++        OR instr(name, char(34)) > 0
++        OR instr(name, '[') > 0
++        OR instr(name, ']') > 0
++      UNION ALL
++      SELECT 6, 'data_invalid'
++      FROM agents
++      WHERE EXISTS (SELECT 1 FROM member_keys WHERE name = agents.name AND key = 'registrations')
++        AND COALESCE(json_type(member, '\$.registrations'), '') != 'array'
++      UNION ALL
++      SELECT 7, 'data_invalid'
++      FROM agents
++      WHERE NOT EXISTS (SELECT 1 FROM member_keys WHERE name = agents.name AND key = 'registrations')
++        AND (
++          EXISTS (SELECT 1 FROM member_keys WHERE name = agents.name AND key IN ('type', 'project'))
++          AND NOT (
++            json_type(member, '\$.type') = 'text'
++            AND length(json_extract(member, '\$.type')) > 0
++            AND json_type(member, '\$.project') = 'text'
++            AND length(json_extract(member, '\$.project')) > 0
++          )
++        )
++      UNION ALL
++      SELECT 8, 'data_invalid'
++      FROM registrations
++      WHERE json_type(registration) != 'object'
++      UNION ALL
++      SELECT 9, 'data_invalid'
++      FROM registrations
++      WHERE COALESCE(json_type(registration, '\$.type'), '') != 'text'
++        OR length(COALESCE(json_extract(registration, '\$.type'), '')) = 0
++      UNION ALL
++      SELECT 10, 'data_invalid'
++      FROM registrations
++      WHERE COALESCE(json_type(registration, '\$.project'), '') != 'text'
++        OR length(COALESCE(json_extract(registration, '\$.project'), '')) = 0
++    )
++    SELECT COALESCE((SELECT reason FROM errors ORDER BY priority LIMIT 1), 'ok');
++  " 2>/dev/null)"; then
++    printf '%s\n' data_invalid
++    return 0
++  fi
++  case "$error" in
++    ok|data_invalid|storage_schema_unsupported) printf '%s\n' "$error" ;;
++    *) printf '%s\n' data_invalid ;;
++  esac
++}
++
++_api_registrations_write_rows() {
++  local snapshot="$1" rows="$2" source_sql
++  source_sql="$(agmsg_sql_readfile_path "$snapshot")"
++  if ! sqlite3 -batch -noheader :memory: "
++    WITH cfg(json) AS (
++      SELECT CAST(readfile('$source_sql') AS TEXT)
++    ),
++    agents(name, member) AS (
++      SELECT a.key, a.value
++      FROM cfg, json_each(json_extract(cfg.json, '\$.agents')) AS a
++    ),
++    normalized(name, registrations) AS (
++      SELECT
++        name,
++        CASE
++          WHEN json_type(member, '\$.registrations') = 'array'
++            THEN json_extract(member, '\$.registrations')
++          WHEN json_type(member, '\$.type') = 'text'
++            AND length(json_extract(member, '\$.type')) > 0
++            AND json_type(member, '\$.project') = 'text'
++            AND length(json_extract(member, '\$.project')) > 0
++            THEN json_array(json_object(
++              'type', json_extract(member, '\$.type'),
++              'project', json_extract(member, '\$.project')
++            ))
++          ELSE json('[]')
++        END
++      FROM agents
++    )
++    SELECT json_object(
++      'agent', name,
++      'type', json_extract(r.value, '\$.type'),
++      'project', json_extract(r.value, '\$.project')
++    )
++    FROM normalized, json_each(normalized.registrations) AS r
++    ORDER BY name COLLATE BINARY,
++             json_extract(r.value, '\$.type') COLLATE BINARY,
++             json_extract(r.value, '\$.project') COLLATE BINARY;
++  " >"$rows" 2>/dev/null; then
++    return 1
++  fi
++  local clean_rows="${rows}.clean"
++  if ! tr -d '\r' <"$rows" >"$clean_rows"; then
++    return 1
++  fi
++  mv "$clean_rows" "$rows"
++}
++
++_api_registrations_json_field() {
++  local object="$1" field="$2" object_sql value
++  object_sql="$(_agmsg_sqlesc "$object")"
++  if ! value="$(sqlite3 -batch -noheader :memory: \
++    "SELECT json_extract('$object_sql', '\$.$field');" 2>/dev/null | tr -d '\r')"; then
++    return 1
++  fi
++  printf '%s' "$value"
++}
++
++_api_registrations_test_barrier() {
++  local barrier="${AGMSG_TEST_API_REGISTRATIONS_BARRIER:-}"
++  [ -n "$barrier" ] || return 0
++  : >"$barrier.reached" || return 1
++  while [ ! -e "$barrier.release" ]; do
++    sleep 0.01 || return 1
++  done
++}
++
++_api_registrations_query() (
++  local team="$1" team_dir config snapshot rows before_fp snapshot_fp final_fp
++  local validation row agent type project physical canonical record records_json='[' separator=''
++  team_dir="$SCRIPT_DIR/../teams/$team"
++  config="$team_dir/config.json"
++
++  if [ ! -d "$team_dir" ] || [ ! -e "$config" ]; then
++    _api_registrations_fail "$team" not_found team_not_found 1
++    exit $?
++  fi
++  if [ ! -f "$config" ]; then
++    _api_registrations_fail "$team" unknown read_failed 1
++    exit $?
++  fi
++
++  snapshot="$(mktemp "${TMPDIR:-/tmp}/agmsg-api-registrations.XXXXXX" 2>/dev/null)" || {
++    _api_registrations_fail "$team" unknown read_failed 1
++    exit $?
++  }
++  rows="$(mktemp "${TMPDIR:-/tmp}/agmsg-api-registrations-rows.XXXXXX" 2>/dev/null)" || {
++    rm -f "$snapshot"
++    _api_registrations_fail "$team" unknown read_failed 1
++    exit $?
++  }
++  chmod 600 "$snapshot" "$rows" 2>/dev/null || :
++  trap 'rm -f "$snapshot" "$rows" "${rows}.clean"' EXIT INT TERM
++
++  before_fp="$(_api_registrations_fingerprint "$config")" || {
++    _api_registrations_fail "$team" unknown read_failed 1
++    exit $?
++  }
++  if ! cat "$config" >"$snapshot"; then
++    _api_registrations_fail "$team" unknown read_failed 1
++    exit $?
++  fi
++  snapshot_fp="$(_api_registrations_fingerprint "$config")" || {
++    _api_registrations_fail "$team" unknown read_failed 1
++    exit $?
++  }
++  if [ "$before_fp" != "$snapshot_fp" ] || ! cmp -s "$snapshot" "$config"; then
++    _api_registrations_fail "$team" unknown concurrent_change 1
++    exit $?
++  fi
++
++  validation="$(_api_registrations_validate_snapshot "$snapshot" "$team")"
++  case "$validation" in
++    ok) ;;
++    storage_schema_unsupported)
++      _api_registrations_fail "$team" unknown storage_schema_unsupported 1
++      exit $?
++      ;;
++    *)
++      _api_registrations_fail "$team" unknown data_invalid 1
++      exit $?
++      ;;
++  esac
++
++  if ! _api_registrations_write_rows "$snapshot" "$rows"; then
++    _api_registrations_fail "$team" unknown read_failed 1
++    exit $?
++  fi
++
++  while IFS= read -r row || [ -n "$row" ]; do
++    [ -n "$row" ] || continue
++    agent="$(_api_registrations_json_field "$row" agent)" || {
++      _api_registrations_fail "$team" unknown read_failed 1
++      exit $?
++    }
++    if ! agmsg_validate_agent_name "$agent" >/dev/null 2>&1; then
++      _api_registrations_fail "$team" unknown data_invalid 1
++      exit $?
++    fi
++    type="$(_api_registrations_json_field "$row" type)" || {
++      _api_registrations_fail "$team" unknown read_failed 1
++      exit $?
++    }
++    project="$(_api_registrations_json_field "$row" project)" || {
++      _api_registrations_fail "$team" unknown read_failed 1
++      exit $?
++    }
++    if [ "${AGMSG_TEST_API_REGISTRATIONS_CANONICAL_FAIL:-}" = "$project" ]; then
++      _api_registrations_fail "$team" unknown project_unresolvable 1
++      exit $?
++    fi
++    physical="$(agmsg_canonical_path "$project")" || {
++      _api_registrations_fail "$team" unknown project_unresolvable 1
++      exit $?
++    }
++    canonical="$(agmsg_normalize_project_path "$physical")" || {
++      _api_registrations_fail "$team" unknown project_unresolvable 1
++      exit $?
++    }
++    record="$(agmsg_sqlite_mem "SELECT json_object(
++      'agent', '$(_agmsg_sqlesc "$agent")',
++      'type', '$(_agmsg_sqlesc "$type")',
++      'project', '$(_agmsg_sqlesc "$project")',
++      'canonicalProject', '$(_agmsg_sqlesc "$canonical")'
++    );")" || {
++      _api_registrations_fail "$team" unknown read_failed 1
++      exit $?
++    }
++    records_json="${records_json}${separator}${record}"
++    separator=','
++  done <"$rows"
++  records_json="${records_json}]"
++
++  if ! _api_registrations_test_barrier; then
++    _api_registrations_fail "$team" unknown read_failed 1
++    exit $?
++  fi
++  final_fp="$(_api_registrations_fingerprint "$config")" || {
++    _api_registrations_fail "$team" unknown concurrent_change 1
++    exit $?
++  }
++  if [ "$before_fp" != "$final_fp" ] || ! cmp -s "$snapshot" "$config"; then
++    _api_registrations_fail "$team" unknown concurrent_change 1
++    exit $?
++  fi
++
++  _api_registrations_emit "$team" ok '' true "$records_json"
++  exit 0
++)
++
++get_registrations() {
++  local team="$1" schema_version='' option
++  shift
++  while [ "$#" -gt 0 ]; do
++    option="$1"
++    case "$option" in
++      --schema-version)
++        if [ "$#" -lt 2 ] || [ -n "$schema_version" ]; then
++          _api_registrations_fail "$team" error invalid_argument 2
++          return $?
++        fi
++        schema_version="$2"
++        shift 2
++        ;;
++      *)
++        _api_registrations_fail "$team" error invalid_argument 2
++        return $?
++        ;;
++    esac
++  done
++  if [ -z "$schema_version" ]; then
++    _api_registrations_fail "$team" error invalid_argument 2
++    return $?
++  fi
++  if [ "$schema_version" != 1 ]; then
++    _api_registrations_fail "$team" error unsupported_schema_version 2
++    return $?
++  fi
++  _api_registrations_query "$team"
++}
+diff --git a/tests/test_api.bats b/tests/test_api.bats
+index 872add3..4db69a1 100644
+--- a/tests/test_api.bats
++++ b/tests/test_api.bats
+@@ -75,6 +75,34 @@ json_valid_line() {
+   [ -z "$output" ]
+ }
+
++@test "api: get teams <team> registrations emits a complete versioned envelope" {
++  bash "$SCRIPTS/join.sh" testteam alice claude-code /tmp/project-a-2
++  run bash "$SCRIPTS/api.sh" get teams testteam registrations --schema-version 1
++  [ "$status" -eq 0 ]
++  [ "$(echo "$output" | wc -l | tr -d ' ')" -eq 1 ]
++  [ "$(json_field "$output" status)" = "ok" ]
++  [ "$(json_field "$output" complete)" = "1" ]
++  [ "$(sqlite_mem "SELECT json_array_length('$output', '\$.registrations');")" -eq 3 ]
++
++  local seen_alice_a=0 seen_alice_b=0 seen_bob=0 unexpected=0 line key
++  while IFS= read -r line; do
++    [ -n "$line" ] || continue
++    key="$(json_field "$line" agent)|$(json_field "$line" type)|$(json_field "$line" project)"
++    case "$key" in
++      "alice|claude-code|/tmp/project-a") seen_alice_a=1 ;;
++      "alice|claude-code|/tmp/project-a-2") seen_alice_b=1 ;;
++      "bob|codex|/tmp/project-b") seen_bob=1 ;;
++      *) unexpected=1 ;;
++    esac
++  done < <(sqlite3 -batch -noheader :memory: \
++    "SELECT value FROM json_each('$(printf '%s' "$output" | sed "s/'/''/g")', '\$.registrations');")
++
++  [ "$unexpected" -eq 0 ]
++  [ "$seen_alice_a" -eq 1 ]
++  [ "$seen_alice_b" -eq 1 ]
++  [ "$seen_bob" -eq 1 ]
++}
++
+ @test "api: rejects a team name with path traversal (../) before it reaches the filesystem (#87 cluster)" {
+   run bash "$SCRIPTS/api.sh" get teams "../../escape-api" members
+   [ "$status" -eq 1 ]
+diff --git a/tests/test_api_registrations.bats b/tests/test_api_registrations.bats
+new file mode 100644
+index 0000000..e46a03b
+--- /dev/null
++++ b/tests/test_api_registrations.bats
+@@ -0,0 +1,267 @@
++#!/usr/bin/env bats
++
++bats_require_minimum_version 1.5.0
++
++load test_helper
++
++setup() {
++  setup_test_env
++}
++
++teardown() {
++  teardown_test_env
++}
++
++json_value() {
++  local object="$1" path="$2" escaped
++  escaped="$(printf '%s' "$object" | sed "s/'/''/g")"
++  sqlite_mem "SELECT json_extract('$escaped', '\$.$path');"
++}
++
++json_array() {
++  local object="$1" path="$2" escaped
++  escaped="$(printf '%s' "$object" | sed "s/'/''/g")"
++  sqlite_mem "SELECT value FROM json_each('$escaped', '\$.$path');"
++}
++
++write_config() {
++  local team="$1" body="$2"
++  mkdir -p "$TEST_SKILL_DIR/teams/$team"
++  printf '%s\n' "$body" >"$TEST_SKILL_DIR/teams/$team/config.json"
++}
++
++api_registrations() {
++  bash "$SCRIPTS/api.sh" get teams "$1" registrations --schema-version 1
++}
++
++session_manifest() {
++  python3 - "$TEST_SKILL_DIR/run" <<'PY'
++import hashlib, os, stat, sys
++root = os.path.realpath(sys.argv[1])
++if not os.path.isdir(root):
++    raise SystemExit("session root is not a directory")
++rows = []
++for current, dirs, files in os.walk(root, followlinks=False):
++    for name in sorted(dirs + files):
++        full = os.path.join(current, name)
++        info = os.lstat(full)
++        relative = os.path.relpath(full, root)
++        if stat.S_ISDIR(info.st_mode):
++            continue
++        if stat.S_ISREG(info.st_mode):
++            kind, payload = "regular", open(full, "rb").read()
++        elif stat.S_ISLNK(info.st_mode):
++            target = os.readlink(full)
++            resolved = os.path.realpath(os.path.join(os.path.dirname(full), target))
++            if os.path.commonpath((root, resolved)) != root:
++                raise SystemExit("session record resolves outside root")
++            kind, payload = "symlink", os.fsencode(target)
++        else:
++            raise SystemExit("unexpected session record type")
++        rows.append((relative, kind, hashlib.sha256(payload).hexdigest()))
++for row in sorted(rows):
++    print("\\t".join(row))
++PY
++}
++
++forbidden_token_pids() {
++  FIXTURE_TOKEN="$1" python3 - <<'PY'
++import os, subprocess
++token = os.environ["FIXTURE_TOKEN"]
++for line in subprocess.check_output(["ps", "-Ao", "pid=,command="], text=True).splitlines():
++    pid, command = line.strip().split(None, 1)
++    if token in command:
++        print(pid)
++PY
++}
++
++cleanup_forbidden_token() {
++  local token="$1" pid
++  while IFS= read -r pid; do
++    [ -n "$pid" ] && kill "$pid"
++  done <<EOF
++$(forbidden_token_pids "$token")
++EOF
++  return 0
++}
++
++@test "registrations: one tuple is returned in a complete envelope" {
++  bash "$SCRIPTS/join.sh" demo alice codex /tmp/project-a >/dev/null
++
++  run api_registrations demo
++  [ "$status" -eq 0 ]
++  [ "$(json_value "$output" resource)" = "registrations" ]
++  [ "$(json_value "$output" status)" = "ok" ]
++  [ "$(json_value "$output" complete)" = "1" ]
++  [ "$(json_value "$output" reason)" = "" ]
++  [ "$(sqlite_mem "SELECT json_array_length('$(printf '%s' "$output" | sed "s/'/''/g")', '\$.registrations');")" -eq 1 ]
++  [ "$(json_value "$(json_array "$output" registrations)" canonicalProject)" = "/tmp/project-a" ]
++}
++
++@test "registrations: multiple projects and types preserve pairs without a cartesian product" {
++  write_config demo '{"schemaVersion":1,"name":"demo","agents":{"alice":{"kind":"seat","role":"worker","registrations":[{"type":"codex","project":"/tmp/project-z"},{"type":"claude-code","project":"/tmp/project-a"}]}}}'
++
++  run api_registrations demo
++  [ "$status" -eq 0 ]
++  local escaped count bad_pair
++  escaped="$(printf '%s' "$output" | sed "s/'/''/g")"
++  count="$(sqlite_mem "SELECT json_array_length('$escaped', '\$.registrations');")"
++  [ "$count" -eq 2 ]
++  bad_pair="$(sqlite_mem "SELECT count(*) FROM json_each('$escaped', '\$.registrations') WHERE (json_extract(value, '\$.type') = 'claude-code' AND json_extract(value, '\$.project') = '/tmp/project-z') OR (json_extract(value, '\$.type') = 'codex' AND json_extract(value, '\$.project') = '/tmp/project-a');")"
++  [ "$bad_pair" -eq 0 ]
++}
++
++@test "registrations: duplicate tuples remain visible" {
++  write_config demo '{"schemaVersion":1,"name":"demo","agents":{"alice":{"kind":"seat","role":"worker","registrations":[{"type":"codex","project":"/tmp/project-a"},{"type":"codex","project":"/tmp/project-a"}]}}}'
++
++  run api_registrations demo
++  [ "$status" -eq 0 ]
++  [ "$(sqlite_mem "SELECT json_array_length('$(printf '%s' "$output" | sed "s/'/''/g")', '\$.registrations');")" -eq 2 ]
++}
++
++@test "registrations: empty existing team is distinct from a missing team" {
++  write_config demo '{"schemaVersion":1,"name":"demo","agents":{}}'
++  run api_registrations demo
++  [ "$status" -eq 0 ]
++  [ "$(json_value "$output" complete)" = "1" ]
++  [ "$(sqlite_mem "SELECT json_array_length('$(printf '%s' "$output" | sed "s/'/''/g")', '\$.registrations');")" -eq 0 ]
++
++  run --separate-stderr api_registrations ghost
++  [ "$status" -eq 1 ]
++  [ "$(json_value "$output" status)" = "not_found" ]
++  [ "$(json_value "$output" reason)" = "team_not_found" ]
++  [ "$(json_value "$output" complete)" = "0" ]
++  [ "$(json_value "$output" registrations)" = "" ]
++}
++
++@test "registrations: supported legacy direct fields are normalized" {
++  write_config demo '{"name":"demo","agents":{"alice":{"type":"codex","project":"/tmp/project-a"}}}'
++
++  run api_registrations demo
++  [ "$status" -eq 0 ]
++  [ "$(json_value "$output" status)" = "ok" ]
++  [ "$(sqlite_mem "SELECT json_array_length('$(printf '%s' "$output" | sed "s/'/''/g")', '\$.registrations');")" -eq 1 ]
++}
++
++@test "registrations: unsupported storage schema fails closed" {
++  write_config demo '{"schemaVersion":2,"name":"demo","agents":{}}'
++
++  run --separate-stderr api_registrations demo
++  [ "$status" -eq 1 ]
++  [ "$(json_value "$output" status)" = "unknown" ]
++  [ "$(json_value "$output" reason)" = "storage_schema_unsupported" ]
++  [ "$(json_value "$output" complete)" = "0" ]
++  [ "$(json_value "$output" registrations)" = "" ]
++}
++
++@test "registrations: corruption does not become an empty successful array" {
++  write_config demo '{"schemaVersion":1,"name":"demo","agents":{"alice":{"kind":"seat","role":"worker","registrations":[{"type":"codex","project":"/tmp/project-a"}]},"bob":{"kind":"seat","role":"worker","registrations":[{"type":"codex"}]}}}'
++
++  run --separate-stderr api_registrations demo
++  [ "$status" -eq 1 ]
++  [ "$(json_value "$output" status)" = "unknown" ]
++  [ "$(json_value "$output" reason)" = "data_invalid" ]
++  [ "$(json_value "$output" registrations)" = "" ]
++}
++
++@test "registrations: corrupting another team does not affect the target" {
++  write_config demo '{"schemaVersion":1,"name":"demo","agents":{}}'
++  write_config broken '{"schemaVersion":1,"name":"broken","agents": [}'
++
++  run api_registrations demo
++  [ "$status" -eq 0 ]
++  [ "$(json_value "$output" status)" = "ok" ]
++  [ "$(json_value "$output" complete)" = "1" ]
++}
++
++@test "registrations: invalid API version and options are rejected" {
++  write_config demo '{"schemaVersion":1,"name":"demo","agents":{}}'
++
++  run --separate-stderr bash "$SCRIPTS/api.sh" get teams demo registrations
++  [ "$status" -eq 2 ]
++  [ "$(json_value "$output" reason)" = "invalid_argument" ]
++
++  run --separate-stderr bash "$SCRIPTS/api.sh" get teams demo registrations --schema-version 2
++  [ "$status" -eq 2 ]
++  [ "$(json_value "$output" reason)" = "unsupported_schema_version" ]
++
++  run --separate-stderr bash "$SCRIPTS/api.sh" get teams demo registrations --schema-version 1 --extra
++  [ "$status" -eq 2 ]
++  [ "$(json_value "$output" reason)" = "invalid_argument" ]
++}
++
++@test "registrations: source exchange is reported instead of returning mixed data" {
++  write_config demo '{"schemaVersion":1,"name":"demo","agents":{"alice":{"kind":"seat","role":"worker","registrations":[{"type":"codex","project":"/tmp/project-a"}]}}}'
++  local barrier="$BATS_TEST_TMPDIR/registrations-barrier"
++  export AGMSG_TEST_API_REGISTRATIONS_BARRIER="$barrier"
++  local output_file="$BATS_TEST_TMPDIR/api-output"
++  local status_file="$BATS_TEST_TMPDIR/api-status"
++  (api_registrations demo >"$output_file" 2>/dev/null; echo "$?" >"$status_file") &
++  local api_pid=$!
++  while [ ! -e "$barrier.reached" ]; do sleep 0.01; done
++  write_config demo '{"schemaVersion":1,"name":"demo","agents":{"alice":{"kind":"seat","role":"worker","registrations":[{"type":"codex","project":"/tmp/project-b"}]}}}'
++  : >"$barrier.release"
++  local api_status=0
++  wait "$api_pid" || api_status=$?
++  [ "$api_status" -eq 1 ]
++  local result; result="$(cat "$output_file")"
++  [ "$(json_value "$result" status)" = "unknown" ]
++  [ "$(json_value "$result" reason)" = "concurrent_change" ]
++  [ "$(json_value "$result" registrations)" = "" ]
++}
++
++@test "registrations: query is read-only" {
++  write_config demo '{"schemaVersion":1,"name":"demo","agents":{"alice":{"kind":"seat","role":"worker","registrations":[{"type":"codex","project":"/tmp/project-a"}]}}}'
++  local config="$TEST_SKILL_DIR/teams/demo/config.json"
++  local before after before_db after_db before_run after_run
++  before="$(shasum -a 256 "$config")"
++  before_db="$(shasum -a 256 "$TEST_SKILL_DIR/db/messages.db")"
++  before_run="$(find "$TEST_SKILL_DIR/run" -type f -print | sort)"
++  run api_registrations demo
++  [ "$status" -eq 0 ]
++  after="$(shasum -a 256 "$config")"
++  after_db="$(shasum -a 256 "$TEST_SKILL_DIR/db/messages.db")"
++  after_run="$(find "$TEST_SKILL_DIR/run" -type f -print | sort)"
++  [ "$before" = "$after" ]
++  [ "$before_db" = "$after_db" ]
++  [ "$before_run" = "$after_run" ]
++}
++
++@test "registrations: unreadable requested source fails closed" {
++  mkdir -p "$TEST_SKILL_DIR/teams/demo/config.json"
++  run --separate-stderr api_registrations demo
++  [ "$status" -eq 1 ]
++  [ "$(json_value "$output" status)" = "unknown" ]
++  [ "$(json_value "$output" reason)" = "read_failed" ]
++}
++
++@test "registrations: unresolvable project fails closed" {
++  write_config demo '{"schemaVersion":1,"name":"demo","agents":{"alice":{"kind":"seat","role":"worker","registrations":[{"type":"codex","project":"/dev/null/child"}]}}}'
++  export AGMSG_TEST_API_REGISTRATIONS_CANONICAL_FAIL="/dev/null/child"
++  run --separate-stderr api_registrations demo
++  [ "$status" -eq 1 ]
++  [ "$(json_value "$output" reason)" = "project_unresolvable" ]
++}
++
++@test "registrations: query preserves session manifest and leaves no token-bound forbidden process" {
++  write_config demo '{"schemaVersion":1,"name":"demo","agents":{}}'
++  local claim="$TEST_SKILL_DIR/run/actas.demo__alice.session" session="$TEST_SKILL_DIR/run/proj.4242.project"
++  mkdir -p "$TEST_SKILL_DIR/run"
++  printf "owner.4242\\n" >"$claim"; printf "/tmp/project-a\\n" >"$session"
++  ln -s "proj.4242.project" "$TEST_SKILL_DIR/run/session-link"
++  local before after token
++  before="$(session_manifest)"
++  token="issue246-forbidden-$RANDOM-$$"
++  export AGMSG_TEST_API_REGISTRATIONS_SESSION_RECORD="$session"
++  export AGMSG_TEST_API_REGISTRATIONS_PROCESS_TOKEN="$token"
++  [ -z "$(forbidden_token_pids "$token")" ]
++  run api_registrations demo
++  [ "$status" -eq 0 ]
++  after="$(session_manifest)"
++  [ "$before" = "$after" ]
++  local post
++  post="$(forbidden_token_pids "$token")"
++  cleanup_forbidden_token "$token"
++  [ -z "$(forbidden_token_pids "$token")" ]
++  [ -z "$post" ]
++}
+diff --git a/README.md b/README.md
+index b775aed..09f9423 100644
+--- a/README.md
++++ b/README.md
+@@ -600,3 +600,13 @@ If agmsg saves you copy-paste round-trips, a GitHub star helps other people find
+ ## License
+
+ MIT
++
++## Registration query API
++
++Use the versioned read-only registration query when a consumer must retain every agent, harness type, and project tuple:
++
++```bash
++scripts/api.sh get teams <team> registrations --schema-version 1
++```
++
++A successful response is one JSON object with `schemaVersion: 1`, `resource: "registrations"`, `complete: true`, and every registration in `registrations`. Duplicate tuples remain visible. A nonzero result has `complete: false` and `registrations: null`; consumers must not treat it as an empty result. The query reads one requested team only, validates a snapshot before emitting success, and reports a concurrent source replacement instead of combining states. It performs no registry, database, runtime, or process mutation.
