@@ -18,7 +18,7 @@ class Issue246FixtureTests(unittest.TestCase):
 
     def test_report_contract_has_all_fail_closed_fields(self):
         self.assertEqual(HARNESS.PATCH_HEAD, "eb850a6698ab81986b9ac49830b7dddbdeb75d83")
-        self.assertIn("claim session", HARNESS.READ_ONLY_CASE)
+        self.assertIn("session manifest", HARNESS.READ_ONLY_CASE)
         self.assertEqual(len(HARNESS.FAIL_CLOSED_CASES), 2)
 
     def test_mutation_runner_has_eight_unique_controls(self):
@@ -27,9 +27,11 @@ class Issue246FixtureTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         # Do not execute the module's top-level runner in this structural test.
         source = mutation_path.read_text()
-        self.assertEqual(source.count('"killed"'), 2)
+        self.assertEqual(source.count('"killed"'), 3)
         self.assertEqual(source.count('"limit_1"'), 1)
         self.assertEqual(source.count('"tuple_pair"'), 1)
+        self.assertEqual(source.count('"session_manifest"'), 1)
+        self.assertEqual(source.count('"process_boundary"'), 1)
 
 if __name__ == "__main__":
     unittest.main()

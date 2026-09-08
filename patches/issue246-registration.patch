@@ -484,7 +484,7 @@ new file mode 100644
 index 0000000..e46a03b
 --- /dev/null
 +++ b/tests/test_api_registrations.bats
-@@ -0,0 +1,212 @@
+@@ -0,0 +1,267 @@
 +#!/usr/bin/env bats
 +
 +bats_require_minimum_version 1.5.0
@@ -519,6 +519,57 @@ index 0000000..e46a03b
 +
 +api_registrations() {
 +  bash "$SCRIPTS/api.sh" get teams "$1" registrations --schema-version 1
++}
++
++session_manifest() {
++  python3 - "$TEST_SKILL_DIR/run" <<'PY'
++import hashlib, os, stat, sys
++root = os.path.realpath(sys.argv[1])
++if not os.path.isdir(root):
++    raise SystemExit("session root is not a directory")
++rows = []
++for current, dirs, files in os.walk(root, followlinks=False):
++    for name in sorted(dirs + files):
++        full = os.path.join(current, name)
++        info = os.lstat(full)
++        relative = os.path.relpath(full, root)
++        if stat.S_ISDIR(info.st_mode):
++            continue
++        if stat.S_ISREG(info.st_mode):
++            kind, payload = "regular", open(full, "rb").read()
++        elif stat.S_ISLNK(info.st_mode):
++            target = os.readlink(full)
++            resolved = os.path.realpath(os.path.join(os.path.dirname(full), target))
++            if os.path.commonpath((root, resolved)) != root:
++                raise SystemExit("session record resolves outside root")
++            kind, payload = "symlink", os.fsencode(target)
++        else:
++            raise SystemExit("unexpected session record type")
++        rows.append((relative, kind, hashlib.sha256(payload).hexdigest()))
++for row in sorted(rows):
++    print("\\t".join(row))
++PY
++}
++
++forbidden_token_pids() {
++  FIXTURE_TOKEN="$1" python3 - <<'PY'
++import os, subprocess
++token = os.environ["FIXTURE_TOKEN"]
++for line in subprocess.check_output(["ps", "-Ao", "pid=,command="], text=True).splitlines():
++    pid, command = line.strip().split(None, 1)
++    if token in command:
++        print(pid)
++PY
++}
++
++cleanup_forbidden_token() {
++  local token="$1" pid
++  while IFS= read -r pid; do
++    [ -n "$pid" ] && kill "$pid"
++  done <<EOF
++$(forbidden_token_pids "$token")
++EOF
++  return 0
 +}
 +
 +@test "registrations: one tuple is returned in a complete envelope" {
@@ -679,23 +730,27 @@ index 0000000..e46a03b
 +  [ "$(json_value "$output" reason)" = "project_unresolvable" ]
 +}
 +
-+@test "registrations: query leaves claim session and process evidence unchanged" {
++@test "registrations: query preserves session manifest and leaves no token-bound forbidden process" {
 +  write_config demo '{"schemaVersion":1,"name":"demo","agents":{}}'
 +  local claim="$TEST_SKILL_DIR/run/actas.demo__alice.session" session="$TEST_SKILL_DIR/run/proj.4242.project"
 +  mkdir -p "$TEST_SKILL_DIR/run"
 +  printf "owner.4242\\n" >"$claim"; printf "/tmp/project-a\\n" >"$session"
-+  local claim_before session_before processes_before claim_after session_after processes_after sentinel
-+  sh -c 'while :; do sleep 1; done' & sentinel=$!
-+  claim_before="$(shasum -a 256 "$claim")"; session_before="$(find "$TEST_SKILL_DIR/run" -name "proj.*.project" | wc -l | tr -d " ")"
-+  processes_before="$(ps -p "$sentinel" -o pid= | tr -d " ")"
++  ln -s "proj.4242.project" "$TEST_SKILL_DIR/run/session-link"
++  local before after token
++  before="$(session_manifest)"
++  token="issue246-forbidden-$RANDOM-$$"
++  export AGMSG_TEST_API_REGISTRATIONS_SESSION_RECORD="$session"
++  export AGMSG_TEST_API_REGISTRATIONS_PROCESS_TOKEN="$token"
++  [ -z "$(forbidden_token_pids "$token")" ]
 +  run api_registrations demo
 +  [ "$status" -eq 0 ]
-+  claim_after="$(shasum -a 256 "$claim")"; session_after="$(find "$TEST_SKILL_DIR/run" -name "proj.*.project" | wc -l | tr -d " ")"
-+  processes_after="$(ps -p "$sentinel" -o pid= | tr -d " ")"
-+  kill "$sentinel"; wait "$sentinel" 2>/dev/null || true
-+  [ "$claim_before" = "$claim_after" ]
-+  [ "$session_before" = "$session_after" ]
-+  [ "$processes_before" = "$processes_after" ]
++  after="$(session_manifest)"
++  [ "$before" = "$after" ]
++  local post
++  post="$(forbidden_token_pids "$token")"
++  cleanup_forbidden_token "$token"
++  [ -z "$(forbidden_token_pids "$token")" ]
++  [ -z "$post" ]
 +}
 diff --git a/README.md b/README.md
 index b775aed..09f9423 100644

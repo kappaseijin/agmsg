@@ -24,6 +24,21 @@ MUTATIONS = {
     "tuple_pair": ("'project', json_extract(r.value, '\\$.project')", "'project', '/tmp/project-z'", "multiple projects and types preserve pairs without a cartesian product"),
 }
 
+READ_ONLY_MUTATIONS = {
+    "session_manifest": (
+        '  _api_registrations_emit "$team" ok \'\' true "$records_json"',
+        '  printf "mutated\\n" >"$AGMSG_TEST_API_REGISTRATIONS_SESSION_RECORD"\n'
+        '  _api_registrations_emit "$team" ok \'\' true "$records_json"',
+        "preserves session manifest",
+    ),
+    "process_boundary": (
+        '  _api_registrations_emit "$team" ok \'\' true "$records_json"',
+        '  python3 -c \'import os, subprocess; sink=open(os.devnull, "wb"); subprocess.Popen(["bash", "-c", "exec -a \\\"$0\\\" sleep 30", os.environ["AGMSG_TEST_API_REGISTRATIONS_PROCESS_TOKEN"]], stdin=sink, stdout=sink, stderr=sink, start_new_session=True)\'\n'
+        '  _api_registrations_emit "$team" ok \'\' true "$records_json"',
+        "preserves session manifest",
+    ),
+}
+
 def export_tree(dest):
     archive = subprocess.run(["git", "-C", str(ROOT), "archive", HARNESS.CUTOFF], check=True, capture_output=True).stdout
     dest.mkdir()
@@ -45,5 +60,7 @@ def run_case(name, before, after, test):
         return {"syntax_rc": syntax.returncode, "test_rc": test_run.returncode, "killed": syntax.returncode == 0 and test_run.returncode != 0}
 
 results = {name: run_case(name, *spec) for name, spec in MUTATIONS.items()}
-print(json.dumps(results, indent=2))
-raise SystemExit(0 if len(results) == 8 and all(row["killed"] for row in results.values()) else 1)
+read_only_results = {name: run_case(name, *spec) for name, spec in READ_ONLY_MUTATIONS.items()}
+report = {"provider": results, "readOnly": read_only_results}
+print(json.dumps(report, indent=2))
+raise SystemExit(0 if len(results) == 8 and len(read_only_results) == 2 and all(row["killed"] for row in results.values()) and all(row["killed"] for row in read_only_results.values()) else 1)
