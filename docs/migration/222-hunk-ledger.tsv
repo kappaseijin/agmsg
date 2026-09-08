@@ -470,8 +470,8 @@ b777fea728fe180f	tests/test_actas_integration.bats	agguild	port	lock を直接�
 29be27cc6aba50ca	tests/test_actas_integration.bats	agguild	port	gate の barrier の解放と強制中断の分岐。gate 固有	none	needed	no	agmsg_architect_claude	classified
 e8bf9b250ddecd05	tests/test_actas_integration.bats	agguild	port	引き継ぎ後の送信の確認。gate 試験の一部	none	needed	no	agmsg_architect_claude	classified
 68d952228373bafb	tests/test_actas_integration.bats	agguild	port	assertion 中断で子を刈り取る試験。hunk の先頭 2 行が gate 試験の末尾（untrack と閉じ括弧）であり、gate の hunk 無しには適用できない	none	needed	no	agmsg_architect_claude	classified
-8b067f31a1317c9d	tests/test_actas_lock.bats	official	adopt	owner を読めない場合の扱いの試験。actas-lock.sh の official な修正に対応	none	needed	no	agmsg_architect_claude	classified
-5d42d7cac7972617	tests/test_actas_lock.bats	official	adopt	owner を読めない場合の扱いの試験。actas-lock.sh の official な修正に対応	none	needed	no	agmsg_architect_claude	classified
+8b067f31a1317c9d	tests/test_actas_lock.bats	agguild	port	shared fixture の setup_test_env が SKILL_DIR を設定する前提で重複設定を削る。commit 9bbb703 の fixture 統合に従属し単独適用不可	none	needed	no	agmsg_architect_codex	classified
+5d42d7cac7972617	tests/test_actas_lock.bats	agguild	port	shared fixture の setup_test_env が RUN_DIR 作成まで担う前提で局所設定を削る。commit 9bbb703 の fixture 統合に従属し単独適用不可	none	needed	no	agmsg_architect_codex	classified
 0057991895d50013	tests/test_actas_lock.bats	agguild	port	gate のエラー分類試験のための SQLite の継ぎ目。delivery gate 固有	none	needed	no	agmsg_architect_claude	classified
 e259257277842e00	tests/test_actas_lock.bats	official	adopt	owner を読めない場合の扱いの試験。actas-lock.sh の official な修正に対応	none	needed	no	agmsg_architect_claude	classified
 0ddc18257521ad77	tests/test_actas_lock.bats	agguild	port	delivery gate の SQLITE_BUSY 再試行の試験の追加。gate 固有	none	needed	no	agmsg_architect_claude	classified
