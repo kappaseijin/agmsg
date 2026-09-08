@@ -31,12 +31,17 @@ class Controls(unittest.TestCase):
     def test_ambiguous_duplicate_request(self):
         self.assertEqual(harness.correlate(self.rows + [self.rows[0]], self.expected, True)["status"], "unknown")
 
+    def test_reused_message_id(self):
+        self.rows[1]["id"] = self.rows[0]["id"]
+        self.assertEqual(harness.correlate(self.rows, self.expected, True)["status"], "unknown")
+
     def test_scope(self):
         self.rows[0]["team"] = "other"
         self.assertEqual(harness.correlate(self.rows, self.expected, True)["status"], "unknown")
 
     def test_rc_zero_not_ack(self):
         self.assertEqual(harness.ack_verdict(0, None), "unknown")
+        self.assertEqual(harness.ack_verdict(73, "handedOff"), "unknown")
         self.assertEqual(harness.ack_verdict(0, "handedOff", fault=True), "unknown")
         self.assertEqual(harness.ack_verdict(0, "handedOff", interrupted=True), "unknown")
         self.assertEqual(harness.ack_verdict(0, "handedOff"), "pass")
@@ -61,6 +66,7 @@ class Controls(unittest.TestCase):
             lambda row: row.update(handoff_observed=False),
             lambda row: row.update(idempotent_count=2),
             lambda row: row.update(legacy_without_receipt="none"),
+            lambda row: row["record_failure"].update(delivered=False),
             lambda row: row["record_failure"].update(diagnostic=False),
             lambda row: row.update(deleted_receipt_status="receipt"),
         )

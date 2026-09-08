@@ -5,6 +5,7 @@ description: >-
   handoff receipt と既読状態を分ける層 A の受入対照、および inbox/watch の2中断点を
   固定 F source の隔離 root で実装・実測した記録。
 timestamp: "2026-09-08T13:44:15+09:00"
+updated: "2026-09-08T14:26:19+09:00"
 issues: [253]
 ---
 
@@ -59,9 +60,9 @@ python3 -m unittest tests/test_issue253_public_path.py
 python3 tests/issue253_mutations.py
 ```
 
-単体テスト10件は pass。既存4件に層 A を壊す7件を加えた11変異はすべて KILLED。
+単体テスト11件は pass。既存4件に受入条件を単独で壊す10件を加えた14変異はすべて KILLED。
 receipt 経路名、handoff、冪等性、legacy 判定、失敗診断、削除後判定、2中断点の
-再配送差を個別に壊して検出した。
+再配送差に加え、配送成功、非0 ACK rc、message ID 再利用を個別に壊して検出した。
 
 ## 限界
 

@@ -27,6 +27,13 @@ mutations = {
     "collapse_interruption_replay": (
         '"consumed": True, "replayed": False}',
         '"consumed": True, "replayed": True}'),
+    "ignore_delivery_success": ('and failure.get("delivered") is True', 'and True'),
+    "ignore_nonzero_ack_rc": (
+        'if interrupted or fault or rc != 0 or evidence != "handedOff":',
+        'if interrupted or fault or evidence != "handedOff":'),
+    "allow_reused_message_id": (
+        'if len(set(mapping.values())) != len(expected):',
+        'if False:'),
 }
 results = {}
 for name, (before, after) in mutations.items():
