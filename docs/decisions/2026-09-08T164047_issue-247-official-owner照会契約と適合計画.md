@@ -2,10 +2,10 @@
 type: Design
 title: Issue #247 official actas owner照会契約と適合計画
 description: >-
-  forkで受入済みの副作用なしowner照会を、official分類済み6 hunkを不可分の前提として
+  forkで受入済みの副作用なしowner照会を、official分類済み4 hunkを不可分の前提として
   公式固定版へ提案可能にする公開契約、適合試験、最小patch境界を定める。
 timestamp: "2026-09-08T16:40:47+09:00"
-updated: "2026-09-08T16:40:47+09:00"
+updated: "2026-09-08T17:31:13+09:00"
 issues: [247, 222, 236]
 source_cutoff: e58dbafad5a84be625f070385bb0c076c3daa4db
 producer: agmsg_architect_codex
@@ -25,12 +25,12 @@ api.sh get teams <team> actas-owner <agent> --schema-version 1
 を再実装せず、公式固定版へ適用可能なpatchとして切り出す。
 
 その前提として、`scripts/lib/actas-lock.sh`のofficial 2 hunkと
-`tests/test_actas_lock.bats`のofficial 4 hunk、合計6 hunkを**一組**で扱う。
+`tests/test_actas_lock.bats`のofficial 2 hunk、合計4 hunkを**一組**で扱う。
 これは「読めないownerを空、空をfreeへ潰さない」というfail-closedな提供側readerと
 その対照である。実装hunkだけ、または試験hunkだけを単独採用しない。
 
-この6 hunkだけでは構造化公開APIは提供されない。
-6 hunkはB2公開契約の前提patchであり、公開route・schema・厳格snapshot readerは
+この4 hunkだけでは構造化公開APIは提供されない。
+4 hunkはB2公開契約の前提patchであり、公開route・schema・厳格snapshot readerは
 fork PR #252の受入済み成果から別patchとして切り出す。
 公式への採用、利用可能化、P2解除は本設計の完了とは区別する。
 
@@ -115,20 +115,27 @@ consumerは利用直前に再照会し、必要なら独自のprocess bindingと
 PM固有のprocess binding、`pidStart`、generation、認可policyはagguild側の責務に残す。
 consumerがagmsg内部fileやschemaを直接読むadapterは公開契約の代替にしない。
 
-## 4. official 6 hunkの不可分境界
+## 4. official 4 hunkの不可分境界
 
 | path | hunk数 | 役割 |
 |---|---:|---|
 | `scripts/lib/actas-lock.sh` | 2 | owner読取失敗、存在する空ownerを`unknown`・非0にする。読取中にlockが消えた場合だけ`free`を許す |
-| `tests/test_actas_lock.bats` | 4 | 消失競合は`free`、存在する空/読取不能lockは`unknown`であることを固定する |
+| `tests/test_actas_lock.bats` | 2 | 消失競合は`free`、存在する空/読取不能lockは`unknown`であることを固定する |
 
-採用単位は6 hunk全体である。
+採用単位は4 hunk全体である。
 
 - source 2 hunkだけでは、将来の回帰を検出できない
-- test 4 hunkだけでは、公式固定版の旧挙動で失敗する
+- test 2 hunkだけでは、公式固定版の旧挙動で失敗する
 - 空をfreeへ潰す旧挙動のまま公開queryを載せると、`absent`と`unknown`を区別できない
 
-この6 hunkは既存B2の前提適合patchであり、新しいquery実装ではない。
+当初含めた`8b067f31a1317c9d`と`5d42d7cac7972617`は除外する。
+両hunkはowner照会の対照ではなく、commit `9bbb703`のshared fixture統合後に
+`setup_test_env`と重複する`SKILL_DIR`、`RUN_DIR`設定を削る差分である。
+公式cutoffには対応する`tests/test_helper.bash`変更が無く、適用すると全24試験が
+setup failureになる。owner分類を`agguild`へ訂正し、広範なfixture統合をofficialへ
+依存追加しない。
+
+この4 hunkは既存B2の前提適合patchであり、新しいquery実装ではない。
 
 ## 5. 上流へ提案可能な最小patch列
 
@@ -136,7 +143,7 @@ consumerがagmsg内部fileやschemaを直接読むadapterは公開契約の代�
 
 ### Patch A: fail-closed owner reader
 
-対象はofficial分類済み6 hunkだけ。
+対象はofficial分類済み4 hunkだけ。
 主張は「読めないownerを正常なfreeへ変換しない」。
 新API、README、B1 registration APIを含めない。
 
@@ -157,7 +164,7 @@ Patch Bをforkで完成させても、公式で採用・releaseされるまで�
 公式cutoff `e58dbafad5a84be625f070385bb0c076c3daa4db`を隔離rootへ展開し、次の順で測る。
 
 1. 無変更公式版で正負対照のREDを取り、検査が旧fail-open挙動を検出することを示す
-2. Patch Aの6 hunkを一括適用し、`test_actas_lock.bats`の対象対照と既存回帰を実行する
+2. Patch Aの4 hunkを一括適用し、`test_actas_lock.bats`の対象対照と既存回帰を実行する
 3. Patch Bを適用し、公開commandだけからschemaと状態を検査する
 4. 各試験の前後で所有状態、registration、DB/runtime、process一覧を比較する
 5. Patch Aのみ、Patch A+Bを別々のartifactとして保存する
@@ -194,7 +201,7 @@ sleepだけ、偶然の競合、空stdoutだけを証拠にしない。
 
 ## 7. 完了境界
 
-この設計PRの完了は、公開契約、6 hunkの不可分性、Patch A/Bの境界、適合試験計画が
+この設計PRの完了は、公開契約、4 hunkの不可分性、Patch A/Bの境界、適合試験計画が
 固定HEADでformal reviewを通ることまでである。
 
 次工程のprogrammerは隔離fixtureとpatch artifactを作る。
