@@ -18,6 +18,8 @@ class Issue246FixtureTests(unittest.TestCase):
 
     def test_report_contract_has_all_fail_closed_fields(self):
         self.assertEqual(HARNESS.PATCH_HEAD, "eb850a6698ab81986b9ac49830b7dddbdeb75d83")
+        self.assertIn("claim session", HARNESS.READ_ONLY_CASE)
+        self.assertEqual(len(HARNESS.FAIL_CLOSED_CASES), 2)
 
     def test_mutation_runner_has_eight_unique_controls(self):
         mutation_path = ROOT / "tests/issue246_mutations.py"

@@ -7,6 +7,11 @@ CUTOFF = "e58dbafad5a84be625f070385bb0c076c3daa4db"
 PATCH_HEAD = "eb850a6698ab81986b9ac49830b7dddbdeb75d83"
 PATCH = Path("patches/issue246-registration.patch")
 FILES = {"README.md", "scripts/api.sh", "scripts/lib/api-registrations.sh", "tests/test_api.bats", "tests/test_api_registrations.bats"}
+READ_ONLY_CASE = "registrations: query leaves claim session and process evidence unchanged"
+FAIL_CLOSED_CASES = {
+    "registrations: unreadable requested source fails closed",
+    "registrations: unresolvable project fails closed",
+}
 
 def run(args, cwd):
     p = subprocess.run(args, cwd=cwd, text=True, capture_output=True)
@@ -40,11 +45,14 @@ def main():
     registrations = run(["bats", "tests/test_api_registrations.bats"], tree)
     api = run(["bats", "tests/test_api.bats"], tree)
     mutations = run(["python3", "tests/issue246_mutations.py"], repo)
-    contract = all(x["rc"] == 0 for x in (applied, syntax, registrations, api))
+    registrations_output = registrations["stdout"]
+    read_only = registrations["rc"] == 0 and READ_ONLY_CASE in registrations_output
+    fail_closed = all(case in registrations_output for case in FAIL_CLOSED_CASES)
+    contract = all(x["rc"] == 0 for x in (applied, syntax, registrations, api)) and read_only and fail_closed
     report = {"sourceCutoff": CUTOFF, "patchHead": PATCH_HEAD,
               "patchApplied": applied["rc"] == 0, "contractStatus": "pass" if contract else "fail",
               "mutationStatus": "pass" if mutations["rc"] == 0 else "fail",
-              "readOnlyStatus": "pass" if registrations["rc"] == 0 else "fail",
+              "readOnlyStatus": "pass" if read_only else "fail",
               "officialAvailability": "not_adopted",
               "cutoff": CUTOFF, "patch": str(PATCH), "patch_sha256": hashlib.sha256(patch.read_bytes()).hexdigest(), "patch_files": sorted(patch_files(text)), "apply": applied, "syntax": syntax, "registrations": registrations, "api": api, "mutations": mutations}
     report["status"] = "pass" if contract and mutations["rc"] == 0 else "fail"

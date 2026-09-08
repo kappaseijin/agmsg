@@ -53,7 +53,7 @@ new file mode 100644
 index 0000000..12b44f6
 --- /dev/null
 +++ b/scripts/lib/api-registrations.sh
-@@ -0,0 +1,382 @@
+@@ -0,0 +1,386 @@
 +#!/usr/bin/env bash
 +# Read-only implementation of api.sh's versioned registrations resource.
 +#
@@ -367,6 +367,10 @@ index 0000000..12b44f6
 +      _api_registrations_fail "$team" unknown read_failed 1
 +      exit $?
 +    }
++    if [ "${AGMSG_TEST_API_REGISTRATIONS_CANONICAL_FAIL:-}" = "$project" ]; then
++      _api_registrations_fail "$team" unknown project_unresolvable 1
++      exit $?
++    fi
 +    physical="$(agmsg_canonical_path "$project")" || {
 +      _api_registrations_fail "$team" unknown project_unresolvable 1
 +      exit $?
@@ -480,7 +484,7 @@ new file mode 100644
 index 0000000..e46a03b
 --- /dev/null
 +++ b/tests/test_api_registrations.bats
-@@ -0,0 +1,177 @@
+@@ -0,0 +1,212 @@
 +#!/usr/bin/env bats
 +
 +bats_require_minimum_version 1.5.0
@@ -657,6 +661,41 @@ index 0000000..e46a03b
 +  [ "$before" = "$after" ]
 +  [ "$before_db" = "$after_db" ]
 +  [ "$before_run" = "$after_run" ]
++}
++
++@test "registrations: unreadable requested source fails closed" {
++  mkdir -p "$TEST_SKILL_DIR/teams/demo/config.json"
++  run --separate-stderr api_registrations demo
++  [ "$status" -eq 1 ]
++  [ "$(json_value "$output" status)" = "unknown" ]
++  [ "$(json_value "$output" reason)" = "read_failed" ]
++}
++
++@test "registrations: unresolvable project fails closed" {
++  write_config demo '{"schemaVersion":1,"name":"demo","agents":{"alice":{"kind":"seat","role":"worker","registrations":[{"type":"codex","project":"/dev/null/child"}]}}}'
++  export AGMSG_TEST_API_REGISTRATIONS_CANONICAL_FAIL="/dev/null/child"
++  run --separate-stderr api_registrations demo
++  [ "$status" -eq 1 ]
++  [ "$(json_value "$output" reason)" = "project_unresolvable" ]
++}
++
++@test "registrations: query leaves claim session and process evidence unchanged" {
++  write_config demo '{"schemaVersion":1,"name":"demo","agents":{}}'
++  local claim="$TEST_SKILL_DIR/run/actas.demo__alice.session" session="$TEST_SKILL_DIR/run/proj.4242.project"
++  mkdir -p "$TEST_SKILL_DIR/run"
++  printf "owner.4242\\n" >"$claim"; printf "/tmp/project-a\\n" >"$session"
++  local claim_before session_before processes_before claim_after session_after processes_after sentinel
++  sh -c 'while :; do sleep 1; done' & sentinel=$!
++  claim_before="$(shasum -a 256 "$claim")"; session_before="$(find "$TEST_SKILL_DIR/run" -name "proj.*.project" | wc -l | tr -d " ")"
++  processes_before="$(ps -p "$sentinel" -o pid= | tr -d " ")"
++  run api_registrations demo
++  [ "$status" -eq 0 ]
++  claim_after="$(shasum -a 256 "$claim")"; session_after="$(find "$TEST_SKILL_DIR/run" -name "proj.*.project" | wc -l | tr -d " ")"
++  processes_after="$(ps -p "$sentinel" -o pid= | tr -d " ")"
++  kill "$sentinel"; wait "$sentinel" 2>/dev/null || true
++  [ "$claim_before" = "$claim_after" ]
++  [ "$session_before" = "$session_after" ]
++  [ "$processes_before" = "$processes_after" ]
 +}
 diff --git a/README.md b/README.md
 index b775aed..09f9423 100644
