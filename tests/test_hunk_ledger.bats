@@ -32,6 +32,68 @@ setup() {
   fi
 }
 
+@test "used_names follows known wrappers to the real command only" {
+  run python3 - "$LEDGER_TOOL" <<'PY'
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location('hl', sys.argv[1])
+hl = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(hl)
+
+cases = {
+    'run agmsg_runtime_lock_release_owned "$lock"':
+        {'agmsg_runtime_lock_release_owned', 'lock'},
+    'command target': {'target'},
+    'nohup target': {'target'},
+    'exec target': {'target'},
+    'timeout 5 target': {'target'},
+    'env A=B target': {'target'},
+    'run env A=B timeout 5 command target': {'target'},
+    'command -v target': set(),
+    'timeout 5': set(),
+    'env A=B': set(),
+    '# run agmsg_runtime_lock_release_owned': set(),
+    'echo "agmsg_runtime_lock_release_owned"': {'echo'},
+    'echo agmsg_runtime_lock_release_owned': {'echo'},
+    # Wrapper transparency adds target/other, while the legacy control-word
+    # candidates remain part of the result unchanged.
+    'if run target; then ( command other ); fi':
+        {'if', 'then', 'fi', 'target', 'other'},
+    # No wrapper: this is the pre-Issue-347 command-position set exactly.
+    'if cond; then yes; else no; fi': {'if', 'then', 'else', 'fi'},
+}
+for body, expected in cases.items():
+    actual = hl.used_names(body)
+    assert actual == expected, (body, actual, expected)
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "wrapper transparency and timeout duration mutations are killed" {
+  run python3 - "$LEDGER_TOOL" "$BATS_TEST_TMPDIR" <<'PY'
+import importlib.util
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1]).read_text(encoding='utf8')
+cases = (
+    ('if token in WRAPPERS:', 'if False:', 'run target', {'target'}),
+    ('if index < len(tokens):  # duration, never a command name\n                index += 1',
+     'if False:\n                index += 1', 'timeout duration target', {'target'}),
+)
+for number, (before, after, body, expected) in enumerate(cases):
+    assert before in source
+    path = pathlib.Path(sys.argv[2]) / f'mutant-{number}.py'
+    path.write_text(source.replace(before, after, 1), encoding='utf8')
+    spec = importlib.util.spec_from_file_location(f'mutant_{number}', path)
+    mutant = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mutant)
+    assert mutant.used_names(body) == expected, (body, mutant.used_names(body))
+PY
+  [ "$status" -ne 0 ]
+}
+
 emit_header() { python3 "$LEDGER_TOOL" --repo "$REPO" --emit-header; }
 emit_rows() { python3 "$LEDGER_TOOL" --repo "$REPO" --emit-rows; }
 
@@ -605,7 +667,9 @@ tiny_ledger() {  # $1=out $2..=owner for each actas-lock hunk, in order
 
   run $run_case no-local-wins
   [ "$status" -eq 0 ]
-  [ "$output" = "1 json_value" ]
+  # Issue #347 makes the Bats `run` wrapper transparent, so this deliberately
+  # also exposes the helper it wraps when same-file precedence is disabled.
+  [ "$output" = "2 json_value,run_storage_fanout_with_packet" ]
 }
 
 @test "the ledger, once present, covers every hunk and classifies each one" {
