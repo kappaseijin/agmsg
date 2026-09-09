@@ -739,6 +739,12 @@ DECOY
 }
 
 @test "GHG-19: allows the operational PR merge path only for an allowed owner" {
+  local project registration json
+  project="$(pwd -P)"
+  registration="$(whoami_registration claude-code "$project" fixture myteam manager)"
+  json="$(whoami_json claude-code "$project" "[$registration]")"
+  fake_whoami "agent=fixture teams=myteam type=claude-code project=$project" "$json"
+
   run_guard pr merge 31 --repo kappaseijin/fixture --squash --delete-branch
   [ "$status" -eq 0 ]
   grep -Fq 'pr merge 31 --repo kappaseijin/fixture --squash --delete-branch' "$FAKE_WRITE_LOG"
