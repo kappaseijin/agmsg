@@ -1,0 +1,8 @@
+{
+  "repository": "kappaseijin/agmsg",
+  "commit": "0b2117c5f91f7950cc196e52edb188748adfa50a",
+  "canonicalRoot": ".",
+  "contractSchemaVersion": 1,
+  "b1": {"command": "api.sh get teams <team> registrations --schema-version 1"},
+  "b2": {"command": "api.sh get teams <team> actas-owner <agent> --schema-version 1"}
+}
