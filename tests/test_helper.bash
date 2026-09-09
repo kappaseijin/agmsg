@@ -579,20 +579,6 @@ _agmsg_test_wait_poll_s() {
   printf '%s\n' "$value"
 }
 
-# `$SECONDS` counts whole seconds from shell start, so it steps on a boundary
-# no caller chose: `$SECONDS` taken a hair before one increments a hair later.
-# `start + timeout_s` therefore expires anywhere in (timeout_s - 1, timeout_s] of
-# real time, and a caller asking for 2s can get 1.02s. That lost fraction is not
-# observable through $SECONDS at all, so it is added back: the window becomes
-# [timeout_s, timeout_s + 1).
-#
-# This is not a longer timeout. It is the timeout the caller asked for, which
-# the old form could not deliver. Nothing here changes what any test passes as
-# AGMSG_TEST_WAIT_TIMEOUT_S (#291).
-_agmsg_test_wait_deadline() {
-  printf '%s\n' $(( $1 + $2 + 1 ))
-}
-
 _agmsg_test_wait_timeout_diag() {
   local helper="$1" predicate="$2" target="$3" timeout_s="$4"
   local start="$5" poll_s="$6" attempts="$7" state="$8" process_stat="${9:-}"
@@ -613,7 +599,7 @@ wait_for_file() {
   timeout_s="$(_agmsg_test_wait_timeout_s)" || return 1
   poll_s="$(_agmsg_test_wait_poll_s)" || return 1
   start=$SECONDS
-  deadline="$(_agmsg_test_wait_deadline "$start" "$timeout_s")"
+  deadline=$((start + timeout_s))
   while [ "$SECONDS" -lt "$deadline" ]; do
     attempts=$((attempts + 1))
     if [ -f "$file" ]; then
@@ -635,7 +621,7 @@ wait_for_missing() {
   timeout_s="$(_agmsg_test_wait_timeout_s)" || return 1
   poll_s="$(_agmsg_test_wait_poll_s)" || return 1
   start=$SECONDS
-  deadline="$(_agmsg_test_wait_deadline "$start" "$timeout_s")"
+  deadline=$((start + timeout_s))
   while [ "$SECONDS" -lt "$deadline" ]; do
     attempts=$((attempts + 1))
     if [ ! -e "$path" ]; then
@@ -657,7 +643,7 @@ wait_for_file_contains() {
   timeout_s="$(_agmsg_test_wait_timeout_s)" || return 1
   poll_s="$(_agmsg_test_wait_poll_s)" || return 1
   start=$SECONDS
-  deadline="$(_agmsg_test_wait_deadline "$start" "$timeout_s")"
+  deadline=$((start + timeout_s))
   while [ "$SECONDS" -lt "$deadline" ]; do
     attempts=$((attempts + 1))
     if [ -f "$file" ] && grep -q "$needle" "$file"; then
@@ -715,7 +701,7 @@ wait_for_pid_exit() {
   timeout_s="$(_agmsg_test_wait_timeout_s)" || return 1
   poll_s="$(_agmsg_test_wait_poll_s)" || return 1
   start=$SECONDS
-  deadline="$(_agmsg_test_wait_deadline "$start" "$timeout_s")"
+  deadline=$((start + timeout_s))
   while [ "$SECONDS" -lt "$deadline" ]; do
     attempts=$((attempts + 1))
     # Reap finished children first: an unreaped zombie still answers `kill -0`,
@@ -745,7 +731,7 @@ wait_for_file_is() {
   timeout_s="$(_agmsg_test_wait_timeout_s)" || return 1
   poll_s="$(_agmsg_test_wait_poll_s)" || return 1
   start=$SECONDS
-  deadline="$(_agmsg_test_wait_deadline "$start" "$timeout_s")"
+  deadline=$((start + timeout_s))
   while [ "$SECONDS" -lt "$deadline" ]; do
     attempts=$((attempts + 1))
     if [ -f "$file" ] && [ "$(cat "$file" 2>/dev/null)" = "$expected" ]; then

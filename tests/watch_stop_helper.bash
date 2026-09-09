@@ -63,16 +63,7 @@ _watch_stop_recover() {
   _watch_stop_log recovery-stop "result=$signal_rc"
   [ "$signal_rc" -eq 0 ] || return 1
   started=$SECONDS
-  # Same deadline helper as test_helper.bash's waits, for the same reason: a
-  # raw `started + timeout_s` loses the unobservable fraction of the first
-  # $SECONDS tick (#291).
-  #
-  # NOT covered by a test. Reverting this line leaves the suite green, because
-  # nothing here can force the recovery path to run slowly enough to notice.
-  # That is a gap in what can be forced, not evidence the second does not
-  # matter -- this path only runs when a graceful stop has already failed,
-  # which is exactly when things are running late.
-  deadline="$(_agmsg_test_wait_deadline "$started" "$(_agmsg_test_wait_timeout_s)")"
+  deadline=$((started + $(_agmsg_test_wait_timeout_s)))
   while [ "$SECONDS" -lt "$deadline" ]; do
     _watch_stop_root_matches || return 1
     stat="$(ps -o stat= -p "$_WATCH_STOP_PID" 2>/dev/null | tr -d ' ')"
