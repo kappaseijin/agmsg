@@ -46,6 +46,16 @@ class Issue379ProviderPinTests(unittest.TestCase):
             self.assertTrue((output / "report.json").is_file())
             self.assertEqual(json.loads((output / "report.json").read_text())["status"], "pass")
 
+    def test_read_only_snapshot_detects_a_provider_code_change(self):
+        with tempfile.TemporaryDirectory() as temp:
+            provider = Path(temp)
+            source = provider / "scripts" / "api.sh"
+            source.parent.mkdir()
+            source.write_text("#!/usr/bin/env bash\nexit 0\n")
+            before = HARNESS._snapshot(provider)
+            source.write_text("#!/usr/bin/env bash\nexit 1\n")
+            self.assertNotEqual(before, HARNESS._snapshot(provider))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -53,15 +53,22 @@ def _archive(root, commit, destination):
 
 
 def _snapshot(root):
+    """Digest the complete isolated provider tree before and after a read.
+
+    The fixture's runtime state lives underneath the isolated provider tree
+    during the Bats controls.  Naming hypothetical state directories made the
+    former check constant on a clean archive, so this intentionally includes
+    every path the provider could alter, including its public API source.
+    """
     digest = hashlib.sha256()
-    for relative in ("config", "runtime", "claim", "session", "process"):
-        digest.update(relative.encode())
-        path = root / relative
-        if path.exists():
-            for item in sorted(path.rglob("*")):
-                if item.is_file():
-                    digest.update(str(item.relative_to(root)).encode())
-                    digest.update(item.read_bytes())
+    for item in sorted(root.rglob("*")):
+        relative = str(item.relative_to(root)).encode()
+        if item.is_symlink():
+            digest.update(b"link\0" + relative + b"\0" + str(item.readlink()).encode())
+        elif item.is_dir():
+            digest.update(b"dir\0" + relative)
+        elif item.is_file():
+            digest.update(b"file\0" + relative + b"\0" + item.read_bytes())
     return digest.hexdigest()
 
 
