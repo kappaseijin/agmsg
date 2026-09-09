@@ -22,6 +22,7 @@ import argparse
 import hashlib
 import os
 import re
+import shlex
 import subprocess
 import sys
 
@@ -219,12 +220,128 @@ FUNCTION = re.compile(r'(?m)^\+\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\
 # one file's local as another hunk's definition produced most of the noise
 # (measured: 75 findings, against 26 when limited to these).
 GLOBAL = re.compile(r'(?m)^\+\s*(?:export\s+|readonly\s+)?([A-Z][A-Z0-9_]{2,})=')
-# A use, not an occurrence: an expansion, or a name in command position. The
-# same shape the HELPER scan in lifetime_case.py uses, for the same reason -- a
-# bare word anywhere in a line is usually prose or an argument.
+# A use, not an occurrence: an expansion, or a name in command position.  The
+# latter needs a token walk: a bare word after a known wrapper is a command,
+# while a bare word after an ordinary command is only an argument.
+# Preserve the long-standing command-position scan outside wrapper handling.
+# Hunk fragments may start inside a quote, where a token walk cannot safely
+# recover the shell structure but the old anchored scan still has useful,
+# conservative results.
 USES = re.compile(r"""\$\{?([A-Za-z_][A-Za-z0-9_]*)
                     | (?:^|&&|\|\||[;|(`]|\$\(|\bif\b|\bthen\b|\belse\b|\bdo\b|\buntil\b|\bwhile\b)
                       \s*(?:!\s+)?([A-Za-z_][A-Za-z0-9_]*)(?![=\w])""", re.X | re.M)
+NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+CONTROL_WORDS = {'if', 'then', 'else', 'do', 'until', 'while', 'fi', 'done', 'esac'}
+COMMAND_SEPARATORS = {'&&', '||', ';', '|', '(', '`'}
+WRAPPERS = {'run', 'command', 'nohup', 'exec', 'timeout', 'env'}
+
+
+def _tokens(line):
+    """Shell-like words sufficient for the command-position grammar below.
+
+    This deliberately is not a complete shell parser.  It only separates
+    quoted words, comments, and control operators that establish a command
+    position, leaving unknown syntax outside the wrapper special case.
+    """
+    lexer = shlex.shlex(line, posix=True, punctuation_chars=';|()&`')
+    lexer.whitespace_split = True
+    lexer.commenters = '#'
+    tokens = []
+    try:
+        for token in lexer:
+            if token and all(char in ';|()&`' for char in token):
+                tokens.extend(token)
+            else:
+                tokens.append(token)
+    except ValueError:
+        # A hunk can begin or end inside a quote.  Inferring a command from
+        # that fragment would turn an unknown shell form into a dependency.
+        return []
+    return tokens
+
+
+def _skip_options(tokens, index):
+    while index < len(tokens) and tokens[index].startswith('-'):
+        index += 1
+    if index < len(tokens) and tokens[index] == '--':
+        index += 1
+    return index
+
+
+def _unwrap_wrapper(tokens, index):
+    """Return the first real command after a known wrapper chain, if any."""
+    while index < len(tokens) and tokens[index] in WRAPPERS:
+        wrapper = tokens[index]
+        index += 1
+        if wrapper == 'command':
+            # `command -v name` asks the shell about a name; it does not call
+            # that name, so no inner command exists in this form.
+            if index < len(tokens) and tokens[index] in {'-v', '-V'}:
+                return None, len(tokens)
+            index = _skip_options(tokens, index)
+        elif wrapper in {'run', 'nohup', 'exec'}:
+            index = _skip_options(tokens, index)
+        elif wrapper == 'timeout':
+            while index < len(tokens) and tokens[index].startswith('-'):
+                option = tokens[index]
+                index += 1
+                if option in {'-k', '--kill-after'} and index < len(tokens):
+                    index += 1
+            if index < len(tokens) and tokens[index] == '--':
+                index += 1
+            if index < len(tokens):  # duration, never a command name
+                index += 1
+        else:  # env
+            while index < len(tokens):
+                token = tokens[index]
+                if token == '--':
+                    index += 1
+                    break
+                if token.startswith('-') or ASSIGNMENT.match(token):
+                    index += 1
+                    continue
+                break
+    if index < len(tokens) and NAME.match(tokens[index]):
+        return tokens[index], index + 1
+    return None, index
+
+
+def _command_names(line):
+    names = set()
+    command_position = True
+    tokens = _tokens(line)
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in COMMAND_SEPARATORS:
+            command_position = True
+            index += 1
+            continue
+        if token == '$' and index + 1 < len(tokens) and tokens[index + 1] == '(':
+            command_position = True
+            index += 1
+            continue
+        if not command_position:
+            index += 1
+            continue
+        if token == '!' or token in CONTROL_WORDS or ASSIGNMENT.match(token):
+            index += 1
+            continue
+        if not NAME.match(token):
+            command_position = False
+            index += 1
+            continue
+        if token in WRAPPERS:
+            name, index = _unwrap_wrapper(tokens, index)
+            if name:
+                names.add(name)
+            command_position = False
+            continue
+        names.add(token)
+        command_position = False
+        index += 1
+    return names
 
 
 # Names that a test fixture defines in order to stand in for an external
@@ -257,7 +374,12 @@ def used_names(body):
     """
     stripped = '\n'.join(line[1:] if line[:1] in '+- ' else line
                          for line in body.split('\n'))
-    return {name for match in USES.finditer(stripped) for name in match.groups() if name}
+    legacy = {name for match in USES.finditer(stripped) for name in match.groups() if name}
+    # The old scan sees a wrapper itself at command position.  A known wrapper
+    # is plumbing rather than a callable dependency; the token walk adds its
+    # first real command while preserving the old scan for everything else.
+    return ((legacy - WRAPPERS - CONTROL_WORDS)
+            | {name for line in stripped.splitlines() for name in _command_names(line)})
 
 
 # `source x`, `. x`, and bats' `load x`. The argument is taken as written: a
