@@ -6,7 +6,7 @@ description: >-
   採用版・公開契約・責務・移行境界へ対応付け、物理移行を開始しない親Issue close条件を定める。
 timestamp: "2026-09-09T18:45:00+09:00"
 issues: [222, 253, 247, 246, 254, 239, 280, 347]
-source_head: "815b7fdf9fe782ac3a77ab73a48dd823fa6eef1b"
+source_head: "815b7fdc01c1f347968febbb1c9a840a341262e2"
 upstream_reference_cutoff: "e58dbafad5a84be625f070385bb0c076c3daa4db"
 producer: agmsg_architect_codex
 reviewer: agmsg_reviewer_claude
@@ -27,7 +27,7 @@ manager はその受入証跡を GitHub 正本で確認してから、手動で 
 
 | 項目 | 固定値 | 用途 |
 | --- | --- | --- |
-| 監査対象 main | `815b7fdf9fe782ac3a77ab73a48dd823fa6eef1b` | 本監査で対応付けた fork の状態 |
+| 監査対象 main | `815b7fdc01c1f347968febbb1c9a840a341262e2` | 本監査で対応付けた fork の状態 |
 | 三分割の比較用 upstream cutoff | `e58dbafad5a84be625f070385bb0c076c3daa4db` | #222/#254 台帳の比較基準。採用済み provider version ではない |
 | 台帳の fork cutoff | `7ea795e93683b0e7ede0fabf017fe503fcfe6aea` | `docs/migration/222-hunk-ledger.tsv` の734 hunk比較基準 |
 | 台帳の共通祖先 | `3d06318de3aff9929cfaf87c092fef6709d2cc8b` | fork/公式差分の比較起点 |
