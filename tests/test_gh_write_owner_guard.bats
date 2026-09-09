@@ -169,6 +169,14 @@ FAKE_GH
     -e "s|__AGMSG_REAL_GH__|$REAL_GH|g" \
     "$LAUNCHER_TEMPLATE" > "$LAUNCHER"
   chmod +x "$LAUNCHER"
+
+  local project registration json
+  project="$(pwd -P)"
+  registration="$(whoami_registration claude-code "$project" fixture myteam)"
+  json="$(whoami_json claude-code "$project" "[$registration]")"
+  fake_whoami "agent=fixture teams=myteam type=claude-code project=$project" "$json"
+  export FAKE_AUTH_TOKEN_MODE=known
+  export FAKE_API_USER_MODE=claude
 }
 
 teardown() {
@@ -266,14 +274,14 @@ assert_pr_write_rejected_without_static_fallback() {
   assert_rejected issue comment 10 --repo thirdparty/fixture --body "blocked"
 }
 
-@test "existing PR account policy can add a rejection after owner authorization" {
+@test "static PR account policy cannot override roster-derived account authorization" {
   local policy="$TEST_SKILL_DIR/pr-account-policy.conf"
   printf 'map=%s=programmer\nprogrammer_login=expected-login\n' "$(pwd -P)" > "$policy"
   export PR_ACCOUNT_POLICY="$policy"
 
   run_guard pr review 10 --repo kappaseijin/fixture --approve
-  [ "$status" -ne 0 ]
-  [ ! -s "$FAKE_WRITE_LOG" ]
+  [ "$status" -eq 0 ]
+  grep -Fq 'pr review 10 --repo kappaseijin/fixture --approve' "$FAKE_WRITE_LOG"
 }
 
 @test "GHG-05: GH_REPO is resolved before the cwd" {
@@ -344,6 +352,7 @@ assert_pr_write_rejected_without_static_fallback() {
   json="$(whoami_json claude-code "$project" "[$registration]")"
   fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
   export FAKE_AUTH_TOKEN_MODE=known
+  export FAKE_API_USER_MODE=claude
   run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
   [ "$status" -eq 0 ]
   grep -q 'argv=auth token --user kappaseijin4claude' "$FAKE_ENV_LOG"
@@ -357,18 +366,20 @@ assert_pr_write_rejected_without_static_fallback() {
   json="$(whoami_json codex "$project" "[$registration]")"
   fake_whoami "agent=alice teams=myteam type=codex project=$project" "$json"
   export FAKE_AUTH_TOKEN_MODE=known
+  export FAKE_API_USER_MODE=codex
   run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
   [ "$status" -eq 0 ]
   grep -q '^GH_TOKEN=tok-codex argv=pr create' "$FAKE_ENV_LOG"
 }
 
-@test "GHG-P3: explicit credentials are preserved and selector is skipped" {
+@test "GHG-P3: explicit credentials are preserved only when their actual login matches" {
   local project registration json credential value
   project="$(pwd -P)"
   registration="$(whoami_registration claude-code "$project" alice myteam)"
   json="$(whoami_json claude-code "$project" "[$registration]")"
   fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
   export FAKE_AUTH_TOKEN_MODE=known
+  export FAKE_API_USER_MODE=claude
 
   for credential in GH_CONFIG_DIR GH_TOKEN GITHUB_TOKEN; do
     case "$credential" in
@@ -382,6 +393,21 @@ assert_pr_write_rejected_without_static_fallback() {
     run grep -q 'auth token' "$FAKE_ENV_LOG"
     [ "$status" -ne 0 ]
   done
+}
+
+@test "GHG-239: actual login mismatch rejects an otherwise unique Claude seat" {
+  local project registration json
+  project="$(pwd -P)"
+  registration="$(whoami_registration claude-code "$project" alice myteam)"
+  json="$(whoami_json claude-code "$project" "[$registration]")"
+  fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
+  export FAKE_AUTH_TOKEN_MODE=known
+  export FAKE_API_USER_MODE=personal
+
+  run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN GH_TOKEN=explicit-token "$LAUNCHER" pr create --repo kappaseijin/fixture --title blocked
+  [ "$status" -ne 0 ]
+  [ ! -s "$FAKE_WRITE_LOG" ]
+  grep -Fq 'api user' "$FAKE_READ_LOG"
 }
 
 @test "GHG-P4: every non-exact identity rejects all PR writes before static policy" {
@@ -475,14 +501,21 @@ assert_pr_write_rejected_without_static_fallback() {
   assert_pr_write_rejected_without_static_fallback pr create --repo kappaseijin/fixture --title blocked
 }
 
-@test "GHG-P7: non-PR writes remain not_applicable to account selection" {
-  fake_whoami 'not_joined=true available_teams=myteam' '{not-json'
-  export FAKE_AUTH_TOKEN_MODE=known
+@test "GHG-P7: a unique Claude seat authorizes a destination-checked non-PR write" {
   run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" issue create --repo kappaseijin/fixture --title allowed
   [ "$status" -eq 0 ]
   grep -Fq 'issue create --repo kappaseijin/fixture --title allowed' "$FAKE_WRITE_LOG"
   run grep -q 'auth token' "$FAKE_ENV_LOG"
+  [ "$status" -eq 0 ]
+}
+
+@test "GHG-239: an unknown seat cannot issue-create even for an allowed destination" {
+  fake_whoami 'not_joined=true available_teams=myteam' '{not-json'
+  export FAKE_AUTH_TOKEN_MODE=known
+
+  run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" issue create --repo kappaseijin/fixture --title blocked
   [ "$status" -ne 0 ]
+  [ ! -s "$FAKE_WRITE_LOG" ]
 }
 
 @test "GHG-P8: selected Claude account bypasses a conflicting static policy" {
@@ -495,6 +528,7 @@ assert_pr_write_rejected_without_static_fallback() {
   printf 'map=%s=creator\ncreator_login=kappaseijin4codex\n' "$project" > "$policy"
   export PR_ACCOUNT_POLICY="$policy"
   export FAKE_AUTH_TOKEN_MODE=known
+  export FAKE_API_USER_MODE=claude
   run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
   [ "$status" -eq 0 ]
   grep -q '^GH_TOKEN=tok-claude argv=pr create' "$FAKE_ENV_LOG"
@@ -521,6 +555,7 @@ assert_pr_write_rejected_without_static_fallback() {
   json="$(whoami_json codex "$session_project" "[$registration]")"
   fake_whoami "agent=alice teams=myteam type=codex project=$session_project" "$json"
   export FAKE_AUTH_TOKEN_MODE=known
+  export FAKE_API_USER_MODE=codex
 
   run env -u GH_CONFIG_DIR -u GH_TOKEN -u GITHUB_TOKEN "$LAUNCHER" pr create --repo kappaseijin/fixture --title allowed
   [ "$status" -eq 0 ]

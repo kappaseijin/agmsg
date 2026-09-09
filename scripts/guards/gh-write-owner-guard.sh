@@ -764,15 +764,7 @@ enforce_optional_pr_account_guard() {
 # or the real gh is reached; otherwise an accepting cwd policy can turn an
 # ambiguous identity into a personal-account write.
 proactively_select_account() {
-  case "$SUBCOMMAND" in
-    'pr create'|'pr comment'|'pr review') ;;
-    *)
-      ACCOUNT_SELECTION_OUTCOME=not_applicable
-      return 0
-      ;;
-  esac
-
-  if [ -n "${GH_CONFIG_DIR:-}" ] || [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
+  if ! is_destination_checked_write; then
     ACCOUNT_SELECTION_OUTCOME=not_applicable
     return 0
   fi
@@ -783,7 +775,7 @@ proactively_select_account() {
   local guard_dir skill_dir
   local out json_sql json_valid session_project registration_project
   local normalized_session_project normalized_registration_project
-  local selected_type expected token
+  local selected_type expected token actual
   if ! out="$(bash "$whoami_script" "$CURRENT_CWD" --format json 2>/dev/null)"; then
     return 0
   fi
@@ -851,11 +843,17 @@ proactively_select_account() {
     codex) expected=kappaseijin4codex ;;
     *) return 0 ;;
   esac
-  if ! token="$("$REAL_GH" auth token --user "$expected" 2>/dev/null)"; then
+  if [ -z "${GH_CONFIG_DIR:-}" ] && [ -z "${GH_TOKEN:-}" ] && [ -z "${GITHUB_TOKEN:-}" ]; then
+    if ! token="$("$REAL_GH" auth token --user "$expected" 2>/dev/null)"; then
+      return 0
+    fi
+    [ -n "$token" ] || return 0
+    export GH_TOKEN="$token"
+  fi
+  if ! actual="$("$REAL_GH" api user --jq .login 2>/dev/null)"; then
     return 0
   fi
-  [ -n "$token" ] || return 0
-  export GH_TOKEN="$token"
+  [ "$actual" = "$expected" ] || return 0
   ACCOUNT_SELECTION_OUTCOME=selected
   return 0
 }
