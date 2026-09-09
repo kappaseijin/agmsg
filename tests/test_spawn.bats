@@ -45,6 +45,42 @@ teardown() {
   teardown_test_env
 }
 
+# Install a complete fake guard path for boot-level write controls.  This is
+# deliberately independent of test_gh_write_owner_guard.bats: the assertion
+# here is that a spawned CLI reaches the guard-selected real gh, not a raw
+# executable which happened to precede it in the parent's PATH.
+install_spawn_guard_write_fixture() {
+  local real_gh="$TEST_SKILL_DIR/real-gh" whoami="$TEST_SKILL_DIR/whoami.sh"
+  export SPAWN_GH_WRITE_LOG="$TEST_SKILL_DIR/guarded-writes.log"
+  : > "$SPAWN_GH_WRITE_LOG"
+
+  cat > "$real_gh" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+case "${1:-}:${2:-}:${3:-}" in
+  auth:token:--user) printf 'tok-claude\n' ;;
+  api:user:*) printf 'kappaseijin4claude\n' ;;
+  repo:set-default:--view) exit 1 ;;
+  repo:view:*) printf 'kappaseijin/fixture\thttps://github.com/kappaseijin/fixture\n' ;;
+  *) printf '%s\n' "$*" >> "${SPAWN_GH_WRITE_LOG:?}" ;;
+esac
+EOF
+  chmod +x "$real_gh"
+  cat > "$whoami" <<'EOF'
+#!/usr/bin/env bash
+if [ "${2:-}" = --format ] && [ "${3:-}" = json ]; then
+  printf '{"schemaVersion":1,"runtime":"claude-code","session":{"project":"%s"},"registrations":[{"team":"myteam","name":"alice","kind":"seat","role":"reviewer","registration":{"type":"claude-code","project":"%s"}}]}\n' "$1" "$1"
+fi
+EOF
+  chmod +x "$whoami"
+  export AGMSG_WHOAMI_SCRIPT="$whoami"
+  sed \
+    -e "s|__AGMSG_GH_GUARD_SCRIPT__|$SCRIPTS/guards/gh-write-owner-guard.sh|g" \
+    -e "s|__AGMSG_REAL_GH__|$real_gh|g" \
+    "$SCRIPTS/guards/gh-write-owner-guard-launcher.sh" > "$HOME/.agents/bin/gh"
+  chmod +x "$HOME/.agents/bin/gh"
+}
+
 # --- argument validation ---
 
 @test "spawn: rejects a known type with neither cli= nor spawn= (#277)" {
@@ -220,10 +256,11 @@ EOF
 printf 'raw write\n' >> "$raw_log"
 EOF
   chmod +x "$raw_bin/gh"
+  install_spawn_guard_write_fixture
   cat > "$STUB_BIN/claude" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$PATH" > "$cli_path"
-gh --version
+gh pr create --repo kappaseijin/fixture --title allowed
 EOF
   chmod +x "$STUB_BIN/claude"
   shell_stub="$STUB_BIN/interactive-shell"
@@ -238,6 +275,60 @@ EOF
   observed_path="$(cat "$cli_path")"
   [ "${observed_path%%:*}" = "$HOME/.agents/bin" ]
   [ ! -e "$raw_log" ]
+  grep -Fq 'pr create --repo kappaseijin/fixture --title allowed' "$SPAWN_GH_WRITE_LOG"
+}
+
+@test "spawn: boot fails closed before the CLI when gh is replaced by a non-agmsg executable" {
+  local cli_log="$TEST_SKILL_DIR/cli-started.log" raw_log="$TEST_SKILL_DIR/replaced-gh.log"
+  cat > "$STUB_BIN/claude" <<EOF
+#!/usr/bin/env bash
+printf 'started\n' >> "$cli_log"
+EOF
+  chmod +x "$STUB_BIN/claude"
+  cat > "$HOME/.agents/bin/gh" <<EOF
+#!/usr/bin/env bash
+printf 'raw write\n' >> "$raw_log"
+EOF
+  chmod +x "$HOME/.agents/bin/gh"
+  bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
+
+  run bash "$SCRIPTS/spawn.sh" claude-code alice --project "$PROJ" --no-wait
+  [ "$status" -eq 0 ]
+  boot="$(cat "$CAPTURE")"
+  run env SHELL=/bin/true "$boot"
+  [ "$status" -ne 0 ]
+  [ ! -e "$cli_log" ]
+  [ ! -e "$raw_log" ]
+}
+
+@test "spawn: wrapper bypass is recorded as an unsupported native-execution boundary" {
+  local raw_bin="$TEST_SKILL_DIR/raw-bin" raw_log="$TEST_SKILL_DIR/bypass-gh.log" shell_stub
+  mkdir -p "$raw_bin"
+  install_spawn_guard_write_fixture
+  cat > "$raw_bin/gh" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$raw_log"
+EOF
+  chmod +x "$raw_bin/gh"
+  cat > "$STUB_BIN/claude" <<EOF
+#!/usr/bin/env bash
+PATH="$raw_bin:\${PATH#\"$HOME/.agents/bin:\"}"
+export PATH
+gh pr create --repo kappaseijin/fixture --title bypassed
+EOF
+  chmod +x "$STUB_BIN/claude"
+  shell_stub="$STUB_BIN/interactive-shell"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$shell_stub"
+  chmod +x "$shell_stub"
+  bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
+
+  run env SHELL="$shell_stub" "$SCRIPTS/spawn.sh" claude-code alice --project "$PROJ" --no-wait
+  [ "$status" -eq 0 ]
+  boot="$(cat "$CAPTURE")"
+  run env SHELL="$shell_stub" "$boot"
+  [ "$status" -eq 0 ]
+  grep -Fq 'pr create --repo kappaseijin/fixture --title bypassed' "$raw_log"
+  skip 'guarantee boundary: a process that removes the launcher can execute a raw gh; native execution control is out of scope'
 }
 
 @test "spawn: a type without name_arg emits no name flag (#339)" {
