@@ -33,6 +33,12 @@ EOF
 
   export PROJ="$TEST_SKILL_DIR/proj"
   mkdir -p "$PROJ"
+  mkdir -p "$HOME/.agents/bin"
+  sed \
+    -e "s|__AGMSG_GH_GUARD_SCRIPT__|$SCRIPTS/guards/gh-write-owner-guard.sh|g" \
+    -e 's|__AGMSG_REAL_GH__|/usr/bin/true|g' \
+    "$SCRIPTS/guards/gh-write-owner-guard-launcher.sh" > "$HOME/.agents/bin/gh"
+  chmod +x "$HOME/.agents/bin/gh"
 }
 
 teardown() {
@@ -185,6 +191,53 @@ teardown() {
   # The spawned session carries the marker so the actas flow suppresses the
   # hand-started "rename this session" tip.
   [[ "$output" == *"export AGMSG_SPAWNED=1"* ]]
+}
+
+@test "spawn: boot fails closed before the CLI when the gh guard launcher is missing" {
+  local cli_log="$TEST_SKILL_DIR/cli-started.log"
+  cat > "$STUB_BIN/claude" <<EOF
+#!/usr/bin/env bash
+printf 'started\n' >> "$cli_log"
+EOF
+  chmod +x "$STUB_BIN/claude"
+  rm -f "$HOME/.agents/bin/gh"
+  bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
+
+  run bash "$SCRIPTS/spawn.sh" claude-code alice --project "$PROJ" --no-wait
+  [ "$status" -eq 0 ]
+  boot="$(cat "$CAPTURE")"
+  run env SHELL=/bin/true "$boot"
+  [ "$status" -ne 0 ]
+  [ ! -e "$cli_log" ]
+}
+
+@test "spawn: boot prepends the verified gh launcher ahead of a raw gh PATH entry" {
+  local cli_path="$TEST_SKILL_DIR/cli-path.log" raw_log="$TEST_SKILL_DIR/raw-gh.log" shell_stub observed_path
+  local raw_bin="$TEST_SKILL_DIR/raw-bin"
+  mkdir -p "$raw_bin"
+  cat > "$raw_bin/gh" <<EOF
+#!/usr/bin/env bash
+printf 'raw write\n' >> "$raw_log"
+EOF
+  chmod +x "$raw_bin/gh"
+  cat > "$STUB_BIN/claude" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$PATH" > "$cli_path"
+gh --version
+EOF
+  chmod +x "$STUB_BIN/claude"
+  shell_stub="$STUB_BIN/interactive-shell"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$shell_stub"
+  chmod +x "$shell_stub"
+  bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
+
+  run env PATH="$raw_bin:$STUB_BIN:$PATH" bash "$SCRIPTS/spawn.sh" claude-code alice --project "$PROJ" --no-wait
+  [ "$status" -eq 0 ]
+  boot="$(cat "$CAPTURE")"
+  run env PATH="$raw_bin:$STUB_BIN:$PATH" SHELL="$shell_stub" "$boot"
+  observed_path="$(cat "$cli_path")"
+  [ "${observed_path%%:*}" = "$HOME/.agents/bin" ]
+  [ ! -e "$raw_log" ]
 }
 
 @test "spawn: a type without name_arg emits no name flag (#339)" {

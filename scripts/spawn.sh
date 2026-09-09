@@ -497,6 +497,8 @@ esac
   # actas flow knows the session is already named <team>-<agent> (name_arg) and
   # suppresses the "rename this session" tip meant for hand-started sessions.
   echo 'export AGMSG_SPAWNED=1'
+  printf 'source %q || exit 1\n' "$SCRIPT_DIR/guards/gh-write-owner-guard-environment.sh"
+  echo 'agmsg_gh_guard_environment || exit 1'
   # Drop inherited same-type session-identity vars before exec'ing the CLI (#294).
   if [ -n "$SPAWN_UNSET_VARS" ]; then
     printf 'unset %s\n' "$SPAWN_UNSET_VARS"
