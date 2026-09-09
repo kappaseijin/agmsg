@@ -1,0 +1,22 @@
+{
+  "providerCommit": "0b2117c5f91f7950cc196e52edb188748adfa50a",
+  "schemaVersion": 1,
+  "command": "scripts/p2-provider.sh",
+  "requiredCapabilities": [
+    "message-peek-v1",
+    "message-claim-v1",
+    "message-release-v1",
+    "message-ack-v1",
+    "message-send-v1",
+    "handoff-receipt-v1"
+  ],
+  "notUsedCapabilities": ["history"],
+  "capabilities": {
+    "message-peek-v1": {"argv": ["message-peek", "<team>", "<recipient>"], "success": ["messageId", "to"], "failure": ["absent", "unknown"]},
+    "message-claim-v1": {"argv": ["message-claim", "<team>", "<messageId>", "<owner>"], "success": ["messageId", "state=claimed"], "failure": ["unknown", "busy"]},
+    "message-release-v1": {"argv": ["message-release", "<team>", "<messageId>", "<owner>"], "success": ["messageId", "state=released"], "failure": ["unknown", "owner_mismatch"]},
+    "message-ack-v1": {"argv": ["message-ack", "<team>", "<messageId>", "<owner>", "<receiptId>"], "success": ["messageId", "state=acked"], "failure": ["unknown", "receipt_missing"]},
+    "message-send-v1": {"argv": ["message-send", "<team>", "<from>", "<recipient>", "<requestId>", "<body>"], "success": ["messageId", "requestId", "state=queued"], "failure": ["unknown"]},
+    "handoff-receipt-v1": {"argv": ["handoff-receipt", "<team>", "<inputMessageId>", "<requestId>", "<delegateMessageId>"], "success": ["inputMessageId", "requestId", "delegateMessageId", "receiptId", "state=recorded"], "failure": ["unknown", "id_mismatch"]}
+  }
+}
