@@ -663,10 +663,10 @@ DECOY
   grep -Fq 'issue create --repo kappaseijin/fixture --title allowed' "$FAKE_WRITE_LOG"
 }
 
-@test "GHG-280: a unique Claude manager may merge an allowed destination" {
+@test "GHG-280: a unique Claude pm seat may merge an allowed destination" {
   local project registration json
   project="$(pwd -P)"
-  registration="$(whoami_registration claude-code "$project" alice myteam manager)"
+  registration="$(whoami_registration claude-code "$project" alice myteam pm)"
   json="$(whoami_json claude-code "$project" "[$registration]")"
   fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
 
@@ -678,7 +678,7 @@ DECOY
 @test "GHG-280: every non-manager role is rejected before a PR merge write" {
   local project registration json role
   project="$(pwd -P)"
-  for role in programmer worker architect verifier reviewer breaker owner; do
+  for role in manager programmer worker architect verifier reviewer breaker owner; do
     registration="$(whoami_registration claude-code "$project" alice myteam "$role")"
     json="$(whoami_json claude-code "$project" "[$registration]")"
     fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
@@ -695,9 +695,9 @@ DECOY
   fake_whoami 'not_joined=true available_teams=myteam' '{not-json'
   assert_rejected pr merge 31 --repo kappaseijin/fixture --squash
 
-  manager="$(whoami_registration claude-code "$project" alice myteam manager)"
-  other="$(whoami_registration claude-code "$project" bob myteam manager)"
-  json="$(whoami_json claude-code "$project" "[$manager,$other]")"
+  pm="$(whoami_registration claude-code "$project" alice myteam pm)"
+  other="$(whoami_registration claude-code "$project" bob myteam pm)"
+  json="$(whoami_json claude-code "$project" "[$pm,$other]")"
   fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
   assert_rejected pr merge 31 --repo kappaseijin/fixture --squash
 }
@@ -711,10 +711,10 @@ DECOY
   assert_rejected pr merge 31 --repo kappaseijin/fixture --squash
 }
 
-@test "GHG-280: manager rejects personal credentials and a disallowed destination" {
+@test "GHG-280: pm rejects personal credentials and a disallowed destination" {
   local project registration json
   project="$(pwd -P)"
-  registration="$(whoami_registration claude-code "$project" alice myteam manager)"
+  registration="$(whoami_registration claude-code "$project" alice myteam pm)"
   json="$(whoami_json claude-code "$project" "[$registration]")"
   fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
   export FAKE_API_USER_MODE=personal
@@ -741,7 +741,7 @@ DECOY
 @test "GHG-19: allows the operational PR merge path only for an allowed owner" {
   local project registration json
   project="$(pwd -P)"
-  registration="$(whoami_registration claude-code "$project" fixture myteam manager)"
+  registration="$(whoami_registration claude-code "$project" fixture myteam pm)"
   json="$(whoami_json claude-code "$project" "[$registration]")"
   fake_whoami "agent=fixture teams=myteam type=claude-code project=$project" "$json"
 

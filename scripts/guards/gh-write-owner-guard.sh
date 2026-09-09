@@ -843,7 +843,7 @@ proactively_select_account() {
   selected_type="${selected_identity%%$'\t'*}"
   selected_role="${selected_identity#*$'\t'}"
 
-  if [ "$SUBCOMMAND" = 'pr merge' ] && [ "$selected_role" != manager ]; then
+  if [ "$SUBCOMMAND" = 'pr merge' ] && [ "$selected_role" != pm ]; then
     return 0
   fi
 
