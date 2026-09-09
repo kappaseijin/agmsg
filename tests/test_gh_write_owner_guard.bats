@@ -675,10 +675,10 @@ DECOY
   grep -Fq 'pr merge 31 --repo kappaseijin/fixture --squash --delete-branch' "$FAKE_WRITE_LOG"
 }
 
-@test "GHG-280: every non-manager role is rejected before a PR merge write" {
+@test "GHG-280: every non-pm role is rejected before a PR merge write" {
   local project registration json role
   project="$(pwd -P)"
-  for role in manager programmer worker architect verifier reviewer breaker owner; do
+  for role in manager unassigned programmer worker architect verifier reviewer breaker owner; do
     registration="$(whoami_registration claude-code "$project" alice myteam "$role")"
     json="$(whoami_json claude-code "$project" "[$registration]")"
     fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
@@ -726,10 +726,10 @@ DECOY
   assert_rejected pr merge 31 --repo thirdparty/fixture --squash
 }
 
-@test "GHG-280: a non-manager keeps existing non-merge write authorization" {
+@test "GHG-280: an unassigned seat keeps existing non-merge write authorization" {
   local project registration json
   project="$(pwd -P)"
-  registration="$(whoami_registration claude-code "$project" alice myteam programmer)"
+  registration="$(whoami_registration claude-code "$project" alice myteam unassigned)"
   json="$(whoami_json claude-code "$project" "[$registration]")"
   fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
 
