@@ -5,6 +5,7 @@ description: >-
   公式へのPRを出さない三層分離について、repo構成、成果物、target CLI、
   段階移行issueと停止・再開・rollback条件を定める。
 timestamp: "2026-09-09T20:55:00+09:00"
+updated: "2026-09-09T21:12:00+09:00"
 issue: "https://github.com/kappaseijin/agmsg/issues/373"
 source_head: "8a4a775a13e6287116855edb2bb639a492dd95be"
 producer: agmsg_architect_codex
@@ -130,17 +131,26 @@ agguild migrate preflight \
 
 ## 4. 移行issueの分割
 
+**物理移行ゲート G0** は、#300、#236、#341、#294、#273、#272、#268、#362 の全てが
+`CLOSED` 又は明示 `NOT_PLANNED` である状態と定義する。
+
+G0を満たすまで、repository skeleton、コード切出し、persona/data移行、又は現役切替を始めない。
+
+解決順は #300 の状態整合、#236 のgate再設計、#341、#294、#273、#272、#268、#362 とする。
+
+#236のgate再設計は、#222がCLOSEDとなり公式へのPRが禁止された後の依存を再定義するarchitect作業である。
+
 | 完了 | title案 | 依存 | 受入条件 |
 | --- | --- | --- | --- |
-| [ ] | agguild: repository skeleton と provider manifest schema | #373設計受入 | repoはshared runtime用の空構成だけを持ち、provider commit/capabilityを表現できる。agmsg内部fileを読まない |
-| [ ] | agguild_pool: repository skeleton と persona manifest schema | #373設計受入 | poolはpersona dataだけを持ち、shared executable、live DB、secretを拒否する |
-| [ ] | agguild: provider check と pool validate を隔離fixtureへ実装 | 前2Issue | positive providerと不一致commit/schema、poolのshared executable/secretを対照にし、全拒否変異をKILLする |
-| [ ] | agguild: guard と launcher の共有実行層を切り出す | provider check | gh/git destination guard、identity resolution、PATH固定を公開provider APIだけで通す。個人account又はunknownへのfallbackをしない |
-| [ ] | agguild: broker、collector、auditの共有実行層を切り出す | guard/launcher切出し | agmsg公開通信と独立collectorの境界を保持する。#236のP2実接続は開始しない |
-| [ ] | agguild_pool: codex_monitor_agents dataの隔離fixture移行 | pool validate、preflight | persona pathとregistration projectを別項目で保持し、未処理ID、owner、resume、writerの停止点を全て取得できる |
-| [ ] | agguild_pool: 停止可能な1席の限定移行 | fixture移行 | idle対象1席だけを移し、identity一意性と未読集合を前後比較する。新旧writerは同じlive DBへ接続しない |
-| [ ] | agmsg: 独自拡張の残存台帳と切出し完了判定 | 各agguild切出し | `222-hunk-ledger.tsv` の各対象を移動、保持、廃棄のいずれかへ根拠付きで対応付ける。公式へのPRは出さない |
-| [ ] | 分離完了: 現役切替と旧root削除の可否判定 | 限定移行の受入 | 全対象のrollback確認後に、別起点でのみ削除可否を判定する。全席一括移動、未読reset、全claim GCを行わない |
+| [ ] | agguild: repository skeleton と provider manifest schema | G0、#373設計受入 | repoはshared runtime用の空構成だけを持ち、provider commit/capabilityを表現できる。agmsg内部fileを読まない |
+| [ ] | agguild_pool: repository skeleton と persona manifest schema | G0、#373設計受入 | poolはpersona dataだけを持ち、shared executable、live DB、secretを拒否する |
+| [ ] | agguild: provider check と pool validate を隔離fixtureへ実装 | G0、前2Issue | positive providerと不一致commit/schema、poolのshared executable/secretを対照にし、全拒否変異をKILLする |
+| [ ] | agguild: guard と launcher の共有実行層を切り出す | G0、provider check | gh/git destination guard、identity resolution、PATH固定を公開provider APIだけで通す。個人account又はunknownへのfallbackをしない |
+| [ ] | agguild: broker、collector、auditの共有実行層を切り出す | G0、guard/launcher切出し | agmsg公開通信と独立collectorの境界を保持する。#236のP2実接続は開始しない |
+| [ ] | agguild_pool: codex_monitor_agents dataの隔離fixture移行 | G0、pool validate、preflight | persona pathとregistration projectを別項目で保持し、未処理ID、owner、resume、writerの停止点を全て取得できる |
+| [ ] | agguild_pool: 停止可能な1席の限定移行 | G0、fixture移行 | idle対象1席だけを移し、identity一意性と未読集合を前後比較する。新旧writerは同じlive DBへ接続しない |
+| [ ] | agmsg: 独自拡張の残存台帳と切出し完了判定 | G0、各agguild切出し | `222-hunk-ledger.tsv` の各対象を移動、保持、廃棄のいずれかへ根拠付きで対応付ける。公式へのPRは出さない |
+| [ ] | 分離完了: 現役切替と旧root削除の可否判定 | G0、限定移行の受入 | 全対象のrollback確認後に、別起点でのみ削除可否を判定する。全席一括移動、未読reset、全claim GCを行わない |
 
 各rowは独立したIssueとPRにする。
 
@@ -164,13 +174,17 @@ IDとcursorを照合できるまで停止を維持する。
 
 ## 6. 既存open Issueの扱い
 
-Issue #362、#358、#355、#341、#308、#304、#300、#296、#294、#273、#272、#268は移行Issueではない。
+#358、#355、#308、#304、#296 は record-only であり、ユーザー決定により分離の前提から除外する。
 
-これらはIssue #373本文の参考表に残すが、分離作業の受入条件、又は依存Issueへ昇格させない。
+これらはIssue #373本文の参考表に残すが、着手又はcloseを求めない。
 
-Issue #236はagguildの将来consumerであるが、`blocked:dependency`を維持する別作業である。
+#300、#236、#341、#294、#273、#272、#268、#362 は G0 の前提Issueである。
 
-本計画のrepo骨組み、manifest、隔離fixtureを #236 の実接続又はpilot開始理由にしない。
+各Issueはbreaker指定順に解決し、`CLOSED` 又は明示 `NOT_PLANNED` をGitHub正本で確認するまで、§4の全移行Issueに着手しない。
+
+#236はagguildの将来consumerであり、P2実接続やpilotは引き続き本計画の範囲外である。
+
+ただし#236の公式提供待ちgateは、#222 CLOSEDと公式PR禁止決定を前提にarchitectが再設計する。
 
 ## 7. 受入対照
 
