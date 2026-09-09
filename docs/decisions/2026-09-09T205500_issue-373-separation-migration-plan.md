@@ -5,7 +5,7 @@ description: >-
   公式へのPRを出さない三層分離について、repo構成、成果物、target CLI、
   段階移行issueと停止・再開・rollback条件を定める。
 timestamp: "2026-09-09T20:55:00+09:00"
-updated: "2026-09-09T21:12:00+09:00"
+updated: "2026-09-09T21:16:00+09:00"
 issue: "https://github.com/kappaseijin/agmsg/issues/373"
 source_head: "8a4a775a13e6287116855edb2bb639a492dd95be"
 producer: agmsg_architect_codex
@@ -138,7 +138,9 @@ G0を満たすまで、repository skeleton、コード切出し、persona/data�
 
 解決順は #300 の状態整合、#236 のgate再設計、#341、#294、#273、#272、#268、#362 とする。
 
-#236のgate再設計は、#222がCLOSEDとなり公式へのPRが禁止された後の依存を再定義するarchitect作業である。
+#236のgate再設計は、PM自己実施防止という主目的と、過去commentで追加されたP2後続実装の依存境界を分けるarchitect作業である。
+
+#222 CLOSEDと公式PR禁止決定の後は、後者のgateが公式へのPR提出を前提にしないよう再定義する。
 
 | 完了 | title案 | 依存 | 受入条件 |
 | --- | --- | --- | --- |
@@ -146,7 +148,7 @@ G0を満たすまで、repository skeleton、コード切出し、persona/data�
 | [ ] | agguild_pool: repository skeleton と persona manifest schema | G0、#373設計受入 | poolはpersona dataだけを持ち、shared executable、live DB、secretを拒否する |
 | [ ] | agguild: provider check と pool validate を隔離fixtureへ実装 | G0、前2Issue | positive providerと不一致commit/schema、poolのshared executable/secretを対照にし、全拒否変異をKILLする |
 | [ ] | agguild: guard と launcher の共有実行層を切り出す | G0、provider check | gh/git destination guard、identity resolution、PATH固定を公開provider APIだけで通す。個人account又はunknownへのfallbackをしない |
-| [ ] | agguild: broker、collector、auditの共有実行層を切り出す | G0、guard/launcher切出し | agmsg公開通信と独立collectorの境界を保持する。#236のP2実接続は開始しない |
+| [ ] | agguild: broker、collector、auditの共有実行層を切り出す | G0、guard/launcher切出し | agmsg公開通信と独立collectorの境界を保持する。#236の主目的であるPM自己実施防止の本番導入、及び過去commentのP2実接続は開始しない |
 | [ ] | agguild_pool: codex_monitor_agents dataの隔離fixture移行 | G0、pool validate、preflight | persona pathとregistration projectを別項目で保持し、未処理ID、owner、resume、writerの停止点を全て取得できる |
 | [ ] | agguild_pool: 停止可能な1席の限定移行 | G0、fixture移行 | idle対象1席だけを移し、identity一意性と未読集合を前後比較する。新旧writerは同じlive DBへ接続しない |
 | [ ] | agmsg: 独自拡張の残存台帳と切出し完了判定 | G0、各agguild切出し | `222-hunk-ledger.tsv` の各対象を移動、保持、廃棄のいずれかへ根拠付きで対応付ける。公式へのPRは出さない |
@@ -182,9 +184,13 @@ IDとcursorを照合できるまで停止を維持する。
 
 各Issueはbreaker指定順に解決し、`CLOSED` 又は明示 `NOT_PLANNED` をGitHub正本で確認するまで、§4の全移行Issueに着手しない。
 
-#236はagguildの将来consumerであり、P2実接続やpilotは引き続き本計画の範囲外である。
+#236はPM自己実施を仕組みで防止するIssueである。
 
-ただし#236の公式提供待ちgateは、#222 CLOSEDと公式PR禁止決定を前提にarchitectが再設計する。
+過去commentでP2 pilotの後続実装も同じ `blocked:dependency` に置かれたが、これを#236の主目的又はB3 Issue #253そのものと読み替えない。
+
+PM自己実施防止の本番導入、P2実接続、pilotはいずれも本計画の範囲外である。
+
+ただし過去commentのP2依存gateは、#222 CLOSEDと公式PR禁止決定を前提にarchitectが再設計する。
 
 ## 7. 受入対照
 
