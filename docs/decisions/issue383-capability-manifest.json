@@ -10,13 +10,191 @@
     "message-send-v1",
     "handoff-receipt-v1"
   ],
-  "notUsedCapabilities": ["history"],
+  "notUsedCapabilities": [
+    "history"
+  ],
   "capabilities": {
-    "message-peek-v1": {"argv": ["message-peek", "<team>", "<recipient>"], "success": ["messageId", "to"], "failure": ["absent", "unknown"]},
-    "message-claim-v1": {"argv": ["message-claim", "<team>", "<messageId>", "<owner>"], "success": ["messageId", "state=claimed"], "failure": ["unknown", "busy"]},
-    "message-release-v1": {"argv": ["message-release", "<team>", "<messageId>", "<owner>"], "success": ["messageId", "state=released"], "failure": ["unknown", "owner_mismatch"]},
-    "message-ack-v1": {"argv": ["message-ack", "<team>", "<messageId>", "<owner>", "<receiptId>"], "success": ["messageId", "state=acked"], "failure": ["unknown", "receipt_missing"]},
-    "message-send-v1": {"argv": ["message-send", "<team>", "<from>", "<recipient>", "<requestId>", "<body>"], "success": ["messageId", "requestId", "state=queued"], "failure": ["unknown"]},
-    "handoff-receipt-v1": {"argv": ["handoff-receipt", "<team>", "<inputMessageId>", "<requestId>", "<delegateMessageId>"], "success": ["inputMessageId", "requestId", "delegateMessageId", "receiptId", "state=recorded"], "failure": ["unknown", "id_mismatch"]}
+    "message-peek-v1": {
+      "argv": [
+        "message-peek",
+        "<team>",
+        "<recipient>"
+      ],
+      "ids": [
+        "messageId"
+      ],
+      "success": [
+        "state=ok",
+        "messageId",
+        "from",
+        "to",
+        "body",
+        "createdAt"
+      ],
+      "failure": [
+        "absent",
+        "unknown"
+      ],
+      "exitStatus": {
+        "json": 0,
+        "error": [
+          1,
+          2
+        ]
+      }
+    },
+    "message-claim-v1": {
+      "argv": [
+        "message-claim",
+        "<team>",
+        "<messageId>",
+        "<owner>"
+      ],
+      "ids": [
+        "messageId",
+        "owner"
+      ],
+      "success": [
+        "state=claimed",
+        "messageId",
+        "owner"
+      ],
+      "failure": [
+        "unknown",
+        "busy"
+      ],
+      "exitStatus": {
+        "json": 0,
+        "error": [
+          1,
+          2
+        ]
+      }
+    },
+    "message-release-v1": {
+      "argv": [
+        "message-release",
+        "<team>",
+        "<messageId>",
+        "<owner>"
+      ],
+      "ids": [
+        "messageId",
+        "owner"
+      ],
+      "success": [
+        "state=released",
+        "messageId",
+        "owner"
+      ],
+      "failure": [
+        "unknown",
+        "owner_mismatch"
+      ],
+      "exitStatus": {
+        "json": 0,
+        "error": [
+          1,
+          2
+        ]
+      }
+    },
+    "message-ack-v1": {
+      "argv": [
+        "message-ack",
+        "<team>",
+        "<messageId>",
+        "<owner>",
+        "<receiptId>"
+      ],
+      "ids": [
+        "messageId",
+        "owner",
+        "receiptId"
+      ],
+      "success": [
+        "state=acked",
+        "messageId",
+        "owner",
+        "receiptId"
+      ],
+      "failure": [
+        "unknown",
+        "receipt_missing"
+      ],
+      "exitStatus": {
+        "json": 0,
+        "error": [
+          1,
+          2
+        ]
+      }
+    },
+    "message-send-v1": {
+      "argv": [
+        "message-send",
+        "<team>",
+        "<from>",
+        "<recipient>",
+        "<requestId>",
+        "<body>"
+      ],
+      "ids": [
+        "messageId",
+        "requestId"
+      ],
+      "success": [
+        "state=queued",
+        "messageId",
+        "requestId",
+        "team",
+        "from",
+        "to"
+      ],
+      "failure": [
+        "unknown"
+      ],
+      "exitStatus": {
+        "json": 0,
+        "error": [
+          1,
+          2
+        ]
+      }
+    },
+    "handoff-receipt-v1": {
+      "argv": [
+        "handoff-receipt",
+        "<team>",
+        "<inputMessageId>",
+        "<requestId>",
+        "<delegateMessageId>"
+      ],
+      "ids": [
+        "inputMessageId",
+        "requestId",
+        "delegateMessageId",
+        "receiptId"
+      ],
+      "success": [
+        "state=recorded",
+        "inputMessageId",
+        "requestId",
+        "delegateMessageId",
+        "receiptId",
+        "team"
+      ],
+      "failure": [
+        "unknown",
+        "id_mismatch"
+      ],
+      "exitStatus": {
+        "json": 0,
+        "error": [
+          1,
+          2
+        ]
+      }
+    }
   }
 }
