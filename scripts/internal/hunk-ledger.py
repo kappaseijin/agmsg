@@ -338,7 +338,8 @@ def _command_names(line):
                 names.add(name)
             command_position = False
             continue
-        names.add(token)
+        # Non-wrapper command positions remain the legacy scan's job.  This
+        # walk exists only to reach through the explicitly known wrappers.
         command_position = False
         index += 1
     return names
@@ -378,7 +379,7 @@ def used_names(body):
     # The old scan sees a wrapper itself at command position.  A known wrapper
     # is plumbing rather than a callable dependency; the token walk adds its
     # first real command while preserving the old scan for everything else.
-    return ((legacy - WRAPPERS - CONTROL_WORDS)
+    return ((legacy - WRAPPERS)
             | {name for line in stripped.splitlines() for name in _command_names(line)})
 
 

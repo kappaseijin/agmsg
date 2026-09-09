@@ -56,7 +56,12 @@ cases = {
     '# run agmsg_runtime_lock_release_owned': set(),
     'echo "agmsg_runtime_lock_release_owned"': {'echo'},
     'echo agmsg_runtime_lock_release_owned': {'echo'},
-    'if run target; then ( command other ); fi': {'target', 'other'},
+    # Wrapper transparency adds target/other, while the legacy control-word
+    # candidates remain part of the result unchanged.
+    'if run target; then ( command other ); fi':
+        {'if', 'then', 'fi', 'target', 'other'},
+    # No wrapper: this is the pre-Issue-347 command-position set exactly.
+    'if cond; then yes; else no; fi': {'if', 'then', 'else', 'fi'},
 }
 for body, expected in cases.items():
     actual = hl.used_names(body)
