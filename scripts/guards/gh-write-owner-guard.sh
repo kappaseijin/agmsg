@@ -775,7 +775,7 @@ proactively_select_account() {
   local guard_dir skill_dir
   local out json_sql json_valid session_project registration_project
   local normalized_session_project normalized_registration_project
-  local selected_type expected token actual
+  local selected_identity selected_type selected_role expected token actual
   if ! out="$(bash "$whoami_script" "$CURRENT_CWD" --format json 2>/dev/null)"; then
     return 0
   fi
@@ -814,7 +814,7 @@ proactively_select_account() {
   normalized_registration_project="$(agmsg_normalize_project_path "$registration_project")" || return 0
   [ "$normalized_session_project" = "$normalized_registration_project" ] || return 0
 
-  if ! selected_type="$(sqlite3 -batch -noheader :memory: \
+  if ! selected_identity="$(sqlite3 -batch -noheader :memory: \
     "WITH input(json) AS (SELECT '$json_sql')
      SELECT CASE
        WHEN json_type(json, '\$.schemaVersion') = 'integer'
@@ -830,13 +830,22 @@ proactively_select_account() {
         AND json_type(json, '\$.registrations[0].registration.project') = 'text'
         AND length(json_extract(json, '\$.registrations[0].registration.project')) > 0
         AND json_extract(json, '\$.runtime') = json_extract(json, '\$.registrations[0].registration.type')
-       THEN json_extract(json, '\$.runtime')
+       THEN json_extract(json, '\$.runtime') || char(9) ||
+            CASE WHEN json_type(json, '\$.registrations[0].role') = 'text'
+                 THEN json_extract(json, '\$.registrations[0].role')
+                 ELSE '' END
        ELSE ''
      END
      FROM input;" 2>/dev/null)"; then
     return 0
   fi
-  [ -n "$selected_type" ] || return 0
+  [ -n "$selected_identity" ] || return 0
+  selected_type="${selected_identity%%$'\t'*}"
+  selected_role="${selected_identity#*$'\t'}"
+
+  if [ "$SUBCOMMAND" = 'pr merge' ] && [ "$selected_role" != manager ]; then
+    return 0
+  fi
 
   case "$selected_type" in
     claude-code) expected=kappaseijin4claude ;;

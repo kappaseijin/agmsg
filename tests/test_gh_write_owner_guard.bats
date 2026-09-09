@@ -221,9 +221,10 @@ EOF
 }
 
 whoami_registration() {
-  local runtime="$1" project="$2" name="$3" team="$4"
-  printf '{"team":"%s","name":"%s","kind":"seat","role":"reviewer","registration":{"type":"%s","project":"%s"}}' \
-    "$team" "$name" "$runtime" "$project"
+  local runtime="$1" project="$2" name="$3" team="$4" role=reviewer
+  [ "$#" -lt 5 ] || role="$5"
+  printf '{"team":"%s","name":"%s","kind":"seat","role":"%s","registration":{"type":"%s","project":"%s"}}' \
+    "$team" "$name" "$role" "$runtime" "$project"
 }
 
 whoami_json() {
@@ -660,6 +661,81 @@ DECOY
   [ "$status" -eq 0 ]
   ! grep -Fq decoy "$FAKE_WRITE_LOG"
   grep -Fq 'issue create --repo kappaseijin/fixture --title allowed' "$FAKE_WRITE_LOG"
+}
+
+@test "GHG-280: a unique Claude manager may merge an allowed destination" {
+  local project registration json
+  project="$(pwd -P)"
+  registration="$(whoami_registration claude-code "$project" alice myteam manager)"
+  json="$(whoami_json claude-code "$project" "[$registration]")"
+  fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
+
+  run_guard pr merge 31 --repo kappaseijin/fixture --squash --delete-branch
+  [ "$status" -eq 0 ]
+  grep -Fq 'pr merge 31 --repo kappaseijin/fixture --squash --delete-branch' "$FAKE_WRITE_LOG"
+}
+
+@test "GHG-280: every non-manager role is rejected before a PR merge write" {
+  local project registration json role
+  project="$(pwd -P)"
+  for role in programmer worker architect verifier reviewer breaker owner; do
+    registration="$(whoami_registration claude-code "$project" alice myteam "$role")"
+    json="$(whoami_json claude-code "$project" "[$registration]")"
+    fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
+
+    run_guard pr merge 31 --repo kappaseijin/fixture --squash
+    [ "$status" -ne 0 ]
+    [ ! -s "$FAKE_WRITE_LOG" ]
+  done
+}
+
+@test "GHG-280: unknown or multiple registrations reject PR merge before a write" {
+  local project manager other json
+  project="$(pwd -P)"
+  fake_whoami 'not_joined=true available_teams=myteam' '{not-json'
+  assert_rejected pr merge 31 --repo kappaseijin/fixture --squash
+
+  manager="$(whoami_registration claude-code "$project" alice myteam manager)"
+  other="$(whoami_registration claude-code "$project" bob myteam manager)"
+  json="$(whoami_json claude-code "$project" "[$manager,$other]")"
+  fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
+  assert_rejected pr merge 31 --repo kappaseijin/fixture --squash
+}
+
+@test "GHG-280: an unresolved roster role rejects PR merge before a write" {
+  local project registration json
+  project="$(pwd -P)"
+  registration="$(whoami_registration claude-code "$project" alice myteam '')"
+  json="$(whoami_json claude-code "$project" "[$registration]")"
+  fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
+  assert_rejected pr merge 31 --repo kappaseijin/fixture --squash
+}
+
+@test "GHG-280: manager rejects personal credentials and a disallowed destination" {
+  local project registration json
+  project="$(pwd -P)"
+  registration="$(whoami_registration claude-code "$project" alice myteam manager)"
+  json="$(whoami_json claude-code "$project" "[$registration]")"
+  fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
+  export FAKE_API_USER_MODE=personal
+  run env GH_TOKEN=personal-token "$LAUNCHER" pr merge 31 --repo kappaseijin/fixture --squash
+  [ "$status" -ne 0 ]
+  [ ! -s "$FAKE_WRITE_LOG" ]
+
+  export FAKE_API_USER_MODE=claude
+  assert_rejected pr merge 31 --repo thirdparty/fixture --squash
+}
+
+@test "GHG-280: a non-manager keeps existing non-merge write authorization" {
+  local project registration json
+  project="$(pwd -P)"
+  registration="$(whoami_registration claude-code "$project" alice myteam programmer)"
+  json="$(whoami_json claude-code "$project" "[$registration]")"
+  fake_whoami "agent=alice teams=myteam type=claude-code project=$project" "$json"
+
+  run_guard pr review 31 --repo kappaseijin/fixture --approve
+  [ "$status" -eq 0 ]
+  grep -Fq 'pr review 31 --repo kappaseijin/fixture --approve' "$FAKE_WRITE_LOG"
 }
 
 @test "GHG-19: allows the operational PR merge path only for an allowed owner" {
