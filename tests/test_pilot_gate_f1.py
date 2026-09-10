@@ -1984,5 +1984,1385 @@ class PilotGateF1RoundA(unittest.TestCase):
                 )
 
 
+
+class PilotGateF1RoundBRunCase(unittest.TestCase):
+    BASE_RUN_ID = "round-b"
+    BASE_TEAM = "agmsg-g4gate-base"
+    CASE_TEAM = "agmsg-g4f1-test"
+    SESSION_ID = "123e4567-e89b-42d3-a456-426614174000"
+    GENERATION = 4
+    INPUT_ID = "input-message-1"
+    REQUEST_ID = (
+        "f1-control-"
+        + hashlib.sha256(
+            b"round-b-F1-control"
+        ).hexdigest()[:16]
+    )
+
+    def make_paths(self, root: Path):
+        root = root.resolve()
+        gate_repo = root / "repo"
+        run_root = root / "run-root"
+        claude_config = run_root / "claude"
+        artifact_root = root / "artifacts" / "F1"
+
+        gate_repo.mkdir(parents=True, exist_ok=True)
+        run_root.mkdir(parents=True, exist_ok=True)
+        claude_config.mkdir(parents=True, exist_ok=True)
+        artifact_root.mkdir(parents=True, exist_ok=True)
+
+        return {
+            "root": root,
+            "gate_repo": gate_repo,
+            "run_root": run_root,
+            "claude_config": claude_config,
+            "artifact_root": artifact_root,
+            "mutation_log": artifact_root / "mutation-log.jsonl",
+        }
+
+    def make_i1(
+        self,
+        *,
+        seed=None,
+    ):
+        i1 = mock.Mock()
+
+        if seed is None:
+            seed = {
+                "state": "queued",
+                "messageId": self.INPUT_ID,
+            }
+
+        i1.provider_call.return_value = seed
+        i1.storage_db.return_value = Path(
+            "/tmp/f1-round-b.db"
+        )
+
+        native = mock.Mock()
+        native.session_id = self.SESSION_ID
+        native.generation = self.GENERATION
+        native.binding = Path(
+            "/tmp/f1-binding.json"
+        )
+        native.transcript = Path(
+            "/tmp/f1-transcript.jsonl"
+        )
+        native.start = mock.Mock()
+        native.stop = mock.Mock()
+
+        i1.NativePilot.return_value = native
+
+        return i1, native
+
+    def default_receive_result(self):
+        return {
+            "verdict": "pass",
+            "checks": [
+                F1.assertion(
+                    "receive",
+                    True,
+                    None,
+                )
+            ],
+            "broker": {
+                "state": "claimed",
+            },
+        }
+
+    def default_delegate_result(self):
+        return {
+            "verdict": "pass",
+            "checks": [
+                F1.assertion(
+                    "delegate",
+                    True,
+                    None,
+                )
+            ],
+            "broker": {
+                "state": "delegated",
+            },
+        }
+
+    def native_side_effect(self):
+        return [
+            (
+                {
+                    "verdict": "pass",
+                    "broker": {
+                        "state": "claimed",
+                    },
+                },
+                "receive-command",
+            ),
+            (
+                {
+                    "verdict": "pass",
+                    "broker": {
+                        "state": "delegated",
+                    },
+                },
+                "delegate-command",
+            ),
+        ]
+
+    @contextlib.contextmanager
+    def run_case_harness(
+        self,
+        *,
+        paths,
+        i1,
+        receive_result=None,
+        delegate_result=None,
+        native_operation_side_effect=None,
+        writes=1,
+        transcript_count=1,
+        case_team=None,
+        prepare_side_effect=None,
+        successful_delegate_side_effect=None,
+        fault_delegate_side_effect=None,
+        write_count_side_effect=None,
+        tool_count_side_effect=None,
+    ):
+        if receive_result is None:
+            receive_result = (
+                self.default_receive_result()
+            )
+
+        if delegate_result is None:
+            delegate_result = (
+                self.default_delegate_result()
+            )
+
+        if native_operation_side_effect is None:
+            native_operation_side_effect = (
+                self.native_side_effect()
+            )
+
+        if case_team is None:
+            case_team = self.CASE_TEAM
+
+        stack = contextlib.ExitStack()
+
+        safe_team = stack.enter_context(
+            mock.patch.object(
+                F1,
+                "safe_case_team",
+                return_value=case_team,
+            )
+        )
+
+        prepare = stack.enter_context(
+            mock.patch.object(
+                F1,
+                "prepare_case_team",
+                side_effect=prepare_side_effect,
+            )
+        )
+
+        native_operation = stack.enter_context(
+            mock.patch.object(
+                F1,
+                "native_operation",
+                side_effect=native_operation_side_effect,
+            )
+        )
+
+        validate_receive = stack.enter_context(
+            mock.patch.object(
+                F1,
+                "validate_receive",
+                return_value=receive_result,
+            )
+        )
+
+        validate_success = stack.enter_context(
+            mock.patch.object(
+                F1,
+                "validate_successful_delegate",
+                side_effect=successful_delegate_side_effect,
+                return_value=delegate_result,
+            )
+        )
+
+        validate_fault = stack.enter_context(
+            mock.patch.object(
+                F1,
+                "validate_fault_delegate",
+                side_effect=fault_delegate_side_effect,
+                return_value=delegate_result,
+            )
+        )
+
+        delegate_count = stack.enter_context(
+            mock.patch.object(
+                F1,
+                "delegate_write_count",
+                side_effect=write_count_side_effect,
+                return_value=writes,
+            )
+        )
+
+        tool_count = stack.enter_context(
+            mock.patch.object(
+                F1,
+                "count_exact_native_tool_use",
+                side_effect=tool_count_side_effect,
+                return_value=transcript_count,
+            )
+        )
+
+        try:
+            yield {
+                "safe_case_team": safe_team,
+                "prepare_case_team": prepare,
+                "native_operation": native_operation,
+                "validate_receive": validate_receive,
+                "validate_successful_delegate": validate_success,
+                "validate_fault_delegate": validate_fault,
+                "delegate_write_count": delegate_count,
+                "count_exact_native_tool_use": tool_count,
+            }
+        finally:
+            stack.close()
+
+    def call_run_case(
+        self,
+        i1,
+        paths,
+        *,
+        label,
+        provider_fault=None,
+        timeout_seconds=7.0,
+    ):
+        return F1.run_case(
+            i1,
+            mock.Mock(),
+            label=label,
+            base_run_id=self.BASE_RUN_ID,
+            base_team=self.BASE_TEAM,
+            gate_repo=paths["gate_repo"],
+            run_root=paths["run_root"],
+            claude_config=paths["claude_config"],
+            artifact_root=paths["artifact_root"],
+            env={"PATH": "/bin"},
+            timeout_seconds=timeout_seconds,
+            provider_fault=provider_fault,
+        )
+
+    def test_native_operation_builds_request_logs_invokes_and_persists_record(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            broker = root / "broker"
+            config = root / "config.json"
+            requests_dir = root / "requests"
+            artifact = root / "artifact"
+            mutation_log = root / "mutation.jsonl"
+
+            i1 = mock.Mock()
+
+            request = {
+                "requestId": "request-1",
+                "operation": "delegate",
+            }
+            i1.make_request.return_value = request
+            i1.exact_broker_command.return_value = (
+                "exact-broker-command"
+            )
+
+            native = mock.Mock()
+            native.invoke.return_value = {
+                "verdict": "pass",
+                "broker": {
+                    "state": "delegated",
+                },
+            }
+
+            with mock.patch.object(
+                F1,
+                "append_jsonl",
+            ) as append_mock:
+                with mock.patch.object(
+                    F1,
+                    "atomic_json",
+                ) as atomic_mock:
+                    record, command = (
+                        F1.native_operation(
+                            i1,
+                            native=native,
+                            broker=broker,
+                            config=config,
+                            requests_dir=requests_dir,
+                            artifact=artifact,
+                            mutation_log=mutation_log,
+                            run_id="run-1",
+                            team="team-1",
+                            generation=9,
+                            operation="delegate",
+                            request_id="request-1",
+                            inputMessageId="input-1",
+                            worker=F1.WORKER,
+                        )
+                    )
+
+            i1.make_request.assert_called_once_with(
+                "run-1",
+                "request-1",
+                "delegate",
+                "team-1",
+                9,
+                inputMessageId="input-1",
+                worker=F1.WORKER,
+            )
+
+            request_path = (
+                requests_dir
+                / "delegate.json"
+            )
+
+            i1.write_request.assert_called_once_with(
+                request_path,
+                request,
+            )
+
+            i1.exact_broker_command.assert_called_once_with(
+                broker,
+                config,
+                "delegate",
+                request_path,
+            )
+
+            append_mock.assert_called_once_with(
+                mutation_log,
+                {
+                    "kind": "native-broker",
+                    "operation": "delegate",
+                    "argv": [
+                        "exact-broker-command"
+                    ],
+                    "team": "team-1",
+                    "target": str(
+                        request_path
+                    ),
+                },
+            )
+
+            native.invoke.assert_called_once_with(
+                "exact-broker-command",
+                artifact / "delegate",
+            )
+
+            self.assertEqual(
+                record["runId"],
+                "run-1",
+            )
+            self.assertEqual(
+                command,
+                "exact-broker-command",
+            )
+
+            atomic_mock.assert_called_once_with(
+                artifact
+                / "delegate"
+                / "native.json",
+                record,
+            )
+
+    def test_run_case_builds_team_run_request_and_prepares_case(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            paths = self.make_paths(
+                Path(temp)
+            )
+            i1, native = self.make_i1()
+
+            with self.run_case_harness(
+                paths=paths,
+                i1=i1,
+            ) as harness:
+                result = self.call_run_case(
+                    i1,
+                    paths,
+                    label=F1.CASE_CONTROL,
+                )
+
+            expected_run_id = (
+                f"{self.BASE_RUN_ID}"
+                "-F1-control"
+            )
+            expected_request_id = (
+                "f1-control-"
+                + hashlib.sha256(
+                    expected_run_id.encode(
+                        "utf-8"
+                    )
+                ).hexdigest()[:16]
+            )
+
+            harness[
+                "safe_case_team"
+            ].assert_called_once_with(
+                self.BASE_TEAM,
+                self.BASE_RUN_ID,
+                F1.CASE_CONTROL,
+            )
+
+            harness[
+                "prepare_case_team"
+            ].assert_called_once_with(
+                i1,
+                gate_repo=paths[
+                    "gate_repo"
+                ],
+                team=self.CASE_TEAM,
+                env={"PATH": "/bin"},
+                mutation_log=paths[
+                    "mutation_log"
+                ],
+                label=F1.CASE_CONTROL,
+            )
+
+            self.assertEqual(
+                result["runId"],
+                expected_run_id,
+            )
+            self.assertEqual(
+                result["requestId"],
+                expected_request_id,
+            )
+            self.assertEqual(
+                result["team"],
+                self.CASE_TEAM,
+            )
+
+            i1.provider_call.assert_called_once()
+
+            provider_argv = (
+                i1.provider_call.call_args.args[
+                    1
+                ]
+            )
+
+            self.assertEqual(
+                provider_argv[:5],
+                [
+                    "message-send",
+                    self.CASE_TEAM,
+                    F1.SENDER,
+                    F1.PILOT_AGENT,
+                    f"seed-{expected_request_id}",
+                ],
+            )
+
+            seed_body = json.loads(
+                provider_argv[5]
+            )
+
+            self.assertEqual(
+                seed_body,
+                {
+                    "schemaVersion": 1,
+                    "kind": "f1-input",
+                    "runId":
+                        expected_run_id,
+                    "case":
+                        F1.CASE_CONTROL,
+                },
+            )
+
+            native.stop.assert_called_once()
+
+    def test_run_case_seed_failure_raises_before_native_is_created(
+        self,
+    ):
+        cases = (
+            {
+                "state": "error",
+                "messageId": self.INPUT_ID,
+            },
+            {
+                "state": "queued",
+                "messageId": "",
+            },
+            {
+                "state": "queued",
+                "messageId": 123,
+            },
+        )
+
+        for seed in cases:
+            with self.subTest(
+                seed=seed
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    paths = self.make_paths(
+                        Path(temp)
+                    )
+                    i1, native = self.make_i1(
+                        seed=seed
+                    )
+
+                    with self.run_case_harness(
+                        paths=paths,
+                        i1=i1,
+                    ):
+                        with self.assertRaisesRegex(
+                            RuntimeError,
+                            (
+                                "F1 control "
+                                "seed failed"
+                            ),
+                        ):
+                            self.call_run_case(
+                                i1,
+                                paths,
+                                label=(
+                                    F1.CASE_CONTROL
+                                ),
+                            )
+
+                    i1.NativePilot.assert_not_called()
+                    native.stop.assert_not_called()
+
+    def test_receive_nonpass_returns_early_without_delegate_and_stops_native(
+        self,
+    ):
+        for receive_verdict in (
+            "fail",
+            "unknown",
+        ):
+            with self.subTest(
+                receive_verdict=receive_verdict
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    paths = self.make_paths(
+                        Path(temp)
+                    )
+                    i1, native = self.make_i1()
+
+                    receive_result = {
+                        "verdict":
+                            receive_verdict,
+                        "reason":
+                            "synthetic-receive",
+                    }
+
+                    with self.run_case_harness(
+                        paths=paths,
+                        i1=i1,
+                        receive_result=(
+                            receive_result
+                        ),
+                        native_operation_side_effect=[
+                            (
+                                {
+                                    "verdict": "pass",
+                                },
+                                "receive-command",
+                            )
+                        ],
+                    ) as harness:
+                        result = self.call_run_case(
+                            i1,
+                            paths,
+                            label=(
+                                F1.CASE_CONTROL
+                            ),
+                        )
+
+                    self.assertEqual(
+                        result[
+                            "schemaVersion"
+                        ],
+                        1,
+                    )
+                    self.assertEqual(
+                        result["case"],
+                        F1.CASE_CONTROL,
+                    )
+                    self.assertEqual(
+                        result["verdict"],
+                        receive_verdict,
+                    )
+                    self.assertEqual(
+                        result["reason"],
+                        (
+                            "receive_"
+                            "prerequisite_"
+                            "not_pass"
+                        ),
+                    )
+                    self.assertEqual(
+                        result["receive"],
+                        receive_result,
+                    )
+
+                    self.assertEqual(
+                        harness[
+                            "native_operation"
+                        ].call_count,
+                        1,
+                    )
+                    harness[
+                        "validate_successful_delegate"
+                    ].assert_not_called()
+                    harness[
+                        "validate_fault_delegate"
+                    ].assert_not_called()
+                    harness[
+                        "delegate_write_count"
+                    ].assert_not_called()
+                    native.stop.assert_called_once()
+
+    def test_fault_requires_provider_fault_after_receive_pass(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            paths = self.make_paths(
+                Path(temp)
+            )
+            i1, native = self.make_i1()
+
+            with self.run_case_harness(
+                paths=paths,
+                i1=i1,
+                native_operation_side_effect=[
+                    (
+                        {
+                            "verdict": "pass",
+                        },
+                        "receive-command",
+                    )
+                ],
+            ) as harness:
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    (
+                        "fault case missing "
+                        "ProviderFault"
+                    ),
+                ):
+                    self.call_run_case(
+                        i1,
+                        paths,
+                        label=F1.CASE_FAULT,
+                        provider_fault=None,
+                    )
+
+            self.assertEqual(
+                harness[
+                    "native_operation"
+                ].call_count,
+                1,
+            )
+            native.stop.assert_called_once()
+
+    def test_fault_inject_occurs_before_delegate_and_restore_after_delegate_before_validation(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            paths = self.make_paths(
+                Path(temp)
+            )
+            i1, native = self.make_i1()
+
+            events = []
+
+            provider_fault = mock.Mock()
+
+            provider_fault.inject.side_effect = (
+                lambda: events.append(
+                    "inject"
+                )
+            )
+            provider_fault.restore.side_effect = (
+                lambda: events.append(
+                    "restore"
+                )
+            )
+
+            def native_op(*args, **kwargs):
+                operation = kwargs[
+                    "operation"
+                ]
+
+                events.append(
+                    f"native:{operation}"
+                )
+
+                return (
+                    {
+                        "verdict": "pass",
+                        "broker": {},
+                    },
+                    f"{operation}-command",
+                )
+
+            def fault_validate(*args, **kwargs):
+                events.append(
+                    "validate-fault"
+                )
+                return self.default_delegate_result()
+
+            with self.run_case_harness(
+                paths=paths,
+                i1=i1,
+                native_operation_side_effect=native_op,
+                fault_delegate_side_effect=(
+                    fault_validate
+                ),
+                writes=0,
+            ) as harness:
+                result = self.call_run_case(
+                    i1,
+                    paths,
+                    label=F1.CASE_FAULT,
+                    provider_fault=provider_fault,
+                )
+
+            self.assertEqual(
+                events,
+                [
+                    "native:receive",
+                    "inject",
+                    "native:delegate",
+                    "restore",
+                    "validate-fault",
+                ],
+            )
+
+            provider_fault.inject.assert_called_once()
+            provider_fault.restore.assert_called_once()
+
+            harness[
+                "validate_fault_delegate"
+            ].assert_called_once()
+            harness[
+                "validate_successful_delegate"
+            ].assert_not_called()
+
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+            native.stop.assert_called_once()
+
+    def test_control_and_recovery_never_inject_and_use_success_delegate_validation(
+        self,
+    ):
+        for label in (
+            F1.CASE_CONTROL,
+            F1.CASE_RECOVERY,
+        ):
+            with self.subTest(
+                label=label
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    paths = self.make_paths(
+                        Path(temp)
+                    )
+                    i1, native = self.make_i1()
+                    provider_fault = mock.Mock()
+
+                    with self.run_case_harness(
+                        paths=paths,
+                        i1=i1,
+                        writes=1,
+                    ) as harness:
+                        result = self.call_run_case(
+                            i1,
+                            paths,
+                            label=label,
+                            provider_fault=(
+                                provider_fault
+                            ),
+                        )
+
+                    provider_fault.inject.assert_not_called()
+                    provider_fault.restore.assert_not_called()
+
+                    harness[
+                        "validate_successful_delegate"
+                    ].assert_called_once()
+                    harness[
+                        "validate_fault_delegate"
+                    ].assert_not_called()
+
+                    self.assertEqual(
+                        result["verdict"],
+                        "pass",
+                    )
+                    native.stop.assert_called_once()
+
+    def test_control_checks_include_common_and_success_specific_assertions(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            paths = self.make_paths(
+                Path(temp)
+            )
+            i1, native = self.make_i1()
+
+            with self.run_case_harness(
+                paths=paths,
+                i1=i1,
+                writes=1,
+                transcript_count=1,
+            ):
+                result = self.call_run_case(
+                    i1,
+                    paths,
+                    label=F1.CASE_CONTROL,
+                )
+
+            checks = {
+                item["name"]:
+                    item
+                for item
+                in result["checks"]
+            }
+
+            self.assertEqual(
+                set(checks),
+                {
+                    "receive-pass",
+                    (
+                        "delegate-native-command-"
+                        "exactly-once"
+                    ),
+                    "delegate-pass",
+                    (
+                        "persistent-delegate-"
+                        "write-count"
+                    ),
+                },
+            )
+
+            self.assertTrue(
+                all(
+                    item["verdict"] == "pass"
+                    for item in checks.values()
+                )
+            )
+
+            native.stop.assert_called_once()
+
+    def test_fault_checks_include_common_and_fault_specific_assertions(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            paths = self.make_paths(
+                Path(temp)
+            )
+            i1, native = self.make_i1()
+            provider_fault = mock.Mock()
+
+            with self.run_case_harness(
+                paths=paths,
+                i1=i1,
+                writes=0,
+                transcript_count=1,
+            ):
+                result = self.call_run_case(
+                    i1,
+                    paths,
+                    label=F1.CASE_FAULT,
+                    provider_fault=provider_fault,
+                )
+
+            checks = {
+                item["name"]:
+                    item
+                for item
+                in result["checks"]
+            }
+
+            self.assertEqual(
+                set(checks),
+                {
+                    "receive-pass",
+                    (
+                        "delegate-native-command-"
+                        "exactly-once"
+                    ),
+                    (
+                        "delegate-stopped-on-"
+                        "backend-failure"
+                    ),
+                    (
+                        "persistent-fault-request-"
+                        "write-count"
+                    ),
+                    (
+                        "provider-restored-"
+                        "before-case-exit"
+                    ),
+                },
+            )
+
+            self.assertTrue(
+                all(
+                    item["verdict"] == "pass"
+                    for item in checks.values()
+                )
+            )
+
+            native.stop.assert_called_once()
+
+    def test_transcript_count_none_makes_exact_native_command_unknown(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            paths = self.make_paths(
+                Path(temp)
+            )
+            i1, native = self.make_i1()
+
+            with self.run_case_harness(
+                paths=paths,
+                i1=i1,
+                transcript_count=None,
+            ):
+                result = self.call_run_case(
+                    i1,
+                    paths,
+                    label=F1.CASE_CONTROL,
+                )
+
+            check = next(
+                item
+                for item
+                in result["checks"]
+                if item["name"]
+                == (
+                    "delegate-native-command-"
+                    "exactly-once"
+                )
+            )
+
+            self.assertEqual(
+                check["verdict"],
+                "unknown",
+            )
+            self.assertEqual(
+                result["verdict"],
+                "unknown",
+            )
+            native.stop.assert_called_once()
+
+    def test_wrong_persistent_write_count_fails_for_control_and_fault(
+        self,
+    ):
+        cases = (
+            (
+                F1.CASE_CONTROL,
+                0,
+                None,
+                (
+                    "persistent-delegate-"
+                    "write-count"
+                ),
+            ),
+            (
+                F1.CASE_FAULT,
+                1,
+                mock.Mock(),
+                (
+                    "persistent-fault-request-"
+                    "write-count"
+                ),
+            ),
+        )
+
+        for (
+            label,
+            writes,
+            provider_fault,
+            check_name,
+        ) in cases:
+            with self.subTest(
+                label=label
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    paths = self.make_paths(
+                        Path(temp)
+                    )
+                    i1, native = self.make_i1()
+
+                    with self.run_case_harness(
+                        paths=paths,
+                        i1=i1,
+                        writes=writes,
+                    ):
+                        result = self.call_run_case(
+                            i1,
+                            paths,
+                            label=label,
+                            provider_fault=(
+                                provider_fault
+                            ),
+                        )
+
+                    check = next(
+                        item
+                        for item
+                        in result["checks"]
+                        if item["name"]
+                        == check_name
+                    )
+
+                    self.assertEqual(
+                        check["verdict"],
+                        "fail",
+                    )
+                    self.assertEqual(
+                        result["verdict"],
+                        "fail",
+                    )
+                    native.stop.assert_called_once()
+
+    def test_fault_exception_after_inject_retries_restore_in_finally_and_stops_native(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            paths = self.make_paths(
+                Path(temp)
+            )
+            i1, native = self.make_i1()
+            provider_fault = mock.Mock()
+
+            native_calls = 0
+
+            def native_op(*args, **kwargs):
+                nonlocal native_calls
+                native_calls += 1
+
+                if native_calls == 1:
+                    return (
+                        {
+                            "verdict": "pass",
+                        },
+                        "receive-command",
+                    )
+
+                raise RuntimeError(
+                    "delegate exploded"
+                )
+
+            with self.run_case_harness(
+                paths=paths,
+                i1=i1,
+                native_operation_side_effect=native_op,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "delegate exploded",
+                ):
+                    self.call_run_case(
+                        i1,
+                        paths,
+                        label=F1.CASE_FAULT,
+                        provider_fault=provider_fault,
+                    )
+
+            provider_fault.inject.assert_called_once()
+            provider_fault.restore.assert_called_once()
+            native.stop.assert_called_once()
+
+    def test_fault_restore_failure_in_finally_writes_restore_error_and_preserves_original_exception(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            paths = self.make_paths(
+                Path(temp)
+            )
+            i1, native = self.make_i1()
+            provider_fault = mock.Mock()
+
+            provider_fault.restore.side_effect = (
+                RuntimeError(
+                    "restore also failed"
+                )
+            )
+
+            native_calls = 0
+
+            def native_op(*args, **kwargs):
+                nonlocal native_calls
+                native_calls += 1
+
+                if native_calls == 1:
+                    return (
+                        {
+                            "verdict": "pass",
+                        },
+                        "receive-command",
+                    )
+
+                raise ValueError(
+                    "delegate original failure"
+                )
+
+            with self.run_case_harness(
+                paths=paths,
+                i1=i1,
+                native_operation_side_effect=native_op,
+            ):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "delegate original failure",
+                ):
+                    self.call_run_case(
+                        i1,
+                        paths,
+                        label=F1.CASE_FAULT,
+                        provider_fault=provider_fault,
+                    )
+
+            provider_fault.inject.assert_called_once()
+            provider_fault.restore.assert_called_once()
+            native.stop.assert_called_once()
+
+            restore_error = F1.read_json(
+                paths[
+                    "artifact_root"
+                ]
+                / F1.CASE_FAULT
+                / "restore-error.json"
+            )
+
+            self.assertEqual(
+                restore_error[
+                    "schemaVersion"
+                ],
+                1,
+            )
+            self.assertEqual(
+                restore_error["verdict"],
+                "unknown",
+            )
+            self.assertEqual(
+                restore_error["reason"],
+                (
+                    "provider_restore_failed:"
+                    "RuntimeError:"
+                    "restore also failed"
+                ),
+            )
+
+    def test_fault_immediate_restore_failure_is_retried_by_finally(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            paths = self.make_paths(
+                Path(temp)
+            )
+            i1, native = self.make_i1()
+            provider_fault = mock.Mock()
+
+            provider_fault.restore.side_effect = [
+                RuntimeError(
+                    "first restore failed"
+                ),
+                None,
+            ]
+
+            with self.run_case_harness(
+                paths=paths,
+                i1=i1,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "first restore failed",
+                ):
+                    self.call_run_case(
+                        i1,
+                        paths,
+                        label=F1.CASE_FAULT,
+                        provider_fault=provider_fault,
+                    )
+
+            self.assertEqual(
+                provider_fault.restore.call_count,
+                2,
+            )
+            native.stop.assert_called_once()
+
+    def test_final_result_contains_all_required_fields(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            paths = self.make_paths(
+                Path(temp)
+            )
+            i1, native = self.make_i1()
+
+            with self.run_case_harness(
+                paths=paths,
+                i1=i1,
+                writes=1,
+                transcript_count=1,
+            ):
+                result = self.call_run_case(
+                    i1,
+                    paths,
+                    label=F1.CASE_CONTROL,
+                    timeout_seconds=9.0,
+                )
+
+            expected_run_id = (
+                f"{self.BASE_RUN_ID}"
+                "-F1-control"
+            )
+            expected_request_id = (
+                "f1-control-"
+                + hashlib.sha256(
+                    expected_run_id.encode(
+                        "utf-8"
+                    )
+                ).hexdigest()[:16]
+            )
+
+            expected_keys = {
+                "schemaVersion",
+                "case",
+                "runId",
+                "requestId",
+                "team",
+                "sessionId",
+                "generation",
+                "binding",
+                "inputMessageId",
+                "delegateCommand",
+                "persistentDelegateWriteCount",
+                "delegateNativeToolUseCount",
+                "receive",
+                "delegate",
+                "checks",
+                "verdict",
+            }
+
+            self.assertEqual(
+                set(result),
+                expected_keys,
+            )
+
+            self.assertEqual(
+                result["schemaVersion"],
+                1,
+            )
+            self.assertEqual(
+                result["case"],
+                F1.CASE_CONTROL,
+            )
+            self.assertEqual(
+                result["runId"],
+                expected_run_id,
+            )
+            self.assertEqual(
+                result["requestId"],
+                expected_request_id,
+            )
+            self.assertEqual(
+                result["team"],
+                self.CASE_TEAM,
+            )
+            self.assertEqual(
+                result["sessionId"],
+                self.SESSION_ID,
+            )
+            self.assertEqual(
+                result["generation"],
+                str(self.GENERATION),
+            )
+            self.assertEqual(
+                result["binding"],
+                str(native.binding),
+            )
+            self.assertEqual(
+                result["inputMessageId"],
+                self.INPUT_ID,
+            )
+            self.assertEqual(
+                result["delegateCommand"],
+                "delegate-command",
+            )
+            self.assertEqual(
+                result[
+                    "persistentDelegateWriteCount"
+                ],
+                1,
+            )
+            self.assertEqual(
+                result[
+                    "delegateNativeToolUseCount"
+                ],
+                1,
+            )
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+
+            result_path = (
+                paths["artifact_root"]
+                / F1.CASE_CONTROL
+                / "result.json"
+            )
+
+            self.assertEqual(
+                F1.read_json(
+                    result_path
+                ),
+                result,
+            )
+
+    def test_native_constructor_and_start_receive_expected_case_context(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            paths = self.make_paths(
+                Path(temp)
+            )
+            i1, native = self.make_i1()
+
+            with self.run_case_harness(
+                paths=paths,
+                i1=i1,
+            ):
+                self.call_run_case(
+                    i1,
+                    paths,
+                    label=F1.CASE_CONTROL,
+                    timeout_seconds=13.0,
+                )
+
+            launcher = (
+                paths["gate_repo"]
+                / "scripts"
+                / "pilot-launcher.sh"
+            )
+
+            i1.NativePilot.assert_called_once_with(
+                launcher,
+                paths["gate_repo"],
+                self.CASE_TEAM,
+                paths["claude_config"],
+                (
+                    paths["artifact_root"]
+                    / F1.CASE_CONTROL
+                    / "native"
+                ),
+                {"PATH": "/bin"},
+                13.0,
+            )
+
+            native.start.assert_called_once()
+            native.stop.assert_called_once()
+
 if __name__ == "__main__":
     unittest.main()
