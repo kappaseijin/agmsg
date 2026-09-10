@@ -4337,6 +4337,1867 @@ class PilotGateI1RoundCValidation(unittest.TestCase):
                 )
             )
 
+class PilotGateI1RoundDRunI1(unittest.TestCase):
+    RUN_ID = "round-d-run"
+    GATE_TEAM = "agmsg-g4gate-round-d"
+    SESSION_ID = "123e4567-e89b-42d3-a456-426614174000"
+    GENERATION = 7
+    INPUT_ID = "input-message-1"
+    DELEGATE_ID = "delegate-message-1"
+    INPUT_RECEIPT = "input-receipt-1"
+    RESULT_ID = "result-message-1"
+    RESULT_RECEIPT = "result-receipt-1"
+
+    def make_args(
+        self,
+        root: Path,
+        *,
+        live_identity_json: str | None = None,
+    ):
+        root = root.resolve()
+        run_root = root / "run-root"
+        gate_repo = run_root / "repo"
+        artifact_dir = root / "artifacts"
+        claude_config = run_root / "claude"
+
+        gate_repo.mkdir(parents=True, exist_ok=True)
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        claude_config.mkdir(parents=True, exist_ok=True)
+
+        return I1.argparse.Namespace(
+            run_id=self.RUN_ID,
+            run_root=str(run_root),
+            gate_repo=str(gate_repo),
+            artifact_dir=str(artifact_dir),
+            gate_team=self.GATE_TEAM,
+            claude_config=str(claude_config),
+            timeout_seconds=12,
+            live_identity_json=live_identity_json,
+        )
+
+    def common_broker(
+        self,
+        *,
+        operation: str,
+        request_id: str,
+        **extra,
+    ) -> dict[str, object]:
+        value = {
+            "schemaVersion": 1,
+            "runId": self.RUN_ID,
+            "requestId": request_id,
+            "operation": operation,
+            "team": self.GATE_TEAM,
+            "actor": I1.PILOT_AGENT,
+            "generation": str(self.GENERATION),
+        }
+        value.update(extra)
+        return value
+
+    def default_native_results(
+        self,
+    ) -> dict[str, dict[str, object]]:
+        owner = (
+            f"p2:{self.SESSION_ID}:"
+            f"{self.GENERATION}:{self.RUN_ID}"
+        )
+
+        return {
+            "receive": {
+                "verdict": "pass",
+                "broker": self.common_broker(
+                    operation="receive",
+                    request_id=f"receive-{self.RUN_ID}",
+                    state="claimed",
+                    inputMessageId=self.INPUT_ID,
+                    owner=owner,
+                ),
+            },
+            "delegate": {
+                "verdict": "pass",
+                "broker": self.common_broker(
+                    operation="delegate",
+                    request_id=f"delegate-{self.RUN_ID}",
+                    state="delegated",
+                    deliveryState="queued",
+                    worker=I1.WORKER,
+                    inputMessageId=self.INPUT_ID,
+                    delegateMessageId=self.DELEGATE_ID,
+                    inputReceiptId=self.INPUT_RECEIPT,
+                ),
+            },
+            "collect-result": {
+                "verdict": "pass",
+                "broker": self.common_broker(
+                    operation="collect-result",
+                    request_id=f"delegate-{self.RUN_ID}",
+                    state="result_claimed",
+                    delegateMessageId=self.DELEGATE_ID,
+                    resultMessageId=self.RESULT_ID,
+                    owner=owner,
+                    resultReceiptId=self.RESULT_RECEIPT,
+                    result="isolated worker result",
+                ),
+            },
+            "issue-record": {
+                "verdict": "pass",
+                "broker": self.common_broker(
+                    operation="issue-record",
+                    request_id=f"delegate-{self.RUN_ID}",
+                    state="acked",
+                    inputMessageId=self.INPUT_ID,
+                    delegateMessageId=self.DELEGATE_ID,
+                    resultMessageId=self.RESULT_ID,
+                    issueNumber=I1.ISSUE_NUMBER,
+                ),
+            },
+            "observe-owner": {
+                "verdict": "pass",
+                "broker": self.common_broker(
+                    operation="observe-owner",
+                    request_id=f"observe-{self.RUN_ID}",
+                    state="observed",
+                    ownerStatus="owned",
+                ),
+            },
+        }
+
+    def make_native(
+        self,
+        args,
+        native_results=None,
+    ):
+        gate_repo = Path(
+            args.gate_repo
+        ).resolve()
+
+        binding = (
+            gate_repo
+            / "run"
+            / "pilot"
+            / f"{self.GATE_TEAM}__{I1.PILOT_AGENT}"
+            / "bindings"
+            / f"{self.GENERATION}.json"
+        )
+
+        binding.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        binding.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "team": self.GATE_TEAM,
+                    "agent": I1.PILOT_AGENT,
+                    "project": str(gate_repo),
+                    "sessionId": self.SESSION_ID,
+                    "generation": self.GENERATION,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        native = mock.Mock()
+        native.session_id = self.SESSION_ID
+        native.generation = self.GENERATION
+        native.binding = binding
+        native.start = mock.Mock()
+        native.stop = mock.Mock()
+
+        results = (
+            native_results
+            if native_results is not None
+            else self.default_native_results()
+        )
+
+        def invoke(
+            command,
+            operation_dir,
+        ):
+            value = results.get(
+                str(command),
+                {
+                    "verdict": "unknown",
+                    "reason": "fixture-operation-missing",
+                },
+            )
+
+            return json.loads(
+                json.dumps(value)
+            )
+
+        native.invoke = mock.Mock(
+            side_effect=invoke
+        )
+
+        return native
+
+    def default_provider_side_effect(
+        self,
+        provider,
+        argv,
+        gate_repo,
+        env,
+        mutation_log=None,
+        mutating=False,
+    ):
+        if argv[0] == "message-send":
+            if argv[2] == I1.SENDER:
+                return {
+                    "state": "queued",
+                    "messageId": self.INPUT_ID,
+                }
+
+            if argv[2] == I1.WORKER:
+                return {
+                    "state": "queued",
+                    "messageId": self.RESULT_ID,
+                }
+
+        if argv[0] == "message-peek":
+            return {
+                "state": "ok",
+                "messageId": self.DELEGATE_ID,
+                "from": I1.PILOT_AGENT,
+                "to": I1.WORKER,
+                "body": json.dumps(
+                    {
+                        "requestId":
+                            f"delegate-{self.RUN_ID}",
+                        "inputMessageId":
+                            self.INPUT_ID,
+                    },
+                    separators=(",", ":"),
+                ),
+            }
+
+        raise AssertionError(
+            f"unexpected provider call: {argv}"
+        )
+
+    @contextlib.contextmanager
+    def harness(
+        self,
+        args,
+        *,
+        native=None,
+        native_results=None,
+        provider_side_effect=None,
+        identity=None,
+        gh_checks=None,
+        receipt_side_effect=None,
+        storage_side_effect=None,
+        digest_side_effect=None,
+    ):
+        if native is None:
+            native = self.make_native(
+                args,
+                native_results,
+            )
+
+        if identity is None:
+            identity = {
+                "schemaVersion": 1,
+                "verdict": "pass",
+                "checks": [],
+            }
+
+        if gh_checks is None:
+            gh_checks = [
+                I1.assertion(
+                    "pseudo-gh",
+                    True,
+                    None,
+                )
+            ]
+
+        writes = {}
+
+        def capture_atomic(
+            path,
+            value,
+        ):
+            writes[str(Path(path))] = (
+                json.loads(
+                    json.dumps(value)
+                )
+            )
+
+        iso = mock.Mock()
+        iso.canonical.side_effect = (
+            lambda value:
+                str(
+                    Path(value).resolve()
+                )
+        )
+
+        if digest_side_effect is None:
+            iso.sha256_file.return_value = (
+                "same-digest"
+            )
+        else:
+            iso.sha256_file.side_effect = (
+                digest_side_effect
+            )
+
+        if provider_side_effect is None:
+            provider_side_effect = (
+                self.default_provider_side_effect
+            )
+
+        if receipt_side_effect is None:
+            receipt_side_effect = (
+                lambda *unused: 1
+            )
+
+        stack = contextlib.ExitStack()
+
+        patches = {
+            "load_iso":
+                stack.enter_context(
+                    mock.patch.object(
+                        I1,
+                        "load_iso",
+                        return_value=iso,
+                    )
+                ),
+            "require_regular_executable":
+                stack.enter_context(
+                    mock.patch.object(
+                        I1,
+                        "require_regular_executable",
+                    )
+                ),
+            "copyfile":
+                stack.enter_context(
+                    mock.patch.object(
+                        I1.shutil,
+                        "copyfile",
+                    )
+                ),
+            "chmod":
+                stack.enter_context(
+                    mock.patch.object(
+                        I1.os,
+                        "chmod",
+                    )
+                ),
+            "register_fixture_member":
+                stack.enter_context(
+                    mock.patch.object(
+                        I1,
+                        "register_fixture_member",
+                    )
+                ),
+            "provider_call":
+                stack.enter_context(
+                    mock.patch.object(
+                        I1,
+                        "provider_call",
+                        side_effect=(
+                            provider_side_effect
+                        ),
+                    )
+                ),
+            "NativePilot":
+                stack.enter_context(
+                    mock.patch.object(
+                        I1,
+                        "NativePilot",
+                        return_value=native,
+                    )
+                ),
+            "make_request":
+                stack.enter_context(
+                    mock.patch.object(
+                        I1,
+                        "make_request",
+                        wraps=I1.make_request,
+                    )
+                ),
+            "exact_broker_command":
+                stack.enter_context(
+                    mock.patch.object(
+                        I1,
+                        "exact_broker_command",
+                        side_effect=(
+                            lambda broker,
+                            config,
+                            operation,
+                            request:
+                                operation
+                        ),
+                    )
+                ),
+            "write_request":
+                stack.enter_context(
+                    mock.patch.object(
+                        I1,
+                        "write_request",
+                    )
+                ),
+            "append_jsonl":
+                stack.enter_context(
+                    mock.patch.object(
+                        I1,
+                        "append_jsonl",
+                    )
+                ),
+            "expected_common":
+                stack.enter_context(
+                    mock.patch.object(
+                        I1,
+                        "expected_common",
+                        wraps=I1.expected_common,
+                    )
+                ),
+            "classify_broker_state":
+                stack.enter_context(
+                    mock.patch.object(
+                        I1,
+                        "classify_broker_state",
+                        wraps=(
+                            I1.classify_broker_state
+                        ),
+                    )
+                ),
+            "validate_gh_store":
+                stack.enter_context(
+                    mock.patch.object(
+                        I1,
+                        "validate_gh_store",
+                        return_value=gh_checks,
+                    )
+                ),
+            "storage_db":
+                stack.enter_context(
+                    mock.patch.object(
+                        I1,
+                        "storage_db",
+                        side_effect=(
+                            storage_side_effect
+                        ),
+                        return_value=(
+                            Path(
+                                args.gate_repo
+                            )
+                            / "db"
+                            / "messages.db"
+                        ),
+                    )
+                ),
+            "receipt_count":
+                stack.enter_context(
+                    mock.patch.object(
+                        I1,
+                        "receipt_count",
+                        side_effect=(
+                            receipt_side_effect
+                        ),
+                    )
+                ),
+            "validate_identity":
+                stack.enter_context(
+                    mock.patch.object(
+                        I1,
+                        "validate_identity",
+                        return_value=identity,
+                    )
+                ),
+            "atomic_json":
+                stack.enter_context(
+                    mock.patch.object(
+                        I1,
+                        "atomic_json",
+                        side_effect=capture_atomic,
+                    )
+                ),
+        }
+
+        try:
+            yield {
+                "iso": iso,
+                "native": native,
+                "writes": writes,
+                **patches,
+            }
+        finally:
+            stack.close()
+
+    def written(
+        self,
+        harness,
+        path: Path,
+    ):
+        return harness["writes"][
+            str(path)
+        ]
+
+    def final_result(
+        self,
+        args,
+        harness,
+    ):
+        return self.written(
+            harness,
+            (
+                Path(
+                    args.artifact_dir
+                ).resolve()
+                / "I1"
+                / "result.json"
+            ),
+        )
+
+    def operation_result(
+        self,
+        args,
+        harness,
+        operation: str,
+    ):
+        return self.written(
+            harness,
+            (
+                Path(
+                    args.artifact_dir
+                ).resolve()
+                / "I1"
+                / operation
+                / "result.json"
+            ),
+        )
+
+    def test_setup_validates_four_executables_copies_gh_registers_members_and_builds_isolated_env(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            args = self.make_args(root)
+            native = self.make_native(args)
+
+            with self.harness(
+                args,
+                native=native,
+            ) as harness:
+                status = I1.run_i1(args)
+
+            self.assertEqual(
+                status,
+                0,
+            )
+
+            gate_repo = Path(
+                args.gate_repo
+            ).resolve()
+            script_dir = Path(
+                I1.__file__
+            ).resolve().parent
+
+            expected_paths = [
+                gate_repo
+                / "scripts"
+                / "pilot-launcher.sh",
+                gate_repo
+                / "scripts"
+                / "p2-provider.sh",
+                gate_repo
+                / "scripts"
+                / "p2-consumer-broker.sh",
+                script_dir
+                / "pilot-gate-gh.py",
+            ]
+
+            self.assertEqual(
+                harness[
+                    "require_regular_executable"
+                ].call_args_list,
+                [
+                    mock.call(path)
+                    for path in expected_paths
+                ],
+            )
+
+            gh_bin = (
+                Path(
+                    args.run_root
+                ).resolve()
+                / "i1-bin"
+                / "gh"
+            )
+
+            harness[
+                "copyfile"
+            ].assert_called_once_with(
+                expected_paths[3],
+                gh_bin,
+            )
+
+            harness[
+                "chmod"
+            ].assert_called_once_with(
+                gh_bin,
+                0o700,
+            )
+
+            self.assertEqual(
+                harness[
+                    "iso"
+                ].sha256_file.call_args_list,
+                [
+                    mock.call(
+                        expected_paths[3]
+                    ),
+                    mock.call(
+                        gh_bin
+                    ),
+                ],
+            )
+
+            worker_project = (
+                gate_repo
+                / ".agmsg-gate"
+                / "i1-worker"
+            )
+            sender_project = (
+                gate_repo
+                / ".agmsg-gate"
+                / "i1-sender"
+            )
+
+            register_calls = harness[
+                "register_fixture_member"
+            ].call_args_list
+
+            self.assertEqual(
+                len(register_calls),
+                2,
+            )
+
+            self.assertEqual(
+                register_calls[0].args[:5],
+                (
+                    gate_repo,
+                    self.GATE_TEAM,
+                    I1.WORKER,
+                    worker_project,
+                    "worker",
+                ),
+            )
+
+            self.assertEqual(
+                register_calls[1].args[:5],
+                (
+                    gate_repo,
+                    self.GATE_TEAM,
+                    I1.SENDER,
+                    sender_project,
+                    "sender",
+                ),
+            )
+
+            native_ctor = harness[
+                "NativePilot"
+            ].call_args
+
+            native_env = native_ctor.args[5]
+
+            self.assertTrue(
+                native_env["PATH"].startswith(
+                    str(
+                        Path(
+                            args.run_root
+                        ).resolve()
+                        / "i1-bin"
+                    )
+                    + os.pathsep
+                )
+            )
+            self.assertEqual(
+                native_env[
+                    "AGMSG_GATE_GH_STORE"
+                ],
+                str(
+                    Path(
+                        args.run_root
+                    ).resolve()
+                    / "gh-store"
+                ),
+            )
+            self.assertEqual(
+                native_env[
+                    "AGMSG_GATE_GH_LOG"
+                ],
+                str(
+                    Path(
+                        args.artifact_dir
+                    ).resolve()
+                    / "I1"
+                    / "gh-invocations.jsonl"
+                ),
+            )
+            self.assertEqual(
+                native_env[
+                    "AGMSG_GATE_GH_REPO"
+                ],
+                I1.ISSUE_REPO,
+            )
+            self.assertEqual(
+                native_env[
+                    "AGMSG_GATE_GH_ISSUE"
+                ],
+                str(
+                    I1.ISSUE_NUMBER
+                ),
+            )
+            self.assertEqual(
+                native_env[
+                    "AGMSG_GATE_GH_BODY_ROOT"
+                ],
+                str(
+                    gate_repo
+                    / "run"
+                    / "pilot"
+                ),
+            )
+
+    def test_gh_digest_mismatch_raises_before_registration_or_native_start(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            args = self.make_args(root)
+            native = self.make_native(args)
+
+            with self.harness(
+                args,
+                native=native,
+                digest_side_effect=[
+                    "source-digest",
+                    "different-copy-digest",
+                ],
+            ) as harness:
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    (
+                        "isolated gh copy "
+                        "digest mismatch"
+                    ),
+                ):
+                    I1.run_i1(args)
+
+            harness[
+                "register_fixture_member"
+            ].assert_not_called()
+            harness[
+                "NativePilot"
+            ].assert_not_called()
+            native.start.assert_not_called()
+            native.stop.assert_not_called()
+
+    def test_seed_failure_raises_before_native_construction_so_finally_cannot_stop_native(
+        self,
+    ):
+        cases = (
+            {
+                "state": "error",
+                "messageId": self.INPUT_ID,
+            },
+            {
+                "state": "queued",
+                "messageId": "",
+            },
+            {
+                "state": "queued",
+                "messageId": 123,
+            },
+        )
+
+        for seed in cases:
+            with self.subTest(seed=seed):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp).resolve()
+                    args = self.make_args(root)
+                    native = self.make_native(args)
+
+                    def provider(
+                        provider_path,
+                        argv,
+                        gate_repo,
+                        env,
+                        mutation_log=None,
+                        mutating=False,
+                    ):
+                        return seed
+
+                    with self.harness(
+                        args,
+                        native=native,
+                        provider_side_effect=provider,
+                    ) as harness:
+                        with self.assertRaisesRegex(
+                            RuntimeError,
+                            "I1 input seed failed",
+                        ):
+                            I1.run_i1(args)
+
+                    harness[
+                        "NativePilot"
+                    ].assert_not_called()
+                    native.stop.assert_not_called()
+
+    def test_receive_pass_validates_claim_input_and_owner(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            args = self.make_args(root)
+
+            with self.harness(
+                args
+            ) as harness:
+                status = I1.run_i1(args)
+
+            self.assertEqual(
+                status,
+                0,
+            )
+
+            receive = self.operation_result(
+                args,
+                harness,
+                "receive",
+            )
+
+            self.assertEqual(
+                receive["verdict"],
+                "pass",
+            )
+
+            checks = {
+                item["name"]:
+                    item
+                for item
+                in receive["checks"]
+            }
+
+            for name in (
+                "state",
+                "inputMessageId",
+                "owner",
+            ):
+                self.assertEqual(
+                    checks[name]["verdict"],
+                    "pass",
+                )
+
+    def test_receive_nonpass_stops_dependent_chain_but_observe_owner_still_runs(
+        self,
+    ):
+        for receive_verdict in (
+            "fail",
+            "unknown",
+        ):
+            with self.subTest(
+                receive_verdict=receive_verdict
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp).resolve()
+                    args = self.make_args(root)
+
+                    native_results = (
+                        self.default_native_results()
+                    )
+                    native_results[
+                        "receive"
+                    ] = {
+                        "verdict":
+                            receive_verdict,
+                        "reason":
+                            "synthetic-receive",
+                    }
+
+                    native = self.make_native(
+                        args,
+                        native_results,
+                    )
+
+                    with self.harness(
+                        args,
+                        native=native,
+                    ) as harness:
+                        status = I1.run_i1(
+                            args
+                        )
+
+                    expected_status = (
+                        1
+                        if receive_verdict
+                        == "fail"
+                        else 2
+                    )
+
+                    self.assertEqual(
+                        status,
+                        expected_status,
+                    )
+
+                    for operation in (
+                        "delegate",
+                        "collect-result",
+                        "issue-record",
+                    ):
+                        self.assertEqual(
+                            self.operation_result(
+                                args,
+                                harness,
+                                operation,
+                            ),
+                            {
+                                "verdict":
+                                    "unknown",
+                                "reason":
+                                    (
+                                        "receive_"
+                                        "prerequisite_"
+                                        "not_pass"
+                                    ),
+                            },
+                        )
+
+                    invoked = [
+                        call.args[0]
+                        for call
+                        in native.invoke.call_args_list
+                    ]
+
+                    self.assertEqual(
+                        invoked,
+                        [
+                            "receive",
+                            "observe-owner",
+                        ],
+                    )
+
+    def test_delegate_nonpass_or_missing_delegate_id_blocks_collect_and_issue(
+        self,
+    ):
+        scenarios = (
+            (
+                "native-fail",
+                {
+                    "verdict": "fail",
+                    "reason":
+                        "synthetic-delegate",
+                },
+            ),
+            (
+                "missing-id",
+                {
+                    "verdict": "pass",
+                    "broker":
+                        self.common_broker(
+                            operation="delegate",
+                            request_id=(
+                                f"delegate-"
+                                f"{self.RUN_ID}"
+                            ),
+                            state="delegated",
+                            deliveryState="queued",
+                            worker=I1.WORKER,
+                            inputMessageId=(
+                                self.INPUT_ID
+                            ),
+                            delegateMessageId=None,
+                            inputReceiptId=(
+                                self.INPUT_RECEIPT
+                            ),
+                        ),
+                },
+            ),
+        )
+
+        for label, delegate_record in scenarios:
+            with self.subTest(label=label):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp).resolve()
+                    args = self.make_args(root)
+
+                    native_results = (
+                        self.default_native_results()
+                    )
+                    native_results[
+                        "delegate"
+                    ] = delegate_record
+
+                    native = self.make_native(
+                        args,
+                        native_results,
+                    )
+
+                    with self.harness(
+                        args,
+                        native=native,
+                    ) as harness:
+                        status = I1.run_i1(
+                            args
+                        )
+
+                    self.assertIn(
+                        status,
+                        (1, 2),
+                    )
+
+                    for operation in (
+                        "collect-result",
+                        "issue-record",
+                    ):
+                        self.assertEqual(
+                            self.operation_result(
+                                args,
+                                harness,
+                                operation,
+                            ),
+                            {
+                                "verdict":
+                                    "unknown",
+                                "reason":
+                                    (
+                                        "delegate_"
+                                        "prerequisite_"
+                                        "not_pass"
+                                    ),
+                            },
+                        )
+
+                    invoked = [
+                        call.args[0]
+                        for call
+                        in native.invoke.call_args_list
+                    ]
+                    self.assertNotIn(
+                        "collect-result",
+                        invoked,
+                    )
+                    self.assertNotIn(
+                        "issue-record",
+                        invoked,
+                    )
+                    self.assertIn(
+                        "observe-owner",
+                        invoked,
+                    )
+
+    def test_delegate_provider_readback_exception_becomes_unknown_assertion(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            args = self.make_args(root)
+
+            def provider(
+                provider_path,
+                argv,
+                gate_repo,
+                env,
+                mutation_log=None,
+                mutating=False,
+            ):
+                if argv[0] == "message-peek":
+                    raise RuntimeError(
+                        "peek unavailable"
+                    )
+
+                return (
+                    self.default_provider_side_effect(
+                        provider_path,
+                        argv,
+                        gate_repo,
+                        env,
+                        mutation_log,
+                        mutating,
+                    )
+                )
+
+            with self.harness(
+                args,
+                provider_side_effect=provider,
+            ) as harness:
+                status = I1.run_i1(args)
+
+            self.assertEqual(
+                status,
+                2,
+            )
+
+            delegate = self.operation_result(
+                args,
+                harness,
+                "delegate",
+            )
+
+            readback = next(
+                item
+                for item
+                in delegate["checks"]
+                if item["name"]
+                == "worker-readback"
+            )
+
+            self.assertEqual(
+                readback["verdict"],
+                "unknown",
+            )
+
+    def test_collect_result_stopped_for_unknown_preserves_gap_as_unknown_not_pass(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            args = self.make_args(root)
+
+            native_results = (
+                self.default_native_results()
+            )
+            native_results[
+                "collect-result"
+            ] = {
+                "verdict": "pass",
+                "broker":
+                    self.common_broker(
+                        operation="collect-result",
+                        request_id=(
+                            f"delegate-"
+                            f"{self.RUN_ID}"
+                        ),
+                        state=(
+                            "stopped_for_unknown"
+                        ),
+                        reason=(
+                            "known-g2-g3-gap"
+                        ),
+                    ),
+            }
+
+            with self.harness(
+                args,
+                native_results=native_results,
+            ) as harness:
+                status = I1.run_i1(args)
+
+            self.assertEqual(
+                status,
+                2,
+            )
+
+            collect = self.operation_result(
+                args,
+                harness,
+                "collect-result",
+            )
+
+            self.assertEqual(
+                collect["verdict"],
+                "unknown",
+            )
+            self.assertTrue(
+                collect[
+                    "knownGapPreserved"
+                ]
+            )
+
+            issue = self.operation_result(
+                args,
+                harness,
+                "issue-record",
+            )
+
+            self.assertEqual(
+                issue["reason"],
+                (
+                    "collect_result_"
+                    "prerequisite_not_pass"
+                ),
+            )
+            self.assertTrue(
+                issue["knownGapPreserved"]
+            )
+
+            final = self.final_result(
+                args,
+                harness,
+            )
+
+            self.assertTrue(
+                final[
+                    "knownCollectResultGapPreserved"
+                ]
+            )
+
+    def test_collect_result_missing_receipt_is_fail_and_issue_is_unknown_prerequisite(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            args = self.make_args(root)
+
+            native_results = (
+                self.default_native_results()
+            )
+            native_results[
+                "collect-result"
+            ]["broker"][
+                "resultReceiptId"
+            ] = None
+
+            with self.harness(
+                args,
+                native_results=native_results,
+            ) as harness:
+                status = I1.run_i1(args)
+
+            self.assertEqual(
+                status,
+                1,
+            )
+
+            collect = self.operation_result(
+                args,
+                harness,
+                "collect-result",
+            )
+            self.assertEqual(
+                collect["verdict"],
+                "fail",
+            )
+
+            issue = self.operation_result(
+                args,
+                harness,
+                "issue-record",
+            )
+            self.assertEqual(
+                issue["verdict"],
+                "unknown",
+            )
+            self.assertEqual(
+                issue["reason"],
+                (
+                    "collect_result_"
+                    "prerequisite_not_pass"
+                ),
+            )
+            self.assertTrue(
+                issue["knownGapPreserved"]
+            )
+
+            self.assertTrue(
+                self.final_result(
+                    args,
+                    harness,
+                )[
+                    "knownCollectResultGapPreserved"
+                ]
+            )
+
+    def test_issue_record_success_merges_gh_checks_and_verifies_both_receipts_once(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            args = self.make_args(root)
+
+            gh_checks = [
+                I1.assertion(
+                    "gh-exactly-once",
+                    True,
+                    {"count": 1},
+                ),
+                I1.assertion(
+                    "gh-body",
+                    True,
+                    "body",
+                ),
+            ]
+
+            with self.harness(
+                args,
+                gh_checks=gh_checks,
+            ) as harness:
+                status = I1.run_i1(args)
+
+            self.assertEqual(
+                status,
+                0,
+            )
+
+            issue = self.operation_result(
+                args,
+                harness,
+                "issue-record",
+            )
+
+            names = {
+                item["name"]:
+                    item["verdict"]
+                for item
+                in issue["checks"]
+            }
+
+            self.assertEqual(
+                names["gh-exactly-once"],
+                "pass",
+            )
+            self.assertEqual(
+                names["gh-body"],
+                "pass",
+            )
+            self.assertEqual(
+                names["input-ack-exactly-once"],
+                "pass",
+            )
+            self.assertEqual(
+                names["result-ack-exactly-once"],
+                "pass",
+            )
+
+            harness[
+                "validate_gh_store"
+            ].assert_called_once()
+
+            self.assertEqual(
+                len(
+                    harness[
+                        "receipt_count"
+                    ].call_args_list
+                ),
+                2,
+            )
+
+    def test_issue_record_storage_exception_becomes_ack_readback_unknown(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            args = self.make_args(root)
+
+            def storage_failure(
+                *unused,
+            ):
+                raise RuntimeError(
+                    "db unavailable"
+                )
+
+            with self.harness(
+                args,
+                storage_side_effect=(
+                    storage_failure
+                ),
+            ) as harness:
+                status = I1.run_i1(args)
+
+            self.assertEqual(
+                status,
+                2,
+            )
+
+            issue = self.operation_result(
+                args,
+                harness,
+                "issue-record",
+            )
+
+            ack = next(
+                item
+                for item
+                in issue["checks"]
+                if item["name"]
+                == "ack-readback"
+            )
+
+            self.assertEqual(
+                ack["verdict"],
+                "unknown",
+            )
+
+            harness[
+                "receipt_count"
+            ].assert_not_called()
+
+    def test_observe_owner_maps_states_without_collapsing_unknown(
+        self,
+    ):
+        cases = (
+            ("observed", "owned", "pass"),
+            (
+                "stopped_for_unknown",
+                None,
+                "unknown",
+            ),
+            ("stopped", None, "fail"),
+            ("error", None, "fail"),
+            ("future-state", None, "unknown"),
+        )
+
+        for (
+            state,
+            owner_status,
+            expected_verdict,
+        ) in cases:
+            with self.subTest(state=state):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp).resolve()
+                    args = self.make_args(root)
+
+                    native_results = (
+                        self.default_native_results()
+                    )
+
+                    broker = self.common_broker(
+                        operation="observe-owner",
+                        request_id=(
+                            f"observe-{self.RUN_ID}"
+                        ),
+                        state=state,
+                    )
+
+                    if owner_status is not None:
+                        broker[
+                            "ownerStatus"
+                        ] = owner_status
+
+                    native_results[
+                        "observe-owner"
+                    ] = {
+                        "verdict": "pass",
+                        "broker": broker,
+                    }
+
+                    with self.harness(
+                        args,
+                        native_results=native_results,
+                    ) as harness:
+                        status = I1.run_i1(
+                            args
+                        )
+
+                    observe = (
+                        self.operation_result(
+                            args,
+                            harness,
+                            "observe-owner",
+                        )
+                    )
+
+                    self.assertEqual(
+                        observe["verdict"],
+                        expected_verdict,
+                    )
+
+                    names = {
+                        item["name"]
+                        for item
+                        in observe["checks"]
+                    }
+
+                    self.assertEqual(
+                        (
+                            "owner-status-not-collapsed"
+                            in names
+                        ),
+                        state == "observed",
+                    )
+
+                    self.assertEqual(
+                        status,
+                        {
+                            "pass": 0,
+                            "fail": 1,
+                            "unknown": 2,
+                        }[
+                            expected_verdict
+                        ],
+                    )
+
+    def test_validate_identity_receives_exact_context_and_result_is_written(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            for value in (
+                None,
+                "",
+                "/tmp/live-identity.json",
+            ):
+                with self.subTest(
+                    live_identity_json=value
+                ):
+                    args = self.make_args(
+                        root,
+                        live_identity_json=value,
+                    )
+
+                    identity = {
+                        "schemaVersion": 1,
+                        "verdict": "pass",
+                        "checks": [],
+                    }
+
+                    with self.harness(
+                        args,
+                        identity=identity,
+                    ) as harness:
+                        status = I1.run_i1(
+                            args
+                        )
+
+                    self.assertEqual(
+                        status,
+                        0,
+                    )
+
+                    kwargs = harness[
+                        "validate_identity"
+                    ].call_args.kwargs
+
+                    self.assertEqual(
+                        kwargs["gate_repo"],
+                        Path(
+                            args.gate_repo
+                        ).resolve(),
+                    )
+                    self.assertEqual(
+                        kwargs["run_root"],
+                        Path(
+                            args.run_root
+                        ).resolve(),
+                    )
+                    self.assertEqual(
+                        kwargs["gate_team"],
+                        self.GATE_TEAM,
+                    )
+                    self.assertEqual(
+                        kwargs[
+                            "live_identity_json"
+                        ],
+                        (
+                            Path(value)
+                            if value
+                            else None
+                        ),
+                    )
+
+                    identity_path = (
+                        Path(
+                            args.artifact_dir
+                        ).resolve()
+                        / "I1"
+                        / "identity"
+                        / "result.json"
+                    )
+
+                    self.assertEqual(
+                        self.written(
+                            harness,
+                            identity_path,
+                        ),
+                        identity,
+                    )
+
+    def test_prerequisite_skips_use_specific_unknowns_not_operation_not_observed(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            args = self.make_args(root)
+
+            native_results = (
+                self.default_native_results()
+            )
+            native_results[
+                "receive"
+            ] = {
+                "verdict": "unknown",
+                "reason": "synthetic",
+            }
+
+            with self.harness(
+                args,
+                native_results=native_results,
+            ) as harness:
+                status = I1.run_i1(args)
+
+            self.assertEqual(
+                status,
+                2,
+            )
+
+            for operation in (
+                "delegate",
+                "collect-result",
+                "issue-record",
+            ):
+                result = (
+                    self.operation_result(
+                        args,
+                        harness,
+                        operation,
+                    )
+                )
+
+                self.assertEqual(
+                    result["reason"],
+                    (
+                        "receive_prerequisite_"
+                        "not_pass"
+                    ),
+                )
+                self.assertNotEqual(
+                    result["reason"],
+                    "operation_not_observed",
+                )
+
+    def test_overall_pass_writes_complete_result_and_returns_zero(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            args = self.make_args(root)
+            native = self.make_native(args)
+
+            with self.harness(
+                args,
+                native=native,
+            ) as harness:
+                status = I1.run_i1(args)
+
+            self.assertEqual(
+                status,
+                0,
+            )
+
+            result = self.final_result(
+                args,
+                harness,
+            )
+
+            self.assertEqual(
+                result["schemaVersion"],
+                1,
+            )
+            self.assertEqual(
+                result["check"],
+                "I1",
+            )
+            self.assertEqual(
+                result["runId"],
+                self.RUN_ID,
+            )
+            self.assertEqual(
+                result["sessionId"],
+                self.SESSION_ID,
+            )
+            self.assertEqual(
+                result["generation"],
+                str(self.GENERATION),
+            )
+            self.assertEqual(
+                result["binding"],
+                str(native.binding),
+            )
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+            self.assertFalse(
+                result[
+                    "knownCollectResultGapPreserved"
+                ]
+            )
+
+            self.assertEqual(
+                set(
+                    result["operations"]
+                ),
+                {
+                    "receive",
+                    "delegate",
+                    "collect-result",
+                    "issue-record",
+                    "observe-owner",
+                },
+            )
+
+    def test_overall_fail_dominates_unknown_and_returns_one(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            args = self.make_args(root)
+
+            native_results = (
+                self.default_native_results()
+            )
+            native_results[
+                "receive"
+            ] = {
+                "verdict": "fail",
+                "reason": "definite-failure",
+            }
+            native_results[
+                "observe-owner"
+            ] = {
+                "verdict": "unknown",
+                "reason": "unobservable",
+            }
+
+            with self.harness(
+                args,
+                native_results=native_results,
+            ) as harness:
+                status = I1.run_i1(args)
+
+            self.assertEqual(
+                status,
+                1,
+            )
+            self.assertEqual(
+                self.final_result(
+                    args,
+                    harness,
+                )["verdict"],
+                "fail",
+            )
+
+    def test_overall_unknown_without_fail_returns_two(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            args = self.make_args(root)
+
+            identity = {
+                "schemaVersion": 1,
+                "verdict": "unknown",
+                "checks": [],
+            }
+
+            with self.harness(
+                args,
+                identity=identity,
+            ) as harness:
+                status = I1.run_i1(args)
+
+            self.assertEqual(
+                status,
+                2,
+            )
+            self.assertEqual(
+                self.final_result(
+                    args,
+                    harness,
+                )["verdict"],
+                "unknown",
+            )
+
+    def test_final_known_collect_gap_flag_is_true_for_any_nonpass_collect_verdict(
+        self,
+    ):
+        for collect_verdict in (
+            "fail",
+            "unknown",
+        ):
+            with self.subTest(
+                collect_verdict=collect_verdict
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp).resolve()
+                    args = self.make_args(root)
+
+                    native_results = (
+                        self.default_native_results()
+                    )
+                    native_results[
+                        "collect-result"
+                    ] = {
+                        "verdict":
+                            collect_verdict,
+                        "reason":
+                            "synthetic-collect",
+                    }
+
+                    with self.harness(
+                        args,
+                        native_results=native_results,
+                    ) as harness:
+                        status = I1.run_i1(
+                            args
+                        )
+
+                    self.assertEqual(
+                        status,
+                        (
+                            1
+                            if collect_verdict
+                            == "fail"
+                            else 2
+                        ),
+                    )
+
+                    self.assertTrue(
+                        self.final_result(
+                            args,
+                            harness,
+                        )[
+                            "knownCollectResultGapPreserved"
+                        ]
+                    )
+
+    def test_native_stop_runs_after_success_and_after_exception_inside_try(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            args = self.make_args(root)
+            native = self.make_native(args)
+
+            with self.harness(
+                args,
+                native=native,
+            ):
+                self.assertEqual(
+                    I1.run_i1(args),
+                    0,
+                )
+
+            native.stop.assert_called_once()
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            args = self.make_args(root)
+            native = self.make_native(args)
+
+            native.start.side_effect = (
+                RuntimeError(
+                    "native start failed"
+                )
+            )
+
+            with self.harness(
+                args,
+                native=native,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "native start failed",
+                ):
+                    I1.run_i1(args)
+
+            native.stop.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
