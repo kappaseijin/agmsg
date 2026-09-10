@@ -2122,5 +2122,814 @@ class PilotGateI1RoundA(unittest.TestCase):
                 )
 
 
+class PilotGateI1RoundBNativePilot(unittest.TestCase):
+    SESSION_ID = "123e4567-e89b-42d3-a456-426614174000"
+
+    def make_native(
+        self,
+        root: Path,
+        *,
+        timeout: float = 0.05,
+        launcher: Path | None = None,
+        env: dict[str, str] | None = None,
+    ):
+        root = root.resolve()
+        gate_repo = root / "repo"
+        claude_config = root / "claude"
+        artifact = root / "artifacts" / "native"
+        gate_repo.mkdir(parents=True, exist_ok=True)
+        claude_config.mkdir(parents=True, exist_ok=True)
+
+        if launcher is None:
+            launcher = root / "launcher"
+            launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            launcher.chmod(0o700)
+
+        return I1.NativePilot(
+            launcher,
+            gate_repo,
+            "gate-team",
+            claude_config,
+            artifact,
+            dict(env or os.environ),
+            timeout,
+        )
+
+    def open_invoke_pty(self, native):
+        master, slave = I1.pty.openpty()
+        native.master = master
+        native.proc = mock.Mock()
+        native.proc.poll.return_value = None
+        return master, slave
+
+    def test_init_sets_expected_paths_and_initial_state(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            launcher = root / "launcher"
+            gate_repo = root / "repo"
+            claude_config = root / "claude"
+            artifact = root / "artifact"
+            env = {"KEY": "value"}
+
+            native = I1.NativePilot(
+                launcher,
+                gate_repo,
+                "gate-team",
+                claude_config,
+                artifact,
+                env,
+                7.5,
+            )
+
+            self.assertEqual(native.launcher, launcher)
+            self.assertEqual(native.gate_repo, gate_repo)
+            self.assertEqual(native.team, "gate-team")
+            self.assertEqual(native.claude_config, claude_config)
+            self.assertEqual(native.artifact, artifact)
+            self.assertIs(native.env, env)
+            self.assertEqual(native.timeout, 7.5)
+            self.assertEqual(native.pty_log, artifact / "native-pty.raw")
+            self.assertEqual(
+                native.decisions,
+                artifact / "pretool-decisions.jsonl",
+            )
+            self.assertEqual(native.session_id, "")
+            self.assertEqual(native.generation, 0)
+            self.assertIsNone(native.binding)
+            self.assertIsNone(native.transcript)
+            self.assertIsNone(native.proc)
+            self.assertIsNone(native.master)
+
+    def test_pump_with_no_master_or_no_ready_data_is_noop(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            native = self.make_native(root)
+
+            native.pump(0)
+            self.assertFalse(native.pty_log.exists())
+
+            master, slave = I1.pty.openpty()
+            try:
+                native.master = master
+                native.pump(0.01)
+                self.assertFalse(native.pty_log.exists())
+            finally:
+                os.close(master)
+                os.close(slave)
+                native.master = None
+
+    def test_pump_appends_pty_bytes_across_calls_and_creates_parent(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            native = self.make_native(root)
+            master, slave = I1.pty.openpty()
+
+            try:
+                native.master = master
+
+                os.write(slave, b"first")
+                native.pump(0.2)
+
+                os.write(slave, b"-second")
+                native.pump(0.2)
+
+                self.assertTrue(native.pty_log.is_file())
+                self.assertEqual(
+                    native.pty_log.read_bytes(),
+                    b"first-second",
+                )
+            finally:
+                os.close(master)
+                os.close(slave)
+                native.master = None
+
+    def test_discover_transcript_sets_only_a_unique_match(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            native = self.make_native(root)
+            native.session_id = self.SESSION_ID
+
+            first = native.claude_config / "first.jsonl"
+            first.write_text(
+                json.dumps({"sessionId": self.SESSION_ID}) + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(native.discover_transcript(), first)
+            self.assertEqual(native.transcript, first)
+
+            first.unlink()
+            native.transcript = None
+            self.assertIsNone(native.discover_transcript())
+            self.assertIsNone(native.transcript)
+
+            first.write_text(
+                json.dumps({"sessionId": self.SESSION_ID}) + "\n",
+                encoding="utf-8",
+            )
+            second = native.claude_config / "second.jsonl"
+            second.write_text(
+                json.dumps({"session_id": self.SESSION_ID}) + "\n",
+                encoding="utf-8",
+            )
+
+            native.transcript = None
+            self.assertIsNone(native.discover_transcript())
+            self.assertIsNone(native.transcript)
+
+    def test_invoke_returns_native_not_started_without_side_effects(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            native = self.make_native(root)
+            operation_dir = root / "operation"
+
+            with mock.patch.object(native, "pump") as pump_mock:
+                result = native.invoke("echo hi", operation_dir)
+
+            self.assertEqual(
+                result,
+                {
+                    "verdict": "unknown",
+                    "reason": "native_not_started",
+                },
+            )
+            pump_mock.assert_not_called()
+            self.assertFalse(operation_dir.exists())
+
+    def test_invoke_timeout_without_transcript_returns_unknown(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            native = self.make_native(root, timeout=0.02)
+            master, slave = self.open_invoke_pty(native)
+            operation_dir = root / "operation"
+
+            try:
+                with mock.patch.object(native, "pump"):
+                    with mock.patch.object(
+                        native,
+                        "discover_transcript",
+                        return_value=None,
+                    ):
+                        result = native.invoke(
+                            "echo hi",
+                            operation_dir,
+                        )
+
+                self.assertEqual(
+                    result,
+                    {
+                        "verdict": "unknown",
+                        "reason": "transcript_unavailable",
+                    },
+                )
+                self.assertTrue((operation_dir / "prompt.txt").is_file())
+            finally:
+                os.close(master)
+                os.close(slave)
+                native.master = None
+
+    def test_invoke_transcript_without_tool_returns_native_tool_not_observed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            native = self.make_native(root)
+            master, slave = self.open_invoke_pty(native)
+            transcript = root / "transcript.jsonl"
+            transcript.write_text("{}\n", encoding="utf-8")
+            native.proc.poll.return_value = 0
+
+            try:
+                with mock.patch.object(native, "pump"):
+                    with mock.patch.object(
+                        native,
+                        "discover_transcript",
+                        return_value=transcript,
+                    ):
+                        with mock.patch.object(
+                            I1,
+                            "find_tool_result",
+                            return_value=(None, None),
+                        ):
+                            result = native.invoke(
+                                "echo hi",
+                                root / "operation",
+                            )
+
+                self.assertEqual(
+                    result,
+                    {
+                        "verdict": "unknown",
+                        "reason": "native_tool_not_observed",
+                        "transcript": str(transcript),
+                    },
+                )
+            finally:
+                os.close(master)
+                os.close(slave)
+                native.master = None
+
+    def test_invoke_missing_pretool_decision_is_unknown(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            native = self.make_native(root)
+            master, slave = self.open_invoke_pty(native)
+            transcript = root / "transcript.jsonl"
+            transcript.write_text("{}\n", encoding="utf-8")
+
+            try:
+                with mock.patch.object(native, "pump"):
+                    with mock.patch.object(
+                        native,
+                        "discover_transcript",
+                        return_value=transcript,
+                    ):
+                        with mock.patch.object(
+                            I1,
+                            "find_tool_result",
+                            return_value=("tool-1", '{"ok":true}'),
+                        ):
+                            with mock.patch.object(
+                                I1,
+                                "hook_decision",
+                                return_value=None,
+                            ):
+                                result = native.invoke(
+                                    "echo hi",
+                                    root / "operation",
+                                )
+
+                self.assertEqual(
+                    result,
+                    {
+                        "verdict": "unknown",
+                        "reason": "pretool_decision_unavailable",
+                        "toolUseId": "tool-1",
+                        "transcript": str(transcript),
+                    },
+                )
+            finally:
+                os.close(master)
+                os.close(slave)
+                native.master = None
+
+    def test_invoke_non_allow_pretool_decision_is_fail_and_reason_contains_decision(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            native = self.make_native(root)
+            master, slave = self.open_invoke_pty(native)
+            transcript = root / "transcript.jsonl"
+            transcript.write_text("{}\n", encoding="utf-8")
+
+            try:
+                with mock.patch.object(native, "pump"):
+                    with mock.patch.object(
+                        native,
+                        "discover_transcript",
+                        return_value=transcript,
+                    ):
+                        with mock.patch.object(
+                            I1,
+                            "find_tool_result",
+                            return_value=("tool-2", '{"ok":true}'),
+                        ):
+                            with mock.patch.object(
+                                I1,
+                                "hook_decision",
+                                return_value="deny",
+                            ):
+                                result = native.invoke(
+                                    "echo hi",
+                                    root / "operation",
+                                )
+
+                self.assertEqual(
+                    result,
+                    {
+                        "verdict": "fail",
+                        "reason": "pretool_decision_deny",
+                        "toolUseId": "tool-2",
+                        "transcript": str(transcript),
+                    },
+                )
+            finally:
+                os.close(master)
+                os.close(slave)
+                native.master = None
+
+    def test_invoke_allow_without_tool_result_is_unknown(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            native = self.make_native(root)
+            master, slave = self.open_invoke_pty(native)
+            transcript = root / "transcript.jsonl"
+            transcript.write_text("{}\n", encoding="utf-8")
+            native.proc.poll.return_value = 0
+
+            try:
+                with mock.patch.object(native, "pump"):
+                    with mock.patch.object(
+                        native,
+                        "discover_transcript",
+                        return_value=transcript,
+                    ):
+                        with mock.patch.object(
+                            I1,
+                            "find_tool_result",
+                            return_value=("tool-3", None),
+                        ):
+                            with mock.patch.object(
+                                I1,
+                                "hook_decision",
+                                return_value="allow",
+                            ):
+                                result = native.invoke(
+                                    "echo hi",
+                                    root / "operation",
+                                )
+
+                self.assertEqual(
+                    result,
+                    {
+                        "verdict": "unknown",
+                        "reason": "tool_result_unavailable",
+                        "toolUseId": "tool-3",
+                        "transcript": str(transcript),
+                    },
+                )
+            finally:
+                os.close(master)
+                os.close(slave)
+                native.master = None
+
+    def test_invoke_unparseable_broker_result_is_unknown_and_persists_raw_result(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            native = self.make_native(root)
+            master, slave = self.open_invoke_pty(native)
+            transcript = root / "transcript.jsonl"
+            transcript.write_text("{}\n", encoding="utf-8")
+            operation_dir = root / "operation"
+
+            try:
+                with mock.patch.object(native, "pump"):
+                    with mock.patch.object(
+                        native,
+                        "discover_transcript",
+                        return_value=transcript,
+                    ):
+                        with mock.patch.object(
+                            I1,
+                            "find_tool_result",
+                            return_value=("tool-4", "not-json"),
+                        ):
+                            with mock.patch.object(
+                                I1,
+                                "hook_decision",
+                                return_value="allow",
+                            ):
+                                result = native.invoke(
+                                    "echo hi",
+                                    operation_dir,
+                                )
+
+                self.assertEqual(
+                    result,
+                    {
+                        "verdict": "unknown",
+                        "reason": "broker_response_unidentifiable",
+                        "toolUseId": "tool-4",
+                        "transcript": str(transcript),
+                    },
+                )
+                self.assertEqual(
+                    (operation_dir / "tool-result.raw").read_text(
+                        encoding="utf-8"
+                    ),
+                    "not-json",
+                )
+            finally:
+                os.close(master)
+                os.close(slave)
+                native.master = None
+
+    def test_invoke_success_returns_parsed_broker_and_writes_prompt_with_done_token_to_pty(self):
+        import tty
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            native = self.make_native(root)
+            native.session_id = self.SESSION_ID
+            master, slave = self.open_invoke_pty(native)
+            tty.setraw(slave)
+
+            transcript = root / "transcript.jsonl"
+            transcript.write_text("{}\n", encoding="utf-8")
+            operation_dir = root / "operation"
+            command = "echo exact-command"
+            broker = {"schemaVersion": 1, "state": "ok"}
+            observed_result = "noise\n" + json.dumps(broker) + "\n"
+
+            token = hashlib.sha256(
+                (self.SESSION_ID + command).encode("utf-8")
+            ).hexdigest()[:16]
+            marker = f"AGMSG_GATE_DONE_{token}"
+
+            try:
+                with mock.patch.object(native, "pump"):
+                    with mock.patch.object(
+                        native,
+                        "discover_transcript",
+                        return_value=transcript,
+                    ):
+                        with mock.patch.object(
+                            I1,
+                            "find_tool_result",
+                            return_value=("tool-5", observed_result),
+                        ):
+                            with mock.patch.object(
+                                I1,
+                                "hook_decision",
+                                return_value="allow",
+                            ):
+                                result = native.invoke(
+                                    command,
+                                    operation_dir,
+                                )
+
+                self.assertEqual(
+                    result,
+                    {
+                        "verdict": "pass",
+                        "reason": "native_pretool_broker_path_observed",
+                        "toolUseId": "tool-5",
+                        "transcript": str(transcript),
+                        "broker": broker,
+                    },
+                )
+
+                prompt = (operation_dir / "prompt.txt").read_text(
+                    encoding="utf-8"
+                )
+                self.assertIn(command, prompt)
+                self.assertIn(marker, prompt)
+
+                os.set_blocking(slave, False)
+                written = b""
+                for _ in range(20):
+                    try:
+                        chunk = os.read(slave, 65536)
+                    except BlockingIOError:
+                        break
+                    if not chunk:
+                        break
+                    written += chunk
+
+                self.assertIn(
+                    command.encode("utf-8"),
+                    written,
+                )
+                self.assertIn(
+                    marker.encode("utf-8"),
+                    written,
+                )
+
+                self.assertEqual(
+                    (operation_dir / "tool-result.raw").read_text(
+                        encoding="utf-8"
+                    ),
+                    observed_result,
+                )
+            finally:
+                os.close(master)
+                os.close(slave)
+                native.master = None
+
+    def make_launcher_fixture(
+        self,
+        root: Path,
+        *,
+        variant: str = "valid",
+        previous_generation: int = 0,
+        sleep_seconds: float = 0.05,
+    ):
+        root = root.resolve()
+        gate_repo = root / "repo"
+        claude_config = root / "claude"
+        artifact = root / "artifact"
+        gate_repo.mkdir(parents=True, exist_ok=True)
+        claude_config.mkdir(parents=True, exist_ok=True)
+
+        team = "gate-team"
+        generation = previous_generation + 1
+        session_id = self.SESSION_ID
+
+        if previous_generation:
+            I1.atomic_json(
+                I1.pilot_state_path(gate_repo, team),
+                {"latestGeneration": previous_generation},
+            )
+
+        wrong_project = root / "wrong-project"
+        wrong_project.mkdir()
+
+        argv_log = root / "launcher-argv.json"
+        decisions_log = root / "launcher-decisions.txt"
+        launcher = root / "launcher.py"
+
+        launcher.write_text(
+            """#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import sys
+import time
+
+argv = sys.argv[1:]
+team = argv[argv.index("--team") + 1]
+project = argv[argv.index("--project") + 1]
+generation = int(os.environ["TEST_GENERATION"])
+variant = os.environ["TEST_BINDING_VARIANT"]
+session = os.environ["TEST_SESSION_ID"]
+
+binding = {
+    "schemaVersion": 1,
+    "sessionId": session,
+    "team": team,
+    "agent": "agmsg_pm_pilot_claude",
+    "generation": generation,
+    "project": project,
+}
+
+if variant == "bad-session":
+    binding["sessionId"] = "not-a-uuid"
+elif variant == "bad-team":
+    binding["team"] = "wrong-team"
+elif variant == "bad-agent":
+    binding["agent"] = "wrong-agent"
+elif variant == "bad-generation":
+    binding["generation"] = generation + 1
+elif variant == "bad-project":
+    binding["project"] = os.environ["TEST_WRONG_PROJECT"]
+
+path = (
+    Path(project)
+    / "run"
+    / "pilot"
+    / f"{team}__agmsg_pm_pilot_claude"
+    / "bindings"
+    / f"{generation}.json"
+)
+path.parent.mkdir(parents=True, exist_ok=True)
+tmp = path.with_name("." + path.name + ".tmp")
+tmp.write_text(json.dumps(binding) + "\\n", encoding="utf-8")
+os.replace(tmp, path)
+
+Path(os.environ["TEST_ARGV_LOG"]).write_text(
+    json.dumps(argv) + "\\n",
+    encoding="utf-8",
+)
+Path(os.environ["TEST_DECISIONS_LOG"]).write_text(
+    os.environ.get("AGMSG_PM_DECISIONS_FILE", ""),
+    encoding="utf-8",
+)
+
+time.sleep(float(os.environ["TEST_SLEEP_SECONDS"]))
+""",
+            encoding="utf-8",
+        )
+        launcher.chmod(0o700)
+
+        env = os.environ.copy()
+        env.update(
+            {
+                "TEST_GENERATION": str(generation),
+                "TEST_BINDING_VARIANT": variant,
+                "TEST_SESSION_ID": session_id,
+                "TEST_WRONG_PROJECT": str(wrong_project),
+                "TEST_ARGV_LOG": str(argv_log),
+                "TEST_DECISIONS_LOG": str(decisions_log),
+                "TEST_SLEEP_SECONDS": str(sleep_seconds),
+            }
+        )
+
+        native = I1.NativePilot(
+            launcher,
+            gate_repo,
+            team,
+            claude_config,
+            artifact,
+            env,
+            1.0,
+        )
+
+        return {
+            "native": native,
+            "gate_repo": gate_repo,
+            "team": team,
+            "generation": generation,
+            "session_id": session_id,
+            "binding": I1.binding_for_generation(
+                gate_repo,
+                team,
+                generation,
+            ),
+            "argv_log": argv_log,
+            "decisions_log": decisions_log,
+        }
+
+    def test_start_launches_fresh_pilot_and_accepts_valid_next_generation_binding(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            fixture = self.make_launcher_fixture(
+                root,
+                previous_generation=2,
+                sleep_seconds=30.0,
+            )
+            native = fixture["native"]
+
+            try:
+                native.start()
+
+                self.assertEqual(native.generation, 3)
+                self.assertEqual(native.session_id, self.SESSION_ID)
+                self.assertEqual(native.binding, fixture["binding"])
+                self.assertTrue(native.binding.is_file())
+                self.assertIsNotNone(native.proc)
+                self.assertIsNotNone(native.master)
+
+                argv = json.loads(
+                    fixture["argv_log"].read_text(encoding="utf-8")
+                )
+                self.assertEqual(
+                    argv,
+                    [
+                        "--team",
+                        fixture["team"],
+                        "--project",
+                        str(fixture["gate_repo"]),
+                        "--fresh",
+                    ],
+                )
+                self.assertEqual(
+                    fixture["decisions_log"].read_text(
+                        encoding="utf-8"
+                    ),
+                    str(native.decisions),
+                )
+            finally:
+                native.stop()
+
+    def test_start_rejects_invalid_session_identity_generation_and_project_bindings(self):
+        cases = (
+            ("bad-session", "I1 binding sessionId invalid"),
+            ("bad-team", "I1 binding identity mismatch"),
+            ("bad-agent", "I1 binding identity mismatch"),
+            ("bad-generation", "I1 binding generation mismatch"),
+            ("bad-project", "I1 binding project mismatch"),
+        )
+
+        for variant, message in cases:
+            with self.subTest(variant=variant):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp).resolve()
+                    fixture = self.make_launcher_fixture(
+                        root,
+                        variant=variant,
+                        sleep_seconds=0.05,
+                    )
+                    native = fixture["native"]
+
+                    try:
+                        with self.assertRaisesRegex(
+                            RuntimeError,
+                            message,
+                        ):
+                            native.start()
+                    finally:
+                        native.stop()
+
+                    if native.proc is not None:
+                        self.assertIsNotNone(
+                            native.proc.poll()
+                        )
+
+    def test_stop_terminates_real_process_and_resets_master(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            native = self.make_native(root)
+
+            master, slave = I1.pty.openpty()
+            native.master = master
+            native.proc = subprocess.Popen(
+                [
+                    "sh",
+                    "-c",
+                    "cat >/dev/null",
+                ],
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                close_fds=True,
+                start_new_session=True,
+            )
+            os.close(slave)
+
+            native.stop()
+
+            self.assertIsNone(native.master)
+            self.assertIsNotNone(native.proc.poll())
+
+    def test_stop_escalates_from_sigterm_to_sigkill_when_wait_times_out(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            native = self.make_native(root)
+
+            proc = mock.Mock()
+            proc.pid = 424242
+            proc.poll.return_value = None
+            proc.wait.side_effect = [
+                subprocess.TimeoutExpired(
+                    cmd="dummy",
+                    timeout=2,
+                ),
+                0,
+            ]
+
+            native.proc = proc
+            native.master = None
+
+            with mock.patch.object(
+                native,
+                "pump",
+            ):
+                with mock.patch.object(
+                    I1.time,
+                    "monotonic",
+                    side_effect=[0.0, 3.0],
+                ):
+                    with mock.patch.object(
+                        I1.os,
+                        "killpg",
+                    ) as killpg_mock:
+                        native.stop()
+
+            self.assertEqual(
+                killpg_mock.call_args_list,
+                [
+                    mock.call(
+                        424242,
+                        I1.signal.SIGTERM,
+                    ),
+                    mock.call(
+                        424242,
+                        I1.signal.SIGKILL,
+                    ),
+                ],
+            )
+            self.assertEqual(
+                proc.wait.call_count,
+                2,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
