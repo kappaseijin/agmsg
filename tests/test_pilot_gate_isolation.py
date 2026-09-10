@@ -6067,5 +6067,1266 @@ class PilotGateIsolationN1ProcessAndTranscriptTests(unittest.TestCase):
             )
 
 
+class PilotGateIsolationN1StateTests(unittest.TestCase):
+    SESSION_ID = "123e4567-e89b-42d3-a456-426614174000"
+    OTHER_SESSION_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+    def run_cli(
+        self,
+        *args: str,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                str(HELPER),
+                *args,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+
+    def make_state_fixture(
+        self,
+        root: Path,
+        *,
+        generation: int = 2,
+        explicit_state_file: bool = False,
+    ) -> dict[str, object]:
+        # Keep lexical and canonical paths aligned on macOS
+        # (/var -> /private/var).
+        root = root.resolve()
+
+        seat = (
+            root
+            / "run"
+            / "pilot"
+            / "gate-team__pilot-agent"
+        )
+
+        binding = (
+            seat
+            / "bindings"
+            / f"{generation}.json"
+        )
+
+        binding.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        if explicit_state_file:
+            state = (
+                root
+                / "explicit-state"
+                / "state.json"
+            )
+        else:
+            state = (
+                seat
+                / "state.json"
+            )
+
+        state.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        output = (
+            root
+            / "artifacts"
+            / "validate-state.json"
+        )
+
+        binding_value: dict[str, object] = {
+            "generation": generation,
+            "sessionId": self.SESSION_ID,
+        }
+
+        if explicit_state_file:
+            binding_value["stateFile"] = str(
+                state
+            )
+
+        state_value: dict[str, object] = {
+            "latestGeneration": generation,
+            "latestBinding": str(binding),
+        }
+
+        ISOLATION.write_json(
+            binding,
+            binding_value,
+        )
+
+        ISOLATION.write_json(
+            state,
+            state_value,
+        )
+
+        return {
+            "root": root,
+            "seat": seat,
+            "binding": binding,
+            "state": state,
+            "output": output,
+            "generation": generation,
+            "binding_value": binding_value,
+            "state_value": state_value,
+        }
+
+    def validate_state_argv(
+        self,
+        fixture: dict[str, object],
+        *,
+        binding: Path | None = None,
+        expected_generation: int | None = None,
+        expected_session: str | None = None,
+        output: Path | None = None,
+    ) -> list[str]:
+        return [
+            "validate-state",
+            "--binding",
+            str(
+                binding
+                if binding is not None
+                else fixture["binding"]
+            ),
+            "--expected-generation",
+            str(
+                expected_generation
+                if expected_generation is not None
+                else fixture["generation"]
+            ),
+            "--expected-session",
+            (
+                expected_session
+                if expected_session is not None
+                else self.SESSION_ID
+            ),
+            "--output",
+            str(
+                output
+                if output is not None
+                else fixture["output"]
+            ),
+        ]
+
+    def check(
+        self,
+        record: dict[str, object],
+        number: str,
+    ) -> dict[str, object]:
+        return next(
+            item
+            for item
+            in record["checks"]
+            if item["number"] == number
+        )
+
+    def test_validate_state_passes_with_explicit_state_file_and_fallback_path(
+        self,
+    ):
+        for explicit_state_file in (
+            False,
+            True,
+        ):
+            with self.subTest(
+                explicit_state_file=explicit_state_file
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = (
+                        self.make_state_fixture(
+                            Path(temp),
+                            explicit_state_file=(
+                                explicit_state_file
+                            ),
+                        )
+                    )
+
+                    if explicit_state_file:
+                        self.assertEqual(
+                            ISOLATION
+                            .state_path_from_binding(
+                                fixture[
+                                    "binding_value"
+                                ]
+                            ),
+                            fixture["state"],
+                        )
+                    else:
+                        self.assertIsNone(
+                            ISOLATION
+                            .state_path_from_binding(
+                                fixture[
+                                    "binding_value"
+                                ]
+                            )
+                        )
+
+                        self.assertEqual(
+                            (
+                                fixture["binding"]
+                                .parent
+                                .parent
+                                / "state.json"
+                            ),
+                            fixture["state"],
+                        )
+
+                    result = self.run_cli(
+                        *self.validate_state_argv(
+                            fixture
+                        )
+                    )
+
+                    self.assertEqual(
+                        result.returncode,
+                        0,
+                        result.stderr,
+                    )
+
+                    record = (
+                        ISOLATION.load_json(
+                            fixture["output"]
+                        )
+                    )
+
+                    self.assertEqual(
+                        record["schemaVersion"],
+                        1,
+                    )
+
+                    self.assertRegex(
+                        record["observedAt"],
+                        UTC_RE,
+                    )
+
+                    self.assertEqual(
+                        record["verdict"],
+                        "pass",
+                    )
+
+                    self.assertEqual(
+                        len(record["checks"]),
+                        5,
+                    )
+
+                    self.assertEqual(
+                        [
+                            item["number"]
+                            for item
+                            in record["checks"]
+                        ],
+                        [
+                            (
+                                "N1.state."
+                                "binding-generation"
+                            ),
+                            "N1.state.session",
+                            "N1.state.read",
+                            (
+                                "N1.state."
+                                "latest-generation"
+                            ),
+                            (
+                                "N1.state."
+                                "latest-binding"
+                            ),
+                        ],
+                    )
+
+                    self.assertTrue(
+                        all(
+                            item["verdict"]
+                            == "pass"
+                            for item
+                            in record["checks"]
+                        )
+                    )
+
+    def test_validate_state_unreadable_or_invalid_binding_is_unknown_early_return(
+        self,
+    ):
+        cases = (
+            "missing",
+            "invalid-json",
+        )
+
+        for case in cases:
+            with self.subTest(
+                case=case
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = (
+                        self.make_state_fixture(
+                            Path(temp)
+                        )
+                    )
+
+                    if case == "missing":
+                        fixture[
+                            "binding"
+                        ].unlink()
+
+                    else:
+                        fixture[
+                            "binding"
+                        ].write_text(
+                            "{not-json\n",
+                            encoding="utf-8",
+                        )
+
+                    result = self.run_cli(
+                        *self.validate_state_argv(
+                            fixture
+                        )
+                    )
+
+                    self.assertEqual(
+                        result.returncode,
+                        2,
+                    )
+
+                    record = (
+                        ISOLATION.load_json(
+                            fixture["output"]
+                        )
+                    )
+
+                    self.assertEqual(
+                        record["schemaVersion"],
+                        1,
+                    )
+
+                    self.assertEqual(
+                        record["verdict"],
+                        "unknown",
+                    )
+
+                    self.assertEqual(
+                        record["checks"],
+                        [],
+                    )
+
+                    self.assertIn(
+                        (
+                            "latest binding "
+                            "unreadable:"
+                        ),
+                        record["reason"],
+                    )
+
+    def test_validate_state_non_object_binding_root_is_unknown_early_return(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_state_fixture(
+                    Path(temp)
+                )
+            )
+
+            fixture[
+                "binding"
+            ].write_text(
+                "[1, 2, 3]\n",
+                encoding="utf-8",
+            )
+
+            result = self.run_cli(
+                *self.validate_state_argv(
+                    fixture
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                record,
+                {
+                    "schemaVersion": 1,
+                    "verdict": "unknown",
+                    "reason":
+                        (
+                            "latest binding root "
+                            "is not object"
+                        ),
+                    "checks": [],
+                },
+            )
+
+    def test_validate_state_symlink_state_is_unknown_and_returns_before_latest_checks(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_state_fixture(
+                    Path(temp),
+                    explicit_state_file=True,
+                )
+            )
+
+            state = fixture["state"]
+
+            real_state = (
+                fixture["root"]
+                / "real-state.json"
+            )
+
+            real_state.write_text(
+                state.read_text(
+                    encoding="utf-8"
+                ),
+                encoding="utf-8",
+            )
+
+            state.unlink()
+
+            try:
+                state.symlink_to(
+                    real_state
+                )
+            except OSError as exc:
+                self.skipTest(
+                    "symlink unavailable: "
+                    f"{exc}"
+                )
+
+            result = self.run_cli(
+                *self.validate_state_argv(
+                    fixture
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "unknown",
+            )
+
+            self.assertEqual(
+                len(record["checks"]),
+                3,
+            )
+
+            self.assertEqual(
+                [
+                    item["number"]
+                    for item
+                    in record["checks"]
+                ],
+                [
+                    (
+                        "N1.state."
+                        "binding-generation"
+                    ),
+                    "N1.state.session",
+                    "N1.state.read",
+                ],
+            )
+
+            read_check = self.check(
+                record,
+                "N1.state.read",
+            )
+
+            self.assertEqual(
+                read_check["verdict"],
+                "unknown",
+            )
+
+            self.assertIn(
+                "state file is symlink",
+                read_check[
+                    "detail"
+                ]["error"],
+            )
+
+    def test_validate_state_missing_or_invalid_state_is_unknown_and_returns_before_latest_checks(
+        self,
+    ):
+        cases = (
+            "missing",
+            "invalid-json",
+        )
+
+        for case in cases:
+            with self.subTest(
+                case=case
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = (
+                        self.make_state_fixture(
+                            Path(temp)
+                        )
+                    )
+
+                    if case == "missing":
+                        fixture[
+                            "state"
+                        ].unlink()
+
+                    else:
+                        fixture[
+                            "state"
+                        ].write_text(
+                            "{broken-json\n",
+                            encoding="utf-8",
+                        )
+
+                    result = self.run_cli(
+                        *self.validate_state_argv(
+                            fixture
+                        )
+                    )
+
+                    self.assertEqual(
+                        result.returncode,
+                        2,
+                    )
+
+                    record = (
+                        ISOLATION.load_json(
+                            fixture["output"]
+                        )
+                    )
+
+                    self.assertEqual(
+                        record["verdict"],
+                        "unknown",
+                    )
+
+                    self.assertEqual(
+                        len(record["checks"]),
+                        3,
+                    )
+
+                    self.assertEqual(
+                        [
+                            item["number"]
+                            for item
+                            in record[
+                                "checks"
+                            ]
+                        ],
+                        [
+                            (
+                                "N1.state."
+                                "binding-generation"
+                            ),
+                            "N1.state.session",
+                            "N1.state.read",
+                        ],
+                    )
+
+                    self.assertEqual(
+                        self.check(
+                            record,
+                            "N1.state.read",
+                        )["verdict"],
+                        "unknown",
+                    )
+
+    def test_validate_state_non_object_state_root_is_not_early_return_but_adds_only_read_check(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_state_fixture(
+                    Path(temp)
+                )
+            )
+
+            fixture[
+                "state"
+            ].write_text(
+                "[1, 2, 3]\n",
+                encoding="utf-8",
+            )
+
+            result = self.run_cli(
+                *self.validate_state_argv(
+                    fixture
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            # Unlike the state read exception path, this reaches
+            # the common final write_json block.
+            self.assertRegex(
+                record["observedAt"],
+                UTC_RE,
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "unknown",
+            )
+
+            self.assertEqual(
+                len(record["checks"]),
+                3,
+            )
+
+            self.assertEqual(
+                [
+                    item["number"]
+                    for item
+                    in record["checks"]
+                ],
+                [
+                    (
+                        "N1.state."
+                        "binding-generation"
+                    ),
+                    "N1.state.session",
+                    "N1.state.read",
+                ],
+            )
+
+            read_check = self.check(
+                record,
+                "N1.state.read",
+            )
+
+            self.assertEqual(
+                read_check["verdict"],
+                "unknown",
+            )
+
+            self.assertEqual(
+                read_check[
+                    "detail"
+                ]["error"],
+                "state root is not object",
+            )
+
+    def test_validate_state_invalid_binding_generation_is_unknown(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_state_fixture(
+                    Path(temp)
+                )
+            )
+
+            binding_value = dict(
+                fixture["binding_value"]
+            )
+
+            # bool must remain invalid even though bool is an int subclass.
+            binding_value[
+                "generation"
+            ] = True
+
+            ISOLATION.write_json(
+                fixture["binding"],
+                binding_value,
+            )
+
+            result = self.run_cli(
+                *self.validate_state_argv(
+                    fixture
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "unknown",
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    (
+                        "N1.state."
+                        "binding-generation"
+                    ),
+                )["verdict"],
+                "unknown",
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    "N1.state.session",
+                )["verdict"],
+                "pass",
+            )
+
+    def test_validate_state_session_mismatch_is_definite_fail(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_state_fixture(
+                    Path(temp)
+                )
+            )
+
+            result = self.run_cli(
+                *self.validate_state_argv(
+                    fixture,
+                    expected_session=(
+                        self.OTHER_SESSION_ID
+                    ),
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                1,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "fail",
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    "N1.state.session",
+                )["verdict"],
+                "fail",
+            )
+
+    def test_validate_state_invalid_latest_generation_is_unknown(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_state_fixture(
+                    Path(temp)
+                )
+            )
+
+            state_value = dict(
+                fixture["state_value"]
+            )
+
+            state_value[
+                "latestGeneration"
+            ] = "01"
+
+            ISOLATION.write_json(
+                fixture["state"],
+                state_value,
+            )
+
+            result = self.run_cli(
+                *self.validate_state_argv(
+                    fixture
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "unknown",
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    (
+                        "N1.state."
+                        "latest-generation"
+                    ),
+                )["verdict"],
+                "unknown",
+            )
+
+    def test_validate_state_latest_binding_mismatch_is_definite_fail(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_state_fixture(
+                    Path(temp)
+                )
+            )
+
+            other_binding = (
+                fixture["root"]
+                / "other-binding.json"
+            )
+
+            other_binding.write_text(
+                "{}\n",
+                encoding="utf-8",
+            )
+
+            state_value = dict(
+                fixture["state_value"]
+            )
+
+            state_value[
+                "latestBinding"
+            ] = str(
+                other_binding
+            )
+
+            ISOLATION.write_json(
+                fixture["state"],
+                state_value,
+            )
+
+            result = self.run_cli(
+                *self.validate_state_argv(
+                    fixture
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                1,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "fail",
+            )
+
+            latest_binding = self.check(
+                record,
+                (
+                    "N1.state."
+                    "latest-binding"
+                ),
+            )
+
+            self.assertEqual(
+                latest_binding[
+                    "verdict"
+                ],
+                "fail",
+            )
+
+            self.assertEqual(
+                latest_binding[
+                    "detail"
+                ]["actual"],
+                str(
+                    other_binding.resolve()
+                ),
+            )
+
+            self.assertEqual(
+                latest_binding[
+                    "detail"
+                ]["expected"],
+                str(
+                    fixture[
+                        "binding"
+                    ].resolve()
+                ),
+            )
+
+    def test_validate_state_unresolvable_latest_binding_is_unknown(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_state_fixture(
+                    Path(temp)
+                )
+            )
+
+            missing_binding = (
+                fixture["root"]
+                / "does-not-exist"
+                / "binding.json"
+            )
+
+            state_value = dict(
+                fixture["state_value"]
+            )
+
+            state_value[
+                "latestBinding"
+            ] = str(
+                missing_binding
+            )
+
+            ISOLATION.write_json(
+                fixture["state"],
+                state_value,
+            )
+
+            result = self.run_cli(
+                *self.validate_state_argv(
+                    fixture
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "unknown",
+            )
+
+            latest_binding = self.check(
+                record,
+                (
+                    "N1.state."
+                    "latest-binding"
+                ),
+            )
+
+            self.assertEqual(
+                latest_binding[
+                    "verdict"
+                ],
+                "unknown",
+            )
+
+            self.assertIn(
+                "error",
+                latest_binding[
+                    "detail"
+                ],
+            )
+
+    def test_validate_state_empty_or_non_string_latest_binding_is_unknown(
+        self,
+    ):
+        for value in (
+            "",
+            None,
+            42,
+            [],
+        ):
+            with self.subTest(
+                value=value
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = (
+                        self.make_state_fixture(
+                            Path(temp)
+                        )
+                    )
+
+                    state_value = dict(
+                        fixture[
+                            "state_value"
+                        ]
+                    )
+
+                    state_value[
+                        "latestBinding"
+                    ] = value
+
+                    ISOLATION.write_json(
+                        fixture["state"],
+                        state_value,
+                    )
+
+                    result = self.run_cli(
+                        *self
+                        .validate_state_argv(
+                            fixture
+                        )
+                    )
+
+                    self.assertEqual(
+                        result.returncode,
+                        2,
+                    )
+
+                    record = (
+                        ISOLATION
+                        .load_json(
+                            fixture[
+                                "output"
+                            ]
+                        )
+                    )
+
+                    self.assertEqual(
+                        record["verdict"],
+                        "unknown",
+                    )
+
+                    latest_binding = (
+                        self.check(
+                            record,
+                            (
+                                "N1.state."
+                                "latest-binding"
+                            ),
+                        )
+                    )
+
+                    self.assertEqual(
+                        latest_binding[
+                            "verdict"
+                        ],
+                        "unknown",
+                    )
+
+                    self.assertEqual(
+                        latest_binding[
+                            "detail"
+                        ]["actual"],
+                        value,
+                    )
+
+    def test_write_n1_result_cli_accepts_all_three_verdicts(
+        self,
+    ):
+        for verdict in (
+            "pass",
+            "fail",
+            "unknown",
+        ):
+            with self.subTest(
+                verdict=verdict
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(
+                        temp
+                    ).resolve()
+
+                    output = (
+                        root
+                        / "nested"
+                        / "result.json"
+                    )
+
+                    reason = (
+                        f"reason-for-{verdict}"
+                    )
+
+                    result = self.run_cli(
+                        "write-n1-result",
+                        "--output",
+                        str(output),
+                        "--verdict",
+                        verdict,
+                        "--reason",
+                        reason,
+                    )
+
+                    self.assertEqual(
+                        result.returncode,
+                        0,
+                        result.stderr,
+                    )
+
+                    self.assertEqual(
+                        result.stdout,
+                        "",
+                    )
+
+                    record = (
+                        ISOLATION.load_json(
+                            output
+                        )
+                    )
+
+                    self.assertEqual(
+                        record[
+                            "schemaVersion"
+                        ],
+                        1,
+                    )
+
+                    self.assertEqual(
+                        record["check"],
+                        "N1",
+                    )
+
+                    self.assertEqual(
+                        record["verdict"],
+                        verdict,
+                    )
+
+                    self.assertEqual(
+                        record["reason"],
+                        reason,
+                    )
+
+                    self.assertRegex(
+                        record[
+                            "observedAt"
+                        ],
+                        UTC_RE,
+                    )
+
+    def test_write_n1_result_cli_rejects_invalid_verdict_at_argparse_layer(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            output = (
+                root
+                / "result.json"
+            )
+
+            result = self.run_cli(
+                "write-n1-result",
+                "--output",
+                str(output),
+                "--verdict",
+                "maybe",
+                "--reason",
+                "invalid",
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            self.assertIn(
+                "invalid choice",
+                result.stderr,
+            )
+
+            self.assertIn(
+                "maybe",
+                result.stderr,
+            )
+
+            self.assertFalse(
+                output.exists()
+            )
+
+            # argparse rejected the request before the handler could run.
+            self.assertNotIn(
+                "invalid N1 verdict",
+                result.stderr,
+            )
+
+    def test_write_n1_result_handler_defensively_rejects_invalid_verdict_when_called_directly(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            output = (
+                root
+                / "result.json"
+            )
+
+            args = (
+                ISOLATION
+                .argparse
+                .Namespace(
+                    output=str(output),
+                    verdict="maybe",
+                    reason="invalid",
+                )
+            )
+
+            stderr = io.StringIO()
+
+            with contextlib.redirect_stderr(
+                stderr
+            ):
+                with self.assertRaises(
+                    SystemExit
+                ) as raised:
+                    ISOLATION.command_write_n1_result(
+                        args
+                    )
+
+            self.assertEqual(
+                raised.exception.code,
+                2,
+            )
+
+            self.assertEqual(
+                stderr.getvalue(),
+                (
+                    "pilot-gate-isolation: "
+                    "invalid N1 verdict\n"
+                ),
+            )
+
+            self.assertFalse(
+                output.exists()
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
