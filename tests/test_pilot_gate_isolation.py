@@ -1300,5 +1300,845 @@ class PilotGateIsolationUtilityTests(unittest.TestCase):
             )
 
 
+
+class PilotGateIsolationPreflightTests(unittest.TestCase):
+    def git_init(self, path: Path) -> None:
+        path.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            ["git", "-C", str(path), "init", "-q"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def git_track(self, repo: Path, relative: str, content: str) -> Path:
+        path = repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        result = subprocess.run(
+            ["git", "-C", str(repo), "add", relative],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return path
+
+    def make_preflight_fixture(self, root: Path) -> dict[str, object]:
+        run_root = root / "run-root"
+        gate_repo = run_root / "repo"
+        live_repo = root / "live"
+        source = root / "source"
+        artifact_dir = root / "artifacts"
+        gate_home = run_root / "home"
+        xdg_config = run_root / "xdg" / "config"
+        xdg_cache = run_root / "xdg" / "cache"
+        xdg_data = run_root / "xdg" / "data"
+        xdg_state = run_root / "xdg" / "state"
+        claude_config = run_root / "claude"
+        claude_bin = root / "native-bin" / "claude"
+        output = artifact_dir / "preflight.json"
+        gate_team = "agmsg-g4gate-round-b"
+        pilot_agent = "agmsg_pm_pilot_claude"
+        pilot_type = "claude-code"
+
+        self.git_init(gate_repo)
+        self.git_track(gate_repo, "tracked.txt", "gate-only\n")
+
+        live_repo.mkdir(parents=True)
+        source.mkdir(parents=True)
+        artifact_dir.mkdir(parents=True)
+
+        for directory in (
+            gate_home,
+            xdg_config,
+            xdg_cache,
+            xdg_data,
+            xdg_state,
+            claude_config,
+        ):
+            directory.mkdir(parents=True)
+
+        claude_bin.parent.mkdir(parents=True)
+        claude_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        claude_bin.chmod(0o755)
+
+        team_config = gate_repo / "teams" / gate_team / "config.json"
+        team_config.parent.mkdir(parents=True)
+        ISOLATION.write_json(
+            team_config,
+            {
+                "name": gate_team,
+                "agents": {
+                    pilot_agent: {
+                        "registrations": [
+                            {
+                                "type": pilot_type,
+                                "project": str(gate_repo),
+                            }
+                        ]
+                    }
+                },
+            },
+        )
+
+        argv = [
+            "preflight",
+            "--output", str(output),
+            "--run-id", "round-b-run",
+            "--run-root", str(run_root),
+            "--source", str(source),
+            "--live-repo", str(live_repo),
+            "--gate-repo", str(gate_repo),
+            "--artifact-dir", str(artifact_dir),
+            "--gate-team", gate_team,
+            "--pilot-agent", pilot_agent,
+            "--pilot-type", pilot_type,
+            "--gate-home", str(gate_home),
+            "--xdg-config", str(xdg_config),
+            "--xdg-cache", str(xdg_cache),
+            "--xdg-data", str(xdg_data),
+            "--xdg-state", str(xdg_state),
+            "--claude-config", str(claude_config),
+            "--claude-bin", str(claude_bin),
+        ]
+
+        return {
+            "run_root": run_root,
+            "gate_repo": gate_repo,
+            "live_repo": live_repo,
+            "source": source,
+            "artifact_dir": artifact_dir,
+            "gate_home": gate_home,
+            "xdg_config": xdg_config,
+            "xdg_cache": xdg_cache,
+            "xdg_data": xdg_data,
+            "xdg_state": xdg_state,
+            "claude_config": claude_config,
+            "claude_bin": claude_bin,
+            "output": output,
+            "gate_team": gate_team,
+            "pilot_agent": pilot_agent,
+            "pilot_type": pilot_type,
+            "team_config": team_config,
+            "argv": argv,
+        }
+
+    def without_github_credentials(self) -> dict[str, str]:
+        env = os.environ.copy()
+        for key in ISOLATION.GITHUB_CREDENTIAL_ENV_KEYS:
+            env.pop(key, None)
+        return env
+
+    def run_preflight_cli(
+        self,
+        fixture: dict[str, object],
+        *,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(HELPER), *fixture["argv"]],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            env=env,
+        )
+
+    def parsed_preflight_args(self, fixture: dict[str, object]):
+        return ISOLATION.build_parser().parse_args(fixture["argv"])
+
+    def test_git_remote_state_reports_empty_remote_configuration(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            self.git_init(repo)
+
+            passed, detail = ISOLATION.git_remote_state(str(repo))
+
+            self.assertTrue(passed)
+            self.assertEqual(detail["remoteNames"], [])
+            self.assertEqual(detail["remoteConfigEntries"], [])
+
+    def test_git_remote_state_reports_configured_remote(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            self.git_init(repo)
+
+            result = subprocess.run(
+                [
+                    "git", "-C", str(repo),
+                    "remote", "add", "origin",
+                    "https://example.invalid/agmsg.git",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            passed, detail = ISOLATION.git_remote_state(str(repo))
+
+            self.assertFalse(passed)
+            self.assertEqual(detail["remoteNames"], ["origin"])
+            self.assertTrue(detail["remoteConfigEntries"])
+            self.assertTrue(
+                any(
+                    line.startswith("remote.origin.")
+                    for line in detail["remoteConfigEntries"]
+                )
+            )
+
+    def test_git_remote_state_returns_unknown_when_git_remote_fails(self):
+        with tempfile.TemporaryDirectory() as temp:
+            not_repo = Path(temp) / "not-repo"
+            not_repo.mkdir()
+
+            passed, detail = ISOLATION.git_remote_state(str(not_repo))
+
+            self.assertIsNone(passed)
+            self.assertIn("error", detail)
+            self.assertTrue(detail["error"])
+
+    def test_tracked_hardlink_overlap_detects_shared_inode(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            gate = root / "gate"
+            live = root / "live"
+            self.git_init(gate)
+            live.mkdir()
+
+            gate_file = self.git_track(gate, "same.txt", "shared\n")
+            live_file = live / "same.txt"
+            os.link(gate_file, live_file)
+
+            passed, overlaps = ISOLATION.tracked_hardlink_overlap(
+                str(gate),
+                str(live),
+            )
+
+            self.assertFalse(passed)
+            self.assertEqual(len(overlaps), 1)
+            self.assertEqual(overlaps[0]["path"], "same.txt")
+            self.assertEqual(overlaps[0]["device"], gate_file.stat().st_dev)
+            self.assertEqual(overlaps[0]["inode"], gate_file.stat().st_ino)
+
+    def test_tracked_hardlink_overlap_accepts_distinct_same_name_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            gate = root / "gate"
+            live = root / "live"
+            self.git_init(gate)
+            live.mkdir()
+
+            self.git_track(gate, "same.txt", "gate\n")
+            (live / "same.txt").write_text("live\n", encoding="utf-8")
+
+            passed, overlaps = ISOLATION.tracked_hardlink_overlap(
+                str(gate),
+                str(live),
+            )
+
+            self.assertTrue(passed)
+            self.assertEqual(overlaps, [])
+
+    def test_tracked_hardlink_overlap_accepts_repository_with_no_tracked_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            gate = root / "gate"
+            live = root / "live"
+            self.git_init(gate)
+            live.mkdir()
+
+            passed, overlaps = ISOLATION.tracked_hardlink_overlap(
+                str(gate),
+                str(live),
+            )
+
+            self.assertTrue(passed)
+            self.assertEqual(overlaps, [])
+
+    def test_tracked_hardlink_overlap_returns_unknown_when_git_listing_fails(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            gate = root / "not-repo"
+            live = root / "live"
+            gate.mkdir()
+            live.mkdir()
+
+            passed, detail = ISOLATION.tracked_hardlink_overlap(
+                str(gate),
+                str(live),
+            )
+
+            self.assertIsNone(passed)
+            self.assertEqual(len(detail), 1)
+            self.assertIn("error", detail[0])
+            self.assertTrue(detail[0]["error"])
+
+    def test_credential_files_returns_only_existing_candidates(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home = root / "home"
+            xdg = root / "xdg"
+            home.mkdir()
+            xdg.mkdir()
+
+            self.assertEqual(
+                ISOLATION.credential_files(str(home), str(xdg)),
+                [],
+            )
+
+            home_hosts = home / ".config" / "gh" / "hosts.yml"
+            netrc = home / ".netrc"
+            home_hosts.parent.mkdir(parents=True)
+            home_hosts.write_text("github.com:\n", encoding="utf-8")
+            netrc.write_text("machine example.invalid\n", encoding="utf-8")
+
+            self.assertEqual(
+                set(ISOLATION.credential_files(str(home), str(xdg))),
+                {
+                    str(home_hosts.resolve()),
+                    str(netrc.resolve()),
+                },
+            )
+
+            xdg_hosts = xdg / "gh" / "hosts.yml"
+            git_credentials = home / ".git-credentials"
+            xdg_hosts.parent.mkdir(parents=True)
+            xdg_hosts.write_text("github.com:\n", encoding="utf-8")
+            git_credentials.write_text(
+                "https://example.invalid\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                set(ISOLATION.credential_files(str(home), str(xdg))),
+                {
+                    str(home_hosts.resolve()),
+                    str(xdg_hosts.resolve()),
+                    str(git_credentials.resolve()),
+                    str(netrc.resolve()),
+                },
+            )
+
+    def test_validate_gate_roster_distinguishes_missing_malformed_and_absent_agent(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            repo.mkdir()
+            team = "gate-team"
+            agent = "pilot"
+            pilot_type = "claude-code"
+            config = repo / "teams" / team / "config.json"
+
+            passed, detail = ISOLATION.validate_gate_roster(
+                str(repo), team, agent, pilot_type
+            )
+            self.assertFalse(passed)
+            self.assertEqual(detail["error"], "gate team config missing")
+
+            config.parent.mkdir(parents=True)
+            config.write_text("{not-json\n", encoding="utf-8")
+            passed, detail = ISOLATION.validate_gate_roster(
+                str(repo), team, agent, pilot_type
+            )
+            self.assertIsNone(passed)
+            self.assertIn("cannot parse gate team config", detail["error"])
+
+            ISOLATION.write_json(config, {"agents": []})
+            passed, detail = ISOLATION.validate_gate_roster(
+                str(repo), team, agent, pilot_type
+            )
+            self.assertIsNone(passed)
+            self.assertEqual(
+                detail["error"],
+                "team config agents is not an object",
+            )
+
+            ISOLATION.write_json(
+                config,
+                {
+                    "agents": {
+                        agent: {
+                            "registrations": {},
+                        }
+                    }
+                },
+            )
+            passed, detail = ISOLATION.validate_gate_roster(
+                str(repo), team, agent, pilot_type
+            )
+            self.assertIsNone(passed)
+            self.assertEqual(
+                detail["error"],
+                "registrations is not an array",
+            )
+
+            ISOLATION.write_json(config, {"agents": {}})
+            passed, detail = ISOLATION.validate_gate_roster(
+                str(repo), team, agent, pilot_type
+            )
+            self.assertFalse(passed)
+            self.assertEqual(detail["error"], "pilot agent absent")
+
+    def test_validate_gate_roster_requires_exactly_one_matching_registration(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            repo.mkdir()
+            other_project = root / "other"
+            other_project.mkdir()
+            team = "gate-team"
+            agent = "pilot"
+            pilot_type = "claude-code"
+            config = repo / "teams" / team / "config.json"
+            config.parent.mkdir(parents=True)
+
+            def write_registrations(registrations: list[object]) -> None:
+                ISOLATION.write_json(
+                    config,
+                    {
+                        "agents": {
+                            agent: {
+                                "registrations": registrations,
+                            }
+                        }
+                    },
+                )
+
+            write_registrations(
+                [
+                    {
+                        "type": pilot_type,
+                        "project": str(other_project),
+                    }
+                ]
+            )
+            passed, detail = ISOLATION.validate_gate_roster(
+                str(repo), team, agent, pilot_type
+            )
+            self.assertFalse(passed)
+            self.assertEqual(detail["matchingRegistrations"], 0)
+
+            one = {
+                "type": pilot_type,
+                "project": str(repo),
+            }
+            write_registrations([one])
+            passed, detail = ISOLATION.validate_gate_roster(
+                str(repo), team, agent, pilot_type
+            )
+            self.assertTrue(passed)
+            self.assertEqual(detail["matchingRegistrations"], 1)
+
+            write_registrations(
+                [
+                    one,
+                    dict(one),
+                ]
+            )
+            passed, detail = ISOLATION.validate_gate_roster(
+                str(repo), team, agent, pilot_type
+            )
+            self.assertFalse(passed)
+            self.assertEqual(detail["matchingRegistrations"], 2)
+
+    def test_validate_gate_roster_skips_malformed_and_unresolvable_registration_entries(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            repo.mkdir()
+            team = "gate-team"
+            agent = "pilot"
+            pilot_type = "claude-code"
+            config = repo / "teams" / team / "config.json"
+            config.parent.mkdir(parents=True)
+
+            ISOLATION.write_json(
+                config,
+                {
+                    "agents": {
+                        agent: {
+                            "registrations": [
+                                "not-an-object",
+                                {
+                                    "type": pilot_type,
+                                    "project": 123,
+                                },
+                                {
+                                    "type": pilot_type,
+                                    "project": str(
+                                        root / "missing-project"
+                                    ),
+                                },
+                                {
+                                    "type": "other-type",
+                                    "project": str(repo),
+                                },
+                                {
+                                    "type": pilot_type,
+                                    "project": str(repo),
+                                },
+                            ]
+                        }
+                    }
+                },
+            )
+
+            passed, detail = ISOLATION.validate_gate_roster(
+                str(repo), team, agent, pilot_type
+            )
+
+            self.assertTrue(passed)
+            self.assertEqual(detail["matchingRegistrations"], 1)
+            self.assertEqual(detail["totalRegistrations"], 5)
+
+    def test_preflight_cli_passes_all_thirteen_checks_with_fake_unauthenticated_gh(self):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_preflight_fixture(Path(temp))
+            fake_bin = Path(temp) / "fake-bin"
+            fake_bin.mkdir()
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/bin/sh\nexit 1\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(0o755)
+
+            env = self.without_github_credentials()
+            env["PATH"] = (
+                f"{fake_bin}"
+                f"{os.pathsep}"
+                f"{env.get('PATH', '')}"
+            )
+
+            result = self.run_preflight_cli(
+                fixture,
+                env=env,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                0,
+                result.stderr,
+            )
+            record = json.loads(
+                fixture["output"].read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                record["schemaVersion"],
+                1,
+            )
+            self.assertEqual(
+                record["runId"],
+                "round-b-run",
+            )
+            self.assertRegex(
+                record["observedAt"],
+                UTC_RE,
+            )
+            self.assertTrue(
+                record["safe"]
+            )
+            self.assertEqual(
+                record["verdict"],
+                "pass",
+            )
+            self.assertEqual(
+                len(record["checks"]),
+                13,
+            )
+            self.assertEqual(
+                [
+                    check["number"]
+                    for check
+                    in record["checks"]
+                ],
+                [
+                    f"P3.{number}"
+                    for number in range(1, 14)
+                ],
+            )
+            self.assertTrue(
+                all(
+                    check["verdict"] == "pass"
+                    for check
+                    in record["checks"]
+                )
+            )
+            p310 = next(
+                check
+                for check
+                in record["checks"]
+                if check["number"]
+                == "P3.10"
+            )
+            self.assertEqual(
+                p310["detail"][
+                    "authStatusExit"
+                ],
+                1,
+            )
+
+    def test_preflight_internal_passes_when_gh_executable_is_absent(self):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_preflight_fixture(
+                Path(temp)
+            )
+            args = self.parsed_preflight_args(
+                fixture
+            )
+
+            environment = (
+                self.without_github_credentials()
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                environment,
+                clear=True,
+            ):
+                with mock.patch.object(
+                    ISOLATION.shutil,
+                    "which",
+                    return_value=None,
+                ):
+                    status = (
+                        ISOLATION.command_preflight(
+                            args
+                        )
+                    )
+
+            self.assertEqual(
+                status,
+                0,
+            )
+            record = ISOLATION.load_json(
+                fixture["output"]
+            )
+            p310 = next(
+                check
+                for check
+                in record["checks"]
+                if check["number"]
+                == "P3.10"
+            )
+            self.assertEqual(
+                p310["verdict"],
+                "pass",
+            )
+            self.assertIsNone(
+                p310["detail"][
+                    "ghExecutable"
+                ]
+            )
+            self.assertEqual(
+                p310["detail"]["reason"],
+                "gh executable absent",
+            )
+
+    def test_preflight_remote_failure_has_fail_verdict_but_barrier_exit_two(self):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_preflight_fixture(Path(temp))
+
+            add_remote = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(fixture["gate_repo"]),
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://example.invalid/agmsg.git",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                add_remote.returncode,
+                0,
+                add_remote.stderr,
+            )
+
+            env = self.without_github_credentials()
+            fake_bin = Path(temp) / "fake-bin"
+            fake_bin.mkdir()
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/bin/sh\nexit 1\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(0o755)
+            env["PATH"] = (
+                f"{fake_bin}"
+                f"{os.pathsep}"
+                f"{env.get('PATH', '')}"
+            )
+
+            result = self.run_preflight_cli(
+                fixture,
+                env=env,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+            record = ISOLATION.load_json(
+                fixture["output"]
+            )
+            self.assertFalse(
+                record["safe"]
+            )
+            self.assertEqual(
+                record["verdict"],
+                "fail",
+            )
+
+            p33 = next(
+                check
+                for check
+                in record["checks"]
+                if check["number"]
+                == "P3.3"
+            )
+            self.assertEqual(
+                p33["verdict"],
+                "fail",
+            )
+
+    def test_preflight_missing_roster_is_fail_and_barrier_exit_two(self):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_preflight_fixture(Path(temp))
+
+            ISOLATION.write_json(
+                fixture["team_config"],
+                {
+                    "agents": {},
+                },
+            )
+
+            env = self.without_github_credentials()
+            fake_bin = Path(temp) / "fake-bin"
+            fake_bin.mkdir()
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/bin/sh\nexit 1\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(0o755)
+            env["PATH"] = (
+                f"{fake_bin}"
+                f"{os.pathsep}"
+                f"{env.get('PATH', '')}"
+            )
+
+            result = self.run_preflight_cli(
+                fixture,
+                env=env,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+            record = ISOLATION.load_json(
+                fixture["output"]
+            )
+            self.assertEqual(
+                record["verdict"],
+                "fail",
+            )
+            self.assertFalse(
+                record["safe"]
+            )
+
+            p37 = next(
+                check
+                for check
+                in record["checks"]
+                if check["number"]
+                == "P3.7"
+            )
+            self.assertEqual(
+                p37["verdict"],
+                "fail",
+            )
+            self.assertEqual(
+                p37["detail"]["error"],
+                "pilot agent absent",
+            )
+
+    def test_preflight_canonicalization_failure_writes_unknown_with_no_checks_and_exits_two(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            fixture = self.make_preflight_fixture(
+                root
+            )
+            missing_run_root = (
+                root
+                / "definitely-missing-run-root"
+            )
+
+            argv = list(
+                fixture["argv"]
+            )
+            index = argv.index(
+                "--run-root"
+            )
+            argv[index + 1] = str(
+                missing_run_root
+            )
+            fixture["argv"] = argv
+
+            env = self.without_github_credentials()
+            result = self.run_preflight_cli(
+                fixture,
+                env=env,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+            record = ISOLATION.load_json(
+                fixture["output"]
+            )
+            self.assertEqual(
+                record["schemaVersion"],
+                1,
+            )
+            self.assertEqual(
+                record["runId"],
+                "round-b-run",
+            )
+            self.assertFalse(
+                record["safe"]
+            )
+            self.assertEqual(
+                record["verdict"],
+                "unknown",
+            )
+            self.assertEqual(
+                record["checks"],
+                [],
+            )
+            self.assertIn(
+                "canonicalization unavailable",
+                record["reason"],
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
