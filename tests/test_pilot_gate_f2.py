@@ -3518,5 +3518,961 @@ class PilotGateF2RoundC(unittest.TestCase):
                 self.COMMAND,
             )
 
+
+class PilotGateF2RoundD(unittest.TestCase):
+    TOOL_ID = "tool-123"
+
+    def binding_check(self, verdict="pass"):
+        return {
+            "name": "binding-profile-digest",
+            "verdict": verdict,
+            "detail": {"fixture": True},
+        }
+
+    def check_map(self, result):
+        return {
+            item["name"]: item
+            for item in result["checks"]
+        }
+
+    def base_observation(
+        self,
+        *,
+        hook_decision=None,
+        evidence=None,
+        collector=None,
+        raw_timeout=None,
+        tool_id=TOOL_ID,
+    ):
+        value = {
+            "toolUseId": tool_id,
+            "hookDecision": hook_decision,
+        }
+
+        if evidence is not None:
+            value["evidence"] = evidence
+
+        if collector is not None:
+            value["collector"] = collector
+
+        if raw_timeout is not None:
+            value["rawTimeoutIndication"] = raw_timeout
+
+        return value
+
+    def test_common_checks_keep_binding_first_and_normalize_nondict_inputs(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            marker = root / "marker"
+            binding = self.binding_check()
+
+            observation = {
+                "toolUseId": self.TOOL_ID,
+                "hookDecision": "deny",
+                "evidence": ["not-a-dict"],
+                "collector": "not-a-dict",
+            }
+
+            result = F2.evaluate_case(
+                label="control",
+                observation=observation,
+                marker=marker,
+                binding_check=binding,
+            )
+
+            self.assertIs(
+                result["checks"][0],
+                binding,
+            )
+
+            checks = self.check_map(result)
+
+            self.assertEqual(
+                checks[
+                    "tool-attempt-observable"
+                ]["verdict"],
+                "pass",
+            )
+            self.assertEqual(
+                checks[
+                    "collector-observation"
+                ]["verdict"],
+                "fail",
+            )
+            self.assertEqual(
+                checks[
+                    "collector-observation"
+                ]["detail"],
+                {},
+            )
+            self.assertEqual(
+                checks[
+                    "collector-recorded-failure"
+                ]["verdict"],
+                "unknown",
+            )
+
+    def test_tool_attempt_observable_requires_nonempty_string(
+        self,
+    ):
+        for value, expected in (
+            ("tool-1", "pass"),
+            ("", "fail"),
+            (None, "fail"),
+            (123, "fail"),
+        ):
+            with self.subTest(value=value):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp).resolve()
+                    marker = root / "marker"
+
+                    observation = self.base_observation(
+                        hook_decision="deny",
+                        collector={
+                            "verdict": "pass",
+                            "observation": {
+                                "completionState":
+                                    "failure",
+                            },
+                        },
+                        tool_id=value,
+                    )
+
+                    result = F2.evaluate_case(
+                        label="control",
+                        observation=observation,
+                        marker=marker,
+                        binding_check=self.binding_check(),
+                    )
+
+                    checks = self.check_map(result)
+
+                    self.assertEqual(
+                        checks[
+                            "tool-attempt-observable"
+                        ]["verdict"],
+                        expected,
+                    )
+
+    def test_collector_observation_maps_pass_unknown_and_other_to_tristate(
+        self,
+    ):
+        for collector_value, expected in (
+            ({"verdict": "pass"}, "pass"),
+            ({"verdict": "unknown"}, "unknown"),
+            ({"verdict": "fail"}, "fail"),
+            ({}, "fail"),
+        ):
+            with self.subTest(
+                collector_value=collector_value
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp).resolve()
+                    marker = root / "marker"
+
+                    observation = self.base_observation(
+                        hook_decision="deny",
+                        collector=collector_value,
+                    )
+
+                    result = F2.evaluate_case(
+                        label="control",
+                        observation=observation,
+                        marker=marker,
+                        binding_check=self.binding_check(),
+                    )
+
+                    checks = self.check_map(result)
+
+                    self.assertEqual(
+                        checks[
+                            "collector-observation"
+                        ]["verdict"],
+                        expected,
+                    )
+
+    def test_control_case_passes_with_deny_absent_marker_and_failure_record(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            marker = root / "marker"
+
+            observation = self.base_observation(
+                hook_decision="deny",
+                collector={
+                    "verdict": "pass",
+                    "observation": {
+                        "completionState": "failure",
+                    },
+                },
+            )
+
+            result = F2.evaluate_case(
+                label="control",
+                observation=observation,
+                marker=marker,
+                binding_check=self.binding_check(),
+            )
+
+            checks = self.check_map(result)
+
+            self.assertEqual(
+                set(checks),
+                {
+                    "binding-profile-digest",
+                    "tool-attempt-observable",
+                    "collector-observation",
+                    "guard-deny-observed",
+                    "probe-marker-absent",
+                    "collector-recorded-failure",
+                },
+            )
+            self.assertTrue(
+                all(
+                    item["verdict"] == "pass"
+                    for item in checks.values()
+                )
+            )
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+
+    def test_control_marker_existing_or_dangling_symlink_fails_absence(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            observation = self.base_observation(
+                hook_decision="deny",
+                collector={
+                    "verdict": "pass",
+                    "observation": {
+                        "completionState": "failure",
+                    },
+                },
+            )
+
+            marker = root / "marker"
+            marker.write_text(
+                "present",
+                encoding="utf-8",
+            )
+
+            result = F2.evaluate_case(
+                label="control",
+                observation=observation,
+                marker=marker,
+                binding_check=self.binding_check(),
+            )
+
+            self.assertEqual(
+                self.check_map(result)[
+                    "probe-marker-absent"
+                ]["verdict"],
+                "fail",
+            )
+
+            marker.unlink()
+
+            try:
+                marker.symlink_to(
+                    root / "missing-target"
+                )
+            except OSError as exc:
+                self.skipTest(
+                    f"symlink unavailable: {exc}"
+                )
+
+            result = F2.evaluate_case(
+                label="control",
+                observation=observation,
+                marker=marker,
+                binding_check=self.binding_check(),
+            )
+
+            self.assertEqual(
+                self.check_map(result)[
+                    "probe-marker-absent"
+                ]["verdict"],
+                "fail",
+            )
+
+    def test_control_empty_collector_record_is_unknown_but_wrong_nonempty_record_is_fail(
+        self,
+    ):
+        for record, expected in (
+            ({}, "unknown"),
+            (
+                {
+                    "completionState": "success",
+                },
+                "fail",
+            ),
+        ):
+            with self.subTest(record=record):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp).resolve()
+                    marker = root / "marker"
+
+                    observation = self.base_observation(
+                        hook_decision="deny",
+                        collector={
+                            "verdict": "pass",
+                            "observation": record,
+                        },
+                    )
+
+                    result = F2.evaluate_case(
+                        label="control",
+                        observation=observation,
+                        marker=marker,
+                        binding_check=self.binding_check(),
+                    )
+
+                    check = self.check_map(result)[
+                        "collector-recorded-failure"
+                    ]
+
+                    self.assertEqual(
+                        check["verdict"],
+                        expected,
+                    )
+
+    def test_missing_case_passes_with_no_deny_real_marker_successful_tool_and_collector(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            marker = root / "marker"
+            marker.write_text(
+                "created",
+                encoding="utf-8",
+            )
+
+            evidence = {
+                "resultFound": True,
+                "resultIsError": False,
+            }
+
+            observation = self.base_observation(
+                hook_decision=None,
+                evidence=evidence,
+                collector={
+                    "verdict": "pass",
+                    "observation": {
+                        "completionState": "success",
+                    },
+                },
+            )
+
+            result = F2.evaluate_case(
+                label="missing",
+                observation=observation,
+                marker=marker,
+                binding_check=self.binding_check(),
+            )
+
+            checks = self.check_map(result)
+
+            self.assertEqual(
+                set(checks),
+                {
+                    "binding-profile-digest",
+                    "tool-attempt-observable",
+                    "collector-observation",
+                    "guard-deny-absent",
+                    "probe-marker-created",
+                    "tool-result-success",
+                    "collector-recorded-success",
+                },
+            )
+            self.assertTrue(
+                all(
+                    item["verdict"] == "pass"
+                    for item in checks.values()
+                )
+            )
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+
+    def test_missing_tool_result_and_collector_record_tristate(
+        self,
+    ):
+        cases = (
+            (
+                {
+                    "resultFound": False,
+                    "resultIsError": False,
+                },
+                {},
+                "unknown",
+                "unknown",
+            ),
+            (
+                {
+                    "resultFound": True,
+                    "resultIsError": True,
+                },
+                {
+                    "completionState": "failure",
+                },
+                "fail",
+                "fail",
+            ),
+        )
+
+        for (
+            evidence,
+            collector_record,
+            tool_expected,
+            collector_expected,
+        ) in cases:
+            with self.subTest(
+                evidence=evidence,
+                collector_record=collector_record,
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp).resolve()
+                    marker = root / "marker"
+                    marker.write_text(
+                        "created",
+                        encoding="utf-8",
+                    )
+
+                    observation = self.base_observation(
+                        hook_decision=None,
+                        evidence=evidence,
+                        collector={
+                            "verdict": "pass",
+                            "observation":
+                                collector_record,
+                        },
+                    )
+
+                    result = F2.evaluate_case(
+                        label="missing",
+                        observation=observation,
+                        marker=marker,
+                        binding_check=self.binding_check(),
+                    )
+
+                    checks = self.check_map(result)
+
+                    self.assertEqual(
+                        checks[
+                            "tool-result-success"
+                        ]["verdict"],
+                        tool_expected,
+                    )
+                    self.assertEqual(
+                        checks[
+                            "collector-recorded-success"
+                        ]["verdict"],
+                        collector_expected,
+                    )
+
+    def test_missing_marker_symlink_is_not_accepted_as_created_probe(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            target = root / "real-marker"
+            target.write_text(
+                "real",
+                encoding="utf-8",
+            )
+
+            marker = root / "marker"
+
+            try:
+                marker.symlink_to(target)
+            except OSError as exc:
+                self.skipTest(
+                    f"symlink unavailable: {exc}"
+                )
+
+            observation = self.base_observation(
+                hook_decision=None,
+                evidence={
+                    "resultFound": True,
+                    "resultIsError": False,
+                },
+                collector={
+                    "verdict": "pass",
+                    "observation": {
+                        "completionState": "success",
+                    },
+                },
+            )
+
+            result = F2.evaluate_case(
+                label="missing",
+                observation=observation,
+                marker=marker,
+                binding_check=self.binding_check(),
+            )
+
+            self.assertEqual(
+                self.check_map(result)[
+                    "probe-marker-created"
+                ]["verdict"],
+                "fail",
+            )
+
+    def timeout_observation(self):
+        return self.base_observation(
+            hook_decision=None,
+            evidence={
+                "resultFound": True,
+                "resultIsError": False,
+            },
+            collector={
+                "verdict": "pass",
+                "observation": {
+                    "completionState": "success",
+                },
+            },
+            raw_timeout={
+                "found": True,
+                "matches": [
+                    {
+                        "source": "pty",
+                        "excerpt": "hook timed out",
+                    }
+                ],
+            },
+        )
+
+    def test_timeout_case_passes_when_injector_started_but_did_not_complete(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            marker = root / "marker"
+            marker.write_text(
+                "created",
+                encoding="utf-8",
+            )
+
+            injector_log = root / "injector.jsonl"
+            injector_log.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "event": "started",
+                        "pid": 123,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            observation = self.timeout_observation()
+
+            result = F2.evaluate_case(
+                label="timeout",
+                observation=observation,
+                marker=marker,
+                binding_check=self.binding_check(),
+                injector_log=injector_log,
+            )
+
+            checks = self.check_map(result)
+
+            self.assertEqual(
+                set(checks),
+                {
+                    "binding-profile-digest",
+                    "tool-attempt-observable",
+                    "collector-observation",
+                    "timeout-injector-started",
+                    (
+                        "timeout-injector-killed-"
+                        "before-normal-completion"
+                    ),
+                    "raw-hook-timeout-indication",
+                    "guard-deny-absent",
+                    "probe-marker-created",
+                    "tool-result-success",
+                    "collector-recorded-success",
+                },
+            )
+            self.assertTrue(
+                all(
+                    item["verdict"] == "pass"
+                    for item in checks.values()
+                )
+            )
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+
+    def test_timeout_missing_or_none_injector_log_uses_empty_records(
+        self,
+    ):
+        for injector_log in (
+            None,
+            Path(
+                "/definitely/not/present/"
+                "injector.jsonl"
+            ),
+        ):
+            with self.subTest(
+                injector_log=injector_log
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp).resolve()
+
+                    marker = root / "marker"
+                    marker.write_text(
+                        "created",
+                        encoding="utf-8",
+                    )
+
+                    result = F2.evaluate_case(
+                        label="timeout",
+                        observation=
+                            self.timeout_observation(),
+                        marker=marker,
+                        binding_check=
+                            self.binding_check(),
+                        injector_log=injector_log,
+                    )
+
+                    checks = self.check_map(result)
+
+                    self.assertEqual(
+                        checks[
+                            "timeout-injector-started"
+                        ]["verdict"],
+                        "fail",
+                    )
+                    self.assertEqual(
+                        checks[
+                            (
+                                "timeout-injector-killed-"
+                                "before-normal-completion"
+                            )
+                        ]["verdict"],
+                        "pass",
+                    )
+                    self.assertEqual(
+                        checks[
+                            "timeout-injector-started"
+                        ]["detail"],
+                        [],
+                    )
+
+    def test_timeout_invalid_json_makes_records_none_started_fail_and_killed_unknown(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            marker = root / "marker"
+            marker.write_text(
+                "created",
+                encoding="utf-8",
+            )
+
+            injector_log = root / "injector.jsonl"
+            injector_log.write_text(
+                (
+                    json.dumps(
+                        {
+                            "event": "started",
+                            "pid": 123,
+                        }
+                    )
+                    + "\n"
+                    + "{bad-json\n"
+                ),
+                encoding="utf-8",
+            )
+
+            result = F2.evaluate_case(
+                label="timeout",
+                observation=
+                    self.timeout_observation(),
+                marker=marker,
+                binding_check=self.binding_check(),
+                injector_log=injector_log,
+            )
+
+            checks = self.check_map(result)
+
+            started = checks[
+                "timeout-injector-started"
+            ]
+            killed = checks[
+                (
+                    "timeout-injector-killed-"
+                    "before-normal-completion"
+                )
+            ]
+
+            self.assertEqual(
+                started["verdict"],
+                "fail",
+            )
+            self.assertIsNone(
+                started["detail"]
+            )
+            self.assertEqual(
+                killed["verdict"],
+                "unknown",
+            )
+            self.assertIsNone(
+                killed["detail"]
+            )
+            self.assertEqual(
+                result["verdict"],
+                "fail",
+            )
+
+    def test_timeout_completed_event_makes_killed_before_completion_fail(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            marker = root / "marker"
+            marker.write_text(
+                "created",
+                encoding="utf-8",
+            )
+
+            injector_log = root / "injector.jsonl"
+            injector_log.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "event": "started",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "event":
+                                    "completed_without_timeout",
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            result = F2.evaluate_case(
+                label="timeout",
+                observation=
+                    self.timeout_observation(),
+                marker=marker,
+                binding_check=self.binding_check(),
+                injector_log=injector_log,
+            )
+
+            checks = self.check_map(result)
+
+            self.assertEqual(
+                checks[
+                    "timeout-injector-started"
+                ]["verdict"],
+                "pass",
+            )
+            self.assertEqual(
+                checks[
+                    (
+                        "timeout-injector-killed-"
+                        "before-normal-completion"
+                    )
+                ]["verdict"],
+                "fail",
+            )
+            self.assertEqual(
+                result["verdict"],
+                "fail",
+            )
+
+    def test_timeout_raw_indication_requires_dict_with_found_true(
+        self,
+    ):
+        variants = (
+            ({"found": True}, "pass"),
+            ({"found": False}, "fail"),
+            ({}, "fail"),
+            ("not-a-dict", "fail"),
+            (None, "fail"),
+        )
+
+        for raw_timeout, expected in variants:
+            with self.subTest(
+                raw_timeout=raw_timeout
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp).resolve()
+
+                    marker = root / "marker"
+                    marker.write_text(
+                        "created",
+                        encoding="utf-8",
+                    )
+
+                    injector_log = (
+                        root / "injector.jsonl"
+                    )
+                    injector_log.write_text(
+                        json.dumps(
+                            {
+                                "event": "started",
+                            }
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+
+                    observation = (
+                        self.base_observation(
+                            hook_decision=None,
+                            evidence={
+                                "resultFound": True,
+                                "resultIsError":
+                                    False,
+                            },
+                            collector={
+                                "verdict": "pass",
+                                "observation": {
+                                    "completionState":
+                                        "success",
+                                },
+                            },
+                        )
+                    )
+
+                    if raw_timeout is not None:
+                        observation[
+                            "rawTimeoutIndication"
+                        ] = raw_timeout
+
+                    result = F2.evaluate_case(
+                        label="timeout",
+                        observation=observation,
+                        marker=marker,
+                        binding_check=
+                            self.binding_check(),
+                        injector_log=injector_log,
+                    )
+
+                    self.assertEqual(
+                        self.check_map(result)[
+                            "raw-hook-timeout-indication"
+                        ]["verdict"],
+                        expected,
+                    )
+
+    def test_unknown_label_adds_only_case_known_after_three_common_checks(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            marker = root / "marker"
+
+            observation = {
+                "toolUseId": self.TOOL_ID,
+                "evidence": None,
+                "collector": None,
+            }
+
+            binding = self.binding_check()
+
+            result = F2.evaluate_case(
+                label="future-case",
+                observation=observation,
+                marker=marker,
+                binding_check=binding,
+            )
+
+            self.assertEqual(
+                [
+                    item["name"]
+                    for item in result["checks"]
+                ],
+                [
+                    "binding-profile-digest",
+                    "tool-attempt-observable",
+                    "collector-observation",
+                    "case-known",
+                ],
+            )
+            self.assertEqual(
+                result["checks"][-1],
+                F2.assertion(
+                    "case-known",
+                    False,
+                    "future-case",
+                ),
+            )
+            self.assertEqual(
+                result["verdict"],
+                "fail",
+            )
+
+    def test_final_result_preserves_observation_and_verdict_priority(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            marker = root / "marker"
+
+            observation = self.base_observation(
+                hook_decision="allow",
+                collector={
+                    "verdict": "unknown",
+                    "observation": {},
+                },
+            )
+
+            binding = self.binding_check(
+                verdict="pass"
+            )
+
+            result = F2.evaluate_case(
+                label="control",
+                observation=observation,
+                marker=marker,
+                binding_check=binding,
+            )
+
+            self.assertEqual(
+                result["schemaVersion"],
+                1,
+            )
+            self.assertEqual(
+                result["case"],
+                "control",
+            )
+            self.assertIs(
+                result["observation"],
+                observation,
+            )
+            self.assertEqual(
+                result["verdict"],
+                "fail",
+            )
+            self.assertIs(
+                result["checks"][0],
+                binding,
+            )
+
 if __name__ == "__main__":
     unittest.main()
