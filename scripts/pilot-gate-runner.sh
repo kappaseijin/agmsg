@@ -3,7 +3,7 @@ set -euo pipefail
 
 # pilot-gate-runner.sh
 #
-# Issue #396 / Part 1
+# Issue #396
 #
 # Implements the outer G4 integration-gate harness boundary for:
 #
@@ -13,9 +13,14 @@ set -euo pipefail
 #   P3 isolation preflight
 #   P4 F2 containment proof
 #   N1 fresh/resume
+#   I1 consumer-operations + identity-isolation
+#   F1-F5 fault injection checks
+#   P5 disposable-resource cleanup + cleanup verification
+#   P6 live PM final negative control
+#   P7 aggregate verdict / results.json
 #
-# I1/F1-F5, full evidence aggregation, final evaluation, and full cleanup are
-# intentionally deferred to later Issue #396 implementation parts.
+# tests/test_pilot_gate_runner.bats and companion Python test files remain to
+# be implemented separately (Issue #396's own test-suite scope).
 #
 # IMPORTANT:
 #   This script MUST NOT modify:
@@ -107,16 +112,15 @@ Subcommands:
       Execute P0-P4 only.
 
   run
-      Execute P0-P4 followed by the implemented gate checks.
-      In Issue #396 Part 7 this means N1, I1, F1, F2, F3, F4, and F5.
+      This executes P0-P7: N1, I1, F1-F5, cleanup verification,
+      live PM final negative control, and aggregate evaluation.
 
   evaluate
-      Reserved for a later Issue #396 part.
-      Part 1 fails closed with exit 70.
+      Re-evaluate existing artifacts and regenerate observations.jsonl/results.json.
+      No disposable or live resource is mutated.
 
   cleanup
-      Reserved for a later Issue #396 part.
-      Part 1 fails closed with exit 70.
+      Run idempotent disposable-resource cleanup and cleanup verification.
 
 Exit status:
   0   requested gate scope completed and all requested checks pass
@@ -133,10 +137,8 @@ Notes:
 
   --check N1 is intended only for development/partial verification.
 
-  --check all can NEVER return gate-pass from the Part 7 implementation.
-  N1/I1/F1-F5 are now all implemented, but P5-P7 (isolated cleanup
-  verification, live PM after-control, aggregate verdict), full
-  evidence aggregation/evaluation, and cleanup remain unimplemented.
+  --check all returns gate-pass only when N1/I1/F1-F5, cleanup,
+  and the live PM final negative control all pass with zero unknowns.
 USAGE
 }
 
@@ -2217,4 +2219,6 @@ main() {
   esac
 }
 
-main "$@"
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi
