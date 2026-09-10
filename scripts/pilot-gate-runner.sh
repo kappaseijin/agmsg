@@ -54,6 +54,7 @@ I1_HELPER="$SCRIPT_DIR/lib/pilot-gate-i1.py"
 F1_HELPER="$SCRIPT_DIR/lib/pilot-gate-f1.py"
 F2_HELPER="$SCRIPT_DIR/lib/pilot-gate-f2.py"
 F3_HELPER="$SCRIPT_DIR/lib/pilot-gate-f3.py"
+F4_HELPER="$SCRIPT_DIR/lib/pilot-gate-f4.py"
 
 SUBCOMMAND="run"
 SOURCE=""
@@ -97,7 +98,7 @@ Usage:
     --live-skill-dir <live-agmsg-root> \
     --artifact-dir <artifact-dir> \
     [--collector-cutoff-seconds <seconds>] \
-    [--check all|N1|I1|F1|F2|F3]
+    [--check all|N1|I1|F1|F2|F3|F4]
 
 Subcommands:
   preflight
@@ -105,7 +106,7 @@ Subcommands:
 
   run
       Execute P0-P4 followed by the implemented gate checks.
-      In Issue #396 Part 5 this means N1, I1, F1, F2, and F3.
+      In Issue #396 Part 6 this means N1, I1, F1, F2, F3, and F4.
 
   evaluate
       Reserved for a later Issue #396 part.
@@ -130,8 +131,8 @@ Notes:
 
   --check N1 is intended only for development/partial verification.
 
-  --check all can NEVER return gate-pass from the Part 5 implementation
-  because F4-F5 have not yet been implemented.
+  --check all can NEVER return gate-pass from the Part 6 implementation
+  because F5 has not yet been implemented.
 USAGE
 }
 
@@ -241,11 +242,11 @@ parse_args() {
   esac
 
   case "$CHECK" in
-    all|N1|I1|F1|F2|F3)
+    all|N1|I1|F1|F2|F3|F4)
       ;;
     *)
       usage_error \
-        "--check must be one of: all, N1, I1, F1, F2, F3"
+        "--check must be one of: all, N1, I1, F1, F2, F3, F4"
       ;;
   esac
 }
@@ -270,6 +271,10 @@ validate_static_inputs() {
   [ -x "$F3_HELPER" ] ||
     usage_error \
       "F3 helper unavailable or not executable: $F3_HELPER"
+
+  [ -x "$F4_HELPER" ] ||
+    usage_error \
+      "F4 helper unavailable or not executable: $F4_HELPER"
 
   [ -d "$SOURCE" ] ||
     usage_error \
@@ -1452,6 +1457,44 @@ phase_f3() {
   esac
 }
 
+phase_f4() {
+  local status
+
+  log "F4 audit loop cutoff"
+
+  set +e
+  python3 "$F4_HELPER" \
+    --run-id "$RUN_ID" \
+    --run-root "$RUN_ROOT" \
+    --gate-repo "$GATE_REPO" \
+    --artifact-dir "$ARTIFACT_DIR" \
+    --gate-team "$GATE_TEAM" \
+    --claude-config "$GATE_CLAUDE_CONFIG" \
+    --cutoff-seconds "$COLLECTOR_CUTOFF_SECONDS"
+  status="$?"
+  set -e
+
+  case "$status" in
+    0)
+      log "F4 passed"
+      return "$EX_GATE_PASS"
+      ;;
+    1)
+      log "F4 failed"
+      return "$EX_GATE_FAIL"
+      ;;
+    2)
+      log "F4 unknown"
+      return "$EX_GATE_UNKNOWN"
+      ;;
+    *)
+      log \
+        "F4 helper returned unsupported exit status: $status"
+      return "$EX_INTERNAL"
+      ;;
+  esac
+}
+
 subcommand_run() {
   local status
   local n1_status
@@ -1459,6 +1502,7 @@ subcommand_run() {
   local f1_status
   local f2_status
   local f3_status
+  local f4_status
 
   set +e
   run_p0_through_p4
@@ -1533,13 +1577,25 @@ subcommand_run() {
     return "$EX_GATE_PASS"
   fi
 
+  set +e
+  phase_f4
+  f4_status="$?"
+  set -e
+
+  [ "$f4_status" -eq 0 ] ||
+    return "$f4_status"
+
+  if [ "$CHECK" = "F4" ]; then
+    return "$EX_GATE_PASS"
+  fi
+
   # Critical fail-closed behavior during incremental implementation:
   #
-  # F4-F5 do not exist yet after F3 implementation. Therefore an "all"
+  # F5 does not exist yet after F4 implementation. Therefore an "all"
   # invocation remains
   # incomplete and MUST NOT appear as a successful full gate.
   log \
-    "Part 5 complete: N1/I1/F1/F2/F3 passed, but F4-F5 remain unknown; pilot_ready cannot be true"
+    "Part 6 complete: N1/I1/F1/F2/F3/F4 passed, but F5 remains unknown; pilot_ready cannot be true"
 
   return "$EX_GATE_UNKNOWN"
 }
