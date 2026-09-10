@@ -2327,5 +2327,1421 @@ class PilotGateF3RoundB(unittest.TestCase):
                 expected_request,
             )
 
+
+class PilotGateF3RoundC(unittest.TestCase):
+    TEAM = "agmsg-g4gate-round-c"
+    TOOL_ID = "tool-123"
+    COMMAND = "broker-command"
+
+    def make_fixture(
+        self,
+        root: Path,
+        label: str = "control",
+    ):
+        root = root.resolve()
+
+        gate_repo = root / "repo"
+        claude_config = root / "claude"
+        artifact = root / "artifact"
+
+        launcher = (
+            gate_repo
+            / "scripts"
+            / "pilot-launcher.sh"
+        )
+        collector = (
+            gate_repo
+            / "scripts"
+            / "pilot-collector.sh"
+        )
+        profile = (
+            gate_repo
+            / ".claude"
+            / "settings.local.json"
+        )
+
+        launcher.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        profile.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        claude_config.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        artifact.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        launcher.write_text(
+            "#!/bin/sh\nexit 0\n",
+            encoding="utf-8",
+        )
+        launcher.chmod(0o700)
+
+        collector.write_text(
+            "#!/bin/sh\nexit 0\n",
+            encoding="utf-8",
+        )
+        collector.chmod(0o700)
+
+        profile.write_bytes(
+            b"original-profile\n"
+        )
+        profile.chmod(0o640)
+
+        return {
+            "root": root,
+            "label": label,
+            "gate_repo": gate_repo,
+            "claude_config": claude_config,
+            "artifact": artifact,
+            "launcher": launcher,
+            "collector": collector,
+            "profile": profile,
+            "profile_payload":
+                b"replacement-profile\n",
+            "posttool_log":
+                artifact
+                / label
+                / "posttool-records.jsonl",
+            "env": {
+                "BASE": "yes",
+            },
+            "timeout": 12.5,
+        }
+
+    def make_native(self):
+        native = mock.Mock()
+        native.generation = 7
+        native.session_id = "session-abc"
+        native.binding = Path(
+            "/tmp/binding.json"
+        )
+        native.decisions = Path(
+            "/tmp/decisions.jsonl"
+        )
+        native.env = {
+            "NATIVE": "env",
+        }
+        native.start = mock.Mock()
+        native.invoke = mock.Mock()
+        native.stop = mock.Mock()
+        return native
+
+    def run_case(self, fixture, i1):
+        return F3.run_case(
+            i1,
+            fixture["label"],
+            fixture["gate_repo"],
+            fixture["claude_config"],
+            self.TEAM,
+            fixture["artifact"],
+            fixture["env"],
+            fixture["timeout"],
+            fixture["launcher"],
+            fixture["collector"],
+            fixture["profile"],
+            fixture["profile_payload"],
+            fixture["posttool_log"],
+        )
+
+    def success_operation(
+        self,
+        transcript="/tmp/transcript.jsonl",
+    ):
+        return {
+            "verdict": "pass",
+            "toolUseId": self.TOOL_ID,
+            "transcript": transcript,
+        }
+
+    def test_profile_replacement_uses_existing_mode_and_mismatch_prevents_native_construction(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            i1 = mock.Mock()
+
+            original_mode = stat.S_IMODE(
+                fixture[
+                    "profile"
+                ].stat().st_mode
+            )
+
+            def corrupt(
+                path,
+                payload,
+                mode,
+            ):
+                self.assertEqual(
+                    mode,
+                    original_mode,
+                )
+                Path(path).write_bytes(
+                    b"wrong"
+                )
+                Path(path).chmod(mode)
+
+            with mock.patch.object(
+                F3,
+                "atomic_bytes",
+                side_effect=corrupt,
+            ) as atomic_mock:
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    (
+                        "control profile "
+                        "replacement mismatch"
+                    ),
+                ):
+                    self.run_case(
+                        fixture,
+                        i1,
+                    )
+
+            atomic_mock.assert_called_once_with(
+                fixture["profile"],
+                fixture["profile_payload"],
+                original_mode,
+            )
+            i1.NativePilot.assert_not_called()
+
+    def test_native_start_run_id_prepare_and_invoke_arguments(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            i1 = mock.Mock()
+            native = self.make_native()
+            i1.NativePilot.return_value = (
+                native
+            )
+
+            native.invoke.return_value = {
+                "verdict": "fail",
+                "reason":
+                    "stop-after-command-check",
+            }
+
+            binding_check = {
+                "name":
+                    "binding-profile-digest",
+                "verdict": "pass",
+                "detail": {},
+            }
+
+            with mock.patch.object(
+                F3.time,
+                "monotonic_ns",
+                return_value=123456789,
+            ), mock.patch.object(
+                F3,
+                "prepare_observe_owner",
+                return_value=(
+                    Path("/tmp/config"),
+                    Path("/tmp/request"),
+                    self.COMMAND,
+                ),
+            ) as prepare_mock, mock.patch.object(
+                F3,
+                "binding_profile_check",
+                return_value=binding_check,
+            ):
+                result = self.run_case(
+                    fixture,
+                    i1,
+                )
+
+            case_dir = (
+                fixture["artifact"]
+                / "control"
+            )
+
+            i1.NativePilot.assert_called_once_with(
+                fixture["launcher"],
+                fixture["gate_repo"],
+                self.TEAM,
+                fixture["claude_config"],
+                case_dir / "native",
+                fixture["env"],
+                fixture["timeout"],
+            )
+            native.start.assert_called_once_with()
+
+            prepare_mock.assert_called_once_with(
+                i1,
+                fixture["gate_repo"],
+                "control",
+                "f3-control-123456789",
+                self.TEAM,
+                native.generation,
+            )
+
+            native.invoke.assert_called_once_with(
+                self.COMMAND,
+                case_dir / "operation",
+            )
+
+            native.stop.assert_called_once_with()
+            self.assertEqual(
+                result["reason"],
+                "stop-after-command-check",
+            )
+
+    def test_operation_nonpass_returns_early_after_binding_check_and_skips_later_observers(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            i1 = mock.Mock()
+            native = self.make_native()
+            i1.NativePilot.return_value = (
+                native
+            )
+
+            operation = {
+                "verdict": "unknown",
+                "reason":
+                    "native-unobservable",
+            }
+            native.invoke.return_value = (
+                operation
+            )
+
+            binding_check = F3.assertion(
+                "binding-profile-digest",
+                True,
+                "fixture",
+            )
+
+            with mock.patch.object(
+                F3,
+                "prepare_observe_owner",
+                return_value=(
+                    Path("/c"),
+                    Path("/r"),
+                    self.COMMAND,
+                ),
+            ), mock.patch.object(
+                F3,
+                "binding_profile_check",
+                return_value=binding_check,
+            ) as binding_mock, mock.patch.object(
+                F3,
+                "transcript_result",
+            ) as transcript_mock, mock.patch.object(
+                F3,
+                "collector_observation",
+            ) as collector_mock, mock.patch.object(
+                F3,
+                "records_for_tool",
+            ) as records_mock:
+                result = self.run_case(
+                    fixture,
+                    i1,
+                )
+
+            self.assertEqual(
+                result,
+                {
+                    "schemaVersion": 1,
+                    "case": "control",
+                    "verdict": "unknown",
+                    "reason":
+                        "native-unobservable",
+                    "bindingCheck":
+                        binding_check,
+                    "operation": operation,
+                },
+            )
+
+            binding_mock.assert_called_once_with(
+                native,
+                fixture[
+                    "profile_payload"
+                ],
+            )
+
+            transcript_mock.assert_not_called()
+            collector_mock.assert_not_called()
+            i1.hook_decision.assert_not_called()
+            records_mock.assert_not_called()
+
+            native.stop.assert_called_once_with()
+
+            self.assertEqual(
+                F3.read_json(
+                    fixture["artifact"]
+                    / "control"
+                    / "result.json"
+                ),
+                result,
+            )
+
+    def test_operation_nonpass_defaults_missing_verdict_and_reason(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            i1 = mock.Mock()
+            native = self.make_native()
+            i1.NativePilot.return_value = (
+                native
+            )
+
+            native.invoke.return_value = {}
+
+            binding_check = F3.assertion(
+                "binding-profile-digest",
+                True,
+                "fixture",
+            )
+
+            with mock.patch.object(
+                F3,
+                "prepare_observe_owner",
+                return_value=(
+                    Path("/c"),
+                    Path("/r"),
+                    self.COMMAND,
+                ),
+            ), mock.patch.object(
+                F3,
+                "binding_profile_check",
+                return_value=binding_check,
+            ):
+                result = self.run_case(
+                    fixture,
+                    i1,
+                )
+
+            self.assertEqual(
+                result["verdict"],
+                "unknown",
+            )
+            self.assertEqual(
+                result["reason"],
+                "native_operation_not_pass",
+            )
+            native.stop.assert_called_once_with()
+
+    def test_incomplete_tool_or_transcript_evidence_returns_unknown_and_skips_later_observers(
+        self,
+    ):
+        cases = (
+            {
+                "verdict": "pass",
+                "toolUseId": None,
+                "transcript":
+                    "/tmp/transcript.jsonl",
+            },
+            {
+                "verdict": "pass",
+                "toolUseId":
+                    self.TOOL_ID,
+                "transcript": "",
+            },
+        )
+
+        for operation in cases:
+            with self.subTest(
+                operation=operation
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = (
+                        self.make_fixture(
+                            Path(temp)
+                        )
+                    )
+                    i1 = mock.Mock()
+                    native = (
+                        self.make_native()
+                    )
+                    i1.NativePilot.return_value = (
+                        native
+                    )
+                    native.invoke.return_value = (
+                        operation
+                    )
+
+                    binding_check = (
+                        F3.assertion(
+                            "binding-profile-digest",
+                            True,
+                            "fixture",
+                        )
+                    )
+
+                    with mock.patch.object(
+                        F3,
+                        "prepare_observe_owner",
+                        return_value=(
+                            Path("/c"),
+                            Path("/r"),
+                            self.COMMAND,
+                        ),
+                    ), mock.patch.object(
+                        F3,
+                        "binding_profile_check",
+                        return_value=
+                            binding_check,
+                    ), mock.patch.object(
+                        F3,
+                        "transcript_result",
+                    ) as transcript_mock, mock.patch.object(
+                        F3,
+                        "collector_observation",
+                    ) as collector_mock, mock.patch.object(
+                        F3,
+                        "records_for_tool",
+                    ) as records_mock:
+                        result = (
+                            self.run_case(
+                                fixture,
+                                i1,
+                            )
+                        )
+
+                    self.assertEqual(
+                        result["verdict"],
+                        "unknown",
+                    )
+                    self.assertEqual(
+                        result["reason"],
+                        (
+                            "native_evidence_"
+                            "incomplete"
+                        ),
+                    )
+                    self.assertEqual(
+                        result["bindingCheck"],
+                        binding_check,
+                    )
+
+                    transcript_mock.assert_not_called()
+                    collector_mock.assert_not_called()
+                    i1.hook_decision.assert_not_called()
+                    records_mock.assert_not_called()
+                    native.stop.assert_called_once_with()
+
+    def test_control_builds_all_seven_passing_checks_from_exact_posttool_pair(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp),
+                label="control",
+            )
+            i1 = mock.Mock()
+            native = self.make_native()
+            i1.NativePilot.return_value = (
+                native
+            )
+
+            operation = (
+                self.success_operation()
+            )
+            native.invoke.return_value = (
+                operation
+            )
+
+            binding_check = F3.assertion(
+                "binding-profile-digest",
+                True,
+                "fixture",
+            )
+
+            collector_result = {
+                "verdict": "pass",
+                "observation": {
+                    "toolUseId":
+                        self.TOOL_ID,
+                    "completionState":
+                        "success",
+                },
+            }
+
+            post_records = [
+                {
+                    "event": "started",
+                    "toolUseId":
+                        self.TOOL_ID,
+                },
+                {
+                    "event": "completed",
+                    "toolUseId":
+                        self.TOOL_ID,
+                },
+            ]
+
+            i1.hook_decision.return_value = (
+                "allow"
+            )
+
+            with mock.patch.object(
+                F3.time,
+                "monotonic_ns",
+                return_value=99,
+            ), mock.patch.object(
+                F3,
+                "prepare_observe_owner",
+                return_value=(
+                    Path("/c"),
+                    Path("/r"),
+                    self.COMMAND,
+                ),
+            ), mock.patch.object(
+                F3,
+                "binding_profile_check",
+                return_value=binding_check,
+            ), mock.patch.object(
+                F3,
+                "transcript_result",
+                return_value=(
+                    True,
+                    {
+                        "isError": False
+                    },
+                ),
+            ) as transcript_mock, mock.patch.object(
+                F3,
+                "collector_observation",
+                return_value=
+                    collector_result,
+            ) as collector_mock, mock.patch.object(
+                F3,
+                "classify_collector",
+                return_value=(
+                    True,
+                    collector_result[
+                        "observation"
+                    ],
+                ),
+            ) as classify_mock, mock.patch.object(
+                F3,
+                "records_for_tool",
+                return_value=post_records,
+            ) as records_mock:
+                result = self.run_case(
+                    fixture,
+                    i1,
+                )
+
+            self.assertEqual(
+                [
+                    item["name"]
+                    for item in result["checks"]
+                ],
+                [
+                    "binding-profile-digest",
+                    "pretool-allow",
+                    (
+                        "native-transcript-"
+                        "tool-result-success"
+                    ),
+                    "collector-same-tool-success",
+                    "posttool-record-started",
+                    "posttool-record-completed",
+                    (
+                        "posttool-same-"
+                        "tool-use-id"
+                    ),
+                ],
+            )
+
+            self.assertTrue(
+                all(
+                    item["verdict"]
+                    == "pass"
+                    for item
+                    in result["checks"]
+                )
+            )
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+
+            transcript_mock.assert_called_once_with(
+                i1,
+                Path(
+                    operation[
+                        "transcript"
+                    ]
+                ),
+                self.TOOL_ID,
+            )
+
+            collector_mock.assert_called_once_with(
+                i1,
+                fixture["collector"],
+                native.binding,
+                fixture["claude_config"],
+                (
+                    fixture["artifact"]
+                    / "control"
+                    / "collector-state"
+                ),
+                self.TOOL_ID,
+                native.env,
+                (
+                    fixture["artifact"]
+                    / "control"
+                ),
+            )
+
+            classify_mock.assert_called_once_with(
+                collector_result,
+                self.TOOL_ID,
+            )
+
+            i1.hook_decision.assert_called_once_with(
+                native.decisions,
+                self.TOOL_ID,
+            )
+
+            records_mock.assert_called_once_with(
+                fixture["posttool_log"],
+                self.TOOL_ID,
+            )
+
+            native.stop.assert_called_once_with()
+
+    def test_control_posttool_records_none_yields_three_unknown_checks(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp),
+                label="control",
+            )
+            i1 = mock.Mock()
+            native = self.make_native()
+            i1.NativePilot.return_value = (
+                native
+            )
+            native.invoke.return_value = (
+                self.success_operation()
+            )
+            i1.hook_decision.return_value = (
+                "allow"
+            )
+
+            with mock.patch.object(
+                F3,
+                "prepare_observe_owner",
+                return_value=(
+                    Path("/c"),
+                    Path("/r"),
+                    self.COMMAND,
+                ),
+            ), mock.patch.object(
+                F3,
+                "binding_profile_check",
+                return_value=
+                    F3.assertion(
+                        "binding-profile-digest",
+                        True,
+                        "fixture",
+                    ),
+            ), mock.patch.object(
+                F3,
+                "transcript_result",
+                return_value=(True, {}),
+            ), mock.patch.object(
+                F3,
+                "collector_observation",
+                return_value={
+                    "verdict": "pass"
+                },
+            ), mock.patch.object(
+                F3,
+                "classify_collector",
+                return_value=(True, {}),
+            ), mock.patch.object(
+                F3,
+                "records_for_tool",
+                return_value=None,
+            ):
+                result = self.run_case(
+                    fixture,
+                    i1,
+                )
+
+            checks = {
+                item["name"]:
+                    item["verdict"]
+                for item
+                in result["checks"]
+            }
+
+            self.assertEqual(
+                checks[
+                    "posttool-record-started"
+                ],
+                "unknown",
+            )
+            self.assertEqual(
+                checks[
+                    "posttool-record-completed"
+                ],
+                "unknown",
+            )
+            self.assertEqual(
+                checks[
+                    (
+                        "posttool-same-"
+                        "tool-use-id"
+                    )
+                ],
+                "unknown",
+            )
+            self.assertEqual(
+                result["verdict"],
+                "unknown",
+            )
+            native.stop.assert_called_once_with()
+
+    def test_control_posttool_conditions_are_independent_and_exact(
+        self,
+    ):
+        scenarios = (
+            (
+                [
+                    {
+                        "event": "started",
+                        "toolUseId":
+                            self.TOOL_ID,
+                    },
+                    {
+                        "event": "started",
+                        "toolUseId":
+                            self.TOOL_ID,
+                    },
+                    {
+                        "event": "completed",
+                        "toolUseId":
+                            self.TOOL_ID,
+                    },
+                ],
+                {
+                    "posttool-record-started":
+                        "fail",
+                    "posttool-record-completed":
+                        "pass",
+                    "posttool-same-tool-use-id":
+                        "fail",
+                },
+            ),
+            (
+                [
+                    {
+                        "event": "started",
+                        "toolUseId":
+                            self.TOOL_ID,
+                    },
+                    {
+                        "event": "completed",
+                        "toolUseId": "other",
+                    },
+                ],
+                {
+                    "posttool-record-started":
+                        "pass",
+                    "posttool-record-completed":
+                        "pass",
+                    "posttool-same-tool-use-id":
+                        "fail",
+                },
+            ),
+        )
+
+        for records, expected in scenarios:
+            with self.subTest(
+                records=records
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = (
+                        self.make_fixture(
+                            Path(temp),
+                            label="control",
+                        )
+                    )
+                    i1 = mock.Mock()
+                    native = (
+                        self.make_native()
+                    )
+                    i1.NativePilot.return_value = (
+                        native
+                    )
+                    native.invoke.return_value = (
+                        self.success_operation()
+                    )
+                    i1.hook_decision.return_value = (
+                        "allow"
+                    )
+
+                    with mock.patch.object(
+                        F3,
+                        "prepare_observe_owner",
+                        return_value=(
+                            Path("/c"),
+                            Path("/r"),
+                            self.COMMAND,
+                        ),
+                    ), mock.patch.object(
+                        F3,
+                        "binding_profile_check",
+                        return_value=
+                            F3.assertion(
+                                (
+                                    "binding-"
+                                    "profile-digest"
+                                ),
+                                True,
+                                "fixture",
+                            ),
+                    ), mock.patch.object(
+                        F3,
+                        "transcript_result",
+                        return_value=(
+                            True,
+                            {},
+                        ),
+                    ), mock.patch.object(
+                        F3,
+                        "collector_observation",
+                        return_value={
+                            "verdict":
+                                "pass"
+                        },
+                    ), mock.patch.object(
+                        F3,
+                        "classify_collector",
+                        return_value=(
+                            True,
+                            {},
+                        ),
+                    ), mock.patch.object(
+                        F3,
+                        "records_for_tool",
+                        return_value=records,
+                    ):
+                        result = (
+                            self.run_case(
+                                fixture,
+                                i1,
+                            )
+                        )
+
+                    checks = {
+                        item["name"]:
+                            item["verdict"]
+                        for item
+                        in result[
+                            "checks"
+                        ]
+                    }
+
+                    for (
+                        name,
+                        verdict,
+                    ) in expected.items():
+                        self.assertEqual(
+                            checks[name],
+                            verdict,
+                        )
+
+                    self.assertEqual(
+                        result["verdict"],
+                        "fail",
+                    )
+
+    def test_fault_posttool_absence_maps_none_empty_and_nonempty_to_unknown_pass_fail(
+        self,
+    ):
+        for records, expected in (
+            (
+                None,
+                "unknown",
+            ),
+            (
+                [],
+                "pass",
+            ),
+            (
+                [
+                    {
+                        "event": "started",
+                        "toolUseId":
+                            self.TOOL_ID,
+                    }
+                ],
+                "fail",
+            ),
+        ):
+            with self.subTest(
+                records=records
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = (
+                        self.make_fixture(
+                            Path(temp),
+                            label="fault",
+                        )
+                    )
+                    i1 = mock.Mock()
+                    native = (
+                        self.make_native()
+                    )
+                    i1.NativePilot.return_value = (
+                        native
+                    )
+                    native.invoke.return_value = (
+                        self.success_operation()
+                    )
+                    i1.hook_decision.return_value = (
+                        "allow"
+                    )
+
+                    with mock.patch.object(
+                        F3,
+                        "prepare_observe_owner",
+                        return_value=(
+                            Path("/c"),
+                            Path("/r"),
+                            self.COMMAND,
+                        ),
+                    ), mock.patch.object(
+                        F3,
+                        "binding_profile_check",
+                        return_value=
+                            F3.assertion(
+                                (
+                                    "binding-"
+                                    "profile-digest"
+                                ),
+                                True,
+                                "fixture",
+                            ),
+                    ), mock.patch.object(
+                        F3,
+                        "transcript_result",
+                        return_value=(
+                            True,
+                            {},
+                        ),
+                    ), mock.patch.object(
+                        F3,
+                        "collector_observation",
+                        return_value={
+                            "verdict":
+                                "pass"
+                        },
+                    ), mock.patch.object(
+                        F3,
+                        "classify_collector",
+                        return_value=(
+                            True,
+                            {},
+                        ),
+                    ), mock.patch.object(
+                        F3,
+                        "records_for_tool",
+                        return_value=records,
+                    ):
+                        result = (
+                            self.run_case(
+                                fixture,
+                                i1,
+                            )
+                        )
+
+                    checks = {
+                        item["name"]:
+                            item["verdict"]
+                        for item
+                        in result[
+                            "checks"
+                        ]
+                    }
+
+                    self.assertEqual(
+                        checks[
+                            (
+                                "posttool-"
+                                "record-absent"
+                            )
+                        ],
+                        expected,
+                    )
+                    self.assertEqual(
+                        result["verdict"],
+                        expected,
+                    )
+
+    def test_unknown_label_adds_only_known_case_specific_failure(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp),
+                label="future",
+            )
+            i1 = mock.Mock()
+            native = self.make_native()
+            i1.NativePilot.return_value = (
+                native
+            )
+            native.invoke.return_value = (
+                self.success_operation()
+            )
+            i1.hook_decision.return_value = (
+                "allow"
+            )
+
+            with mock.patch.object(
+                F3,
+                "prepare_observe_owner",
+                return_value=(
+                    Path("/c"),
+                    Path("/r"),
+                    self.COMMAND,
+                ),
+            ), mock.patch.object(
+                F3,
+                "binding_profile_check",
+                return_value=
+                    F3.assertion(
+                        "binding-profile-digest",
+                        True,
+                        "fixture",
+                    ),
+            ), mock.patch.object(
+                F3,
+                "transcript_result",
+                return_value=(True, {}),
+            ), mock.patch.object(
+                F3,
+                "collector_observation",
+                return_value={
+                    "verdict": "pass"
+                },
+            ), mock.patch.object(
+                F3,
+                "classify_collector",
+                return_value=(True, {}),
+            ), mock.patch.object(
+                F3,
+                "records_for_tool",
+                return_value=[],
+            ):
+                result = self.run_case(
+                    fixture,
+                    i1,
+                )
+
+            self.assertEqual(
+                [
+                    item["name"]
+                    for item
+                    in result["checks"]
+                ],
+                [
+                    "binding-profile-digest",
+                    "pretool-allow",
+                    (
+                        "native-transcript-"
+                        "tool-result-success"
+                    ),
+                    "collector-same-tool-success",
+                    "known-case",
+                ],
+            )
+
+            self.assertEqual(
+                result["checks"][-1],
+                F3.assertion(
+                    "known-case",
+                    False,
+                    "future",
+                ),
+            )
+            self.assertEqual(
+                result["verdict"],
+                "fail",
+            )
+
+    def test_final_result_contains_all_expected_fields_and_is_written(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp),
+                label="fault",
+            )
+            i1 = mock.Mock()
+            native = self.make_native()
+            i1.NativePilot.return_value = (
+                native
+            )
+
+            operation = self.success_operation(
+                transcript=str(
+                    fixture["root"]
+                    / "transcript.jsonl"
+                )
+            )
+            native.invoke.return_value = (
+                operation
+            )
+            i1.hook_decision.return_value = (
+                "allow"
+            )
+
+            collector_result = {
+                "verdict": "pass",
+                "observation": {
+                    "toolUseId":
+                        self.TOOL_ID,
+                    "completionState":
+                        "success",
+                },
+            }
+
+            with mock.patch.object(
+                F3.time,
+                "monotonic_ns",
+                return_value=4242,
+            ), mock.patch.object(
+                F3,
+                "prepare_observe_owner",
+                return_value=(
+                    Path("/c"),
+                    Path("/r"),
+                    self.COMMAND,
+                ),
+            ), mock.patch.object(
+                F3,
+                "binding_profile_check",
+                return_value=
+                    F3.assertion(
+                        "binding-profile-digest",
+                        True,
+                        "fixture",
+                    ),
+            ), mock.patch.object(
+                F3,
+                "transcript_result",
+                return_value=(
+                    True,
+                    {
+                        "isError": False
+                    },
+                ),
+            ), mock.patch.object(
+                F3,
+                "collector_observation",
+                return_value=
+                    collector_result,
+            ), mock.patch.object(
+                F3,
+                "classify_collector",
+                return_value=(
+                    True,
+                    {
+                        "completionState":
+                            "success"
+                    },
+                ),
+            ), mock.patch.object(
+                F3,
+                "records_for_tool",
+                return_value=[],
+            ):
+                result = self.run_case(
+                    fixture,
+                    i1,
+                )
+
+            self.assertEqual(
+                set(result),
+                {
+                    "schemaVersion",
+                    "case",
+                    "verdict",
+                    "runId",
+                    "team",
+                    "sessionId",
+                    "generation",
+                    "toolUseId",
+                    "command",
+                    "postToolUseRecords",
+                    "collector",
+                    "operation",
+                    "checks",
+                },
+            )
+
+            self.assertEqual(
+                result["schemaVersion"],
+                1,
+            )
+            self.assertEqual(
+                result["case"],
+                "fault",
+            )
+            self.assertEqual(
+                result["runId"],
+                "f3-fault-4242",
+            )
+            self.assertEqual(
+                result["team"],
+                self.TEAM,
+            )
+            self.assertEqual(
+                result["sessionId"],
+                native.session_id,
+            )
+            self.assertEqual(
+                result["generation"],
+                str(native.generation),
+            )
+            self.assertEqual(
+                result["toolUseId"],
+                self.TOOL_ID,
+            )
+            self.assertEqual(
+                result["command"],
+                self.COMMAND,
+            )
+            self.assertEqual(
+                result[
+                    "postToolUseRecords"
+                ],
+                [],
+            )
+            self.assertEqual(
+                result["collector"],
+                collector_result,
+            )
+            self.assertEqual(
+                result["operation"],
+                operation,
+            )
+
+            self.assertEqual(
+                F3.read_json(
+                    fixture["artifact"]
+                    / "fault"
+                    / "result.json"
+                ),
+                result,
+            )
+
+            native.stop.assert_called_once_with()
+
+    def test_exception_from_invoke_still_stops_native_and_preserves_original_exception(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            i1 = mock.Mock()
+            native = self.make_native()
+            i1.NativePilot.return_value = (
+                native
+            )
+            native.invoke.side_effect = (
+                ValueError(
+                    "invoke exploded"
+                )
+            )
+
+            with mock.patch.object(
+                F3,
+                "prepare_observe_owner",
+                return_value=(
+                    Path("/c"),
+                    Path("/r"),
+                    self.COMMAND,
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "invoke exploded",
+                ):
+                    self.run_case(
+                        fixture,
+                        i1,
+                    )
+
+            native.stop.assert_called_once_with()
+
+    def test_exception_from_transcript_result_still_stops_native_and_preserves_original_exception(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            i1 = mock.Mock()
+            native = self.make_native()
+            i1.NativePilot.return_value = (
+                native
+            )
+            native.invoke.return_value = (
+                self.success_operation()
+            )
+
+            with mock.patch.object(
+                F3,
+                "prepare_observe_owner",
+                return_value=(
+                    Path("/c"),
+                    Path("/r"),
+                    self.COMMAND,
+                ),
+            ), mock.patch.object(
+                F3,
+                "binding_profile_check",
+                return_value=
+                    F3.assertion(
+                        "binding-profile-digest",
+                        True,
+                        "fixture",
+                    ),
+            ), mock.patch.object(
+                F3,
+                "transcript_result",
+                side_effect=RuntimeError(
+                    "transcript exploded"
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "transcript exploded",
+                ):
+                    self.run_case(
+                        fixture,
+                        i1,
+                    )
+
+            native.stop.assert_called_once_with()
+
 if __name__ == "__main__":
     unittest.main()
