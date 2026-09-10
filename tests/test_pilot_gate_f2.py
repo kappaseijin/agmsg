@@ -4474,5 +4474,1450 @@ class PilotGateF2RoundD(unittest.TestCase):
                 binding,
             )
 
+
+class PilotGateF2RoundE(unittest.TestCase):
+    RUN_ID = "round-e"
+    GATE_TEAM = "agmsg-g4gate-round-e"
+
+    def make_fixture(self, root: Path, *, gate_inside=True):
+        root = root.resolve()
+        run_root = root / "run-root"
+        run_root.mkdir(parents=True, exist_ok=True)
+
+        if gate_inside:
+            gate_repo = run_root / "repo"
+        else:
+            gate_repo = root / "outside-repo"
+
+        scripts = gate_repo / "scripts"
+        claude_dir = gate_repo / ".claude"
+        scripts.mkdir(parents=True, exist_ok=True)
+        claude_dir.mkdir(parents=True, exist_ok=True)
+
+        launcher = scripts / "pilot-launcher.sh"
+        guard = scripts / "pm-pilot-pretool-guard"
+        collector = scripts / "pilot-collector.sh"
+
+        for path in (launcher, guard, collector):
+            path.write_text(
+                "#!/bin/sh\nexit 0\n",
+                encoding="utf-8",
+            )
+            path.chmod(0o700)
+
+        profile = claude_dir / "settings.local.json"
+        profile_value = {
+            "schemaVersion": 1,
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": str(guard),
+                                "args": [],
+                            }
+                        ],
+                    }
+                ],
+                "PostToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "/bin/true",
+                                "args": [],
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+        profile.write_text(
+            json.dumps(
+                profile_value,
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        profile.chmod(0o640)
+
+        claude_config = run_root / "claude"
+        claude_config.mkdir(parents=True, exist_ok=True)
+
+        artifact_dir = root / "artifacts"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+
+        args = F2.argparse.Namespace(
+            gate_repo=str(gate_repo),
+            run_root=str(run_root),
+            claude_config=str(claude_config),
+            artifact_dir=str(artifact_dir),
+            run_id=self.RUN_ID,
+            gate_team=self.GATE_TEAM,
+            timeout_seconds=11,
+        )
+
+        return {
+            "root": root,
+            "run_root": run_root,
+            "gate_repo": gate_repo,
+            "launcher": launcher,
+            "guard": guard,
+            "collector": collector,
+            "profile": profile,
+            "profile_value": profile_value,
+            "claude_config": claude_config,
+            "artifact_dir": artifact_dir,
+            "artifact": artifact_dir / "F2",
+            "runtime": gate_repo / ".agmsg-gate" / "f2",
+            "args": args,
+        }
+
+    def make_modules(self):
+        iso = mock.Mock()
+        iso.canonical.side_effect = (
+            lambda value: str(
+                Path(value).resolve(strict=True)
+            )
+        )
+
+        i1 = mock.Mock()
+        i1.sanitize_env.return_value = {
+            "BASE_ENV": "preserved",
+        }
+
+        return iso, i1
+
+    def module_loader(self, iso, i1):
+        def load(path, name):
+            if name == "pilot_gate_isolation":
+                return iso
+            if name == "pilot_gate_i1":
+                return i1
+            raise AssertionError(
+                f"unexpected module request: {path} {name}"
+            )
+
+        return load
+
+    def injector_writer(self, path, log_path):
+        path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        path.write_bytes(
+            b"#!/usr/bin/env python3\n"
+            b"raise SystemExit(0)\n"
+        )
+        path.chmod(0o700)
+
+    def probe_writer(self, path, marker, run_id, case):
+        path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        path.write_text(
+            "#!/bin/sh\nexit 0\n",
+            encoding="utf-8",
+        )
+        path.chmod(0o700)
+
+    def passing_containment(self):
+        return [
+            F2.assertion(
+                "containment",
+                True,
+                "fixture",
+            )
+        ]
+
+    def failing_containment(self, verdict="fail"):
+        return [
+            F2.assertion(
+                "containment",
+                (
+                    False
+                    if verdict == "fail"
+                    else None
+                ),
+                "fixture",
+            )
+        ]
+
+    def make_native(self, suffix="control"):
+        native = mock.Mock()
+        native.session_id = f"session-{suffix}"
+        native.generation = 1
+        native.binding = Path(
+            f"/tmp/binding-{suffix}.json"
+        )
+        native.start = mock.Mock()
+        native.stop = mock.Mock()
+        return native
+
+    def install_common_stubs(
+        self,
+        fixture,
+        *,
+        containment=None,
+        evaluate_side_effect=None,
+        invoke_side_effect=None,
+        natives=None,
+        write_probe=True,
+    ):
+        iso, i1 = self.make_modules()
+
+        patches = [
+            mock.patch.object(
+                F2,
+                "load_module",
+                side_effect=self.module_loader(
+                    iso,
+                    i1,
+                ),
+            ),
+            mock.patch.object(
+                F2,
+                "write_timeout_injector",
+                side_effect=self.injector_writer,
+            ),
+        ]
+
+        if write_probe:
+            patches.append(
+                mock.patch.object(
+                    F2,
+                    "write_probe",
+                    side_effect=self.probe_writer,
+                )
+            )
+
+        if containment is None:
+            containment = self.passing_containment()
+
+        patches.append(
+            mock.patch.object(
+                F2,
+                "prove_probe_contained",
+                return_value=containment,
+            )
+        )
+
+        patches.append(
+            mock.patch.object(
+                F2,
+                "validate_binding_profile",
+                return_value=F2.assertion(
+                    "binding-profile-digest",
+                    True,
+                    "fixture",
+                ),
+            )
+        )
+
+        if invoke_side_effect is None:
+            invoke_side_effect = {
+                "verdict": "pass",
+                "toolUseId": "tool-1",
+            }
+
+        patches.append(
+            mock.patch.object(
+                F2,
+                "invoke_probe",
+                side_effect=(
+                    invoke_side_effect
+                    if (
+                        isinstance(
+                            invoke_side_effect,
+                            Exception,
+                        )
+                        or callable(
+                            invoke_side_effect
+                        )
+                    )
+                    else None
+                ),
+                return_value=(
+                    None
+                    if (
+                        isinstance(
+                            invoke_side_effect,
+                            Exception,
+                        )
+                        or callable(
+                            invoke_side_effect
+                        )
+                    )
+                    else invoke_side_effect
+                ),
+            )
+        )
+
+        if evaluate_side_effect is None:
+            def evaluate(**kwargs):
+                return {
+                    "schemaVersion": 1,
+                    "case": kwargs["label"],
+                    "verdict": "pass",
+                    "checks": [],
+                    "observation":
+                        kwargs["observation"],
+                }
+
+            evaluate_side_effect = evaluate
+
+        patches.append(
+            mock.patch.object(
+                F2,
+                "evaluate_case",
+                side_effect=evaluate_side_effect,
+            )
+        )
+
+        if natives is None:
+            natives = [
+                self.make_native("control"),
+                self.make_native("missing"),
+                self.make_native("timeout"),
+            ]
+
+        i1.NativePilot.side_effect = natives
+
+        started = [
+            patcher.start()
+            for patcher in patches
+        ]
+
+        for patcher in reversed(patches):
+            self.addCleanup(
+                patcher.stop
+            )
+
+        return {
+            "iso": iso,
+            "i1": i1,
+            "natives": natives,
+            "write_timeout_injector":
+                started[1],
+            "write_probe":
+                (
+                    started[2]
+                    if write_probe
+                    else None
+                ),
+            "prove_probe_contained":
+                started[
+                    3 if write_probe else 2
+                ],
+            "validate_binding_profile":
+                started[
+                    4 if write_probe else 3
+                ],
+            "invoke_probe":
+                started[
+                    5 if write_probe else 4
+                ],
+            "evaluate_case":
+                started[
+                    6 if write_probe else 5
+                ],
+        }
+
+    def test_setup_rejects_gate_repo_outside_run_root(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp),
+                gate_inside=False,
+            )
+            iso, i1 = self.make_modules()
+
+            with mock.patch.object(
+                F2,
+                "load_module",
+                side_effect=self.module_loader(
+                    iso,
+                    i1,
+                ),
+            ):
+                with self.assertRaises(
+                    ValueError
+                ):
+                    F2.run_f2(
+                        fixture["args"]
+                    )
+
+    def test_setup_rejects_nonexecutable_executables_and_nonregular_profile(
+        self,
+    ):
+        targets = (
+            "launcher",
+            "guard",
+            "collector",
+            "profile",
+        )
+
+        for target in targets:
+            with self.subTest(
+                target=target
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = self.make_fixture(
+                        Path(temp)
+                    )
+                    iso, i1 = self.make_modules()
+
+                    if target == "profile":
+                        fixture[
+                            "profile"
+                        ].unlink()
+                        fixture[
+                            "profile"
+                        ].mkdir()
+                    else:
+                        fixture[
+                            target
+                        ].chmod(0o600)
+
+                    with mock.patch.object(
+                        F2,
+                        "load_module",
+                        side_effect=
+                            self.module_loader(
+                                iso,
+                                i1,
+                            ),
+                    ):
+                        with self.assertRaises(
+                            RuntimeError
+                        ):
+                            F2.run_f2(
+                                fixture["args"]
+                            )
+
+    def test_setup_parses_original_profile_checks_guard_builds_runtime_profiles_and_environment(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            original_payload = (
+                fixture["profile"].read_bytes()
+            )
+            original_mode = stat.S_IMODE(
+                fixture["profile"].stat().st_mode
+            )
+
+            old_log = (
+                fixture["artifact"]
+                / "timeout"
+                / "injector.jsonl"
+            )
+            old_log.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+            old_log.write_text(
+                "stale\n",
+                encoding="utf-8",
+            )
+
+            guard_spy = mock.patch.object(
+                F2,
+                "guard_handlers",
+                wraps=F2.guard_handlers,
+            )
+            spy = guard_spy.start()
+            self.addCleanup(
+                guard_spy.stop
+            )
+
+            harness = (
+                self.install_common_stubs(
+                    fixture,
+                    containment=
+                        self.failing_containment(
+                            "fail"
+                        ),
+                )
+            )
+
+            status = F2.run_f2(
+                fixture["args"]
+            )
+
+            self.assertEqual(
+                status,
+                1,
+            )
+            self.assertTrue(
+                fixture["runtime"].is_dir()
+            )
+            fixture[
+                "runtime"
+            ].resolve(
+                strict=True
+            ).relative_to(
+                fixture[
+                    "gate_repo"
+                ].resolve(
+                    strict=True
+                )
+            )
+
+            self.assertGreaterEqual(
+                spy.call_count,
+                2,
+            )
+            first_profile, first_guard = (
+                spy.call_args_list[0].args
+            )
+            self.assertEqual(
+                first_profile,
+                fixture["profile_value"],
+            )
+            self.assertEqual(
+                first_guard,
+                fixture["guard"],
+            )
+
+            injector = (
+                fixture["runtime"]
+                / "timeout-injector.py"
+            )
+
+            harness[
+                "write_timeout_injector"
+            ].assert_called_once_with(
+                injector,
+                old_log,
+            )
+            self.assertFalse(
+                old_log.exists()
+            )
+
+            original_profile = json.loads(
+                original_payload.decode(
+                    "utf-8"
+                )
+            )
+            missing_payload = (
+                F2.encode_profile(
+                    F2.make_missing_profile(
+                        original_profile
+                    )
+                )
+            )
+            timeout_payload = (
+                F2.encode_profile(
+                    F2.make_timeout_profile(
+                        original_profile,
+                        fixture["guard"],
+                        injector,
+                    )
+                )
+            )
+
+            profiles = F2.read_json(
+                fixture["artifact"]
+                / "profiles.json"
+            )
+
+            self.assertEqual(
+                profiles,
+                {
+                    "schemaVersion": 1,
+                    "originalDigest":
+                        F2.binding_digest(
+                            original_payload
+                        ),
+                    "missingDigest":
+                        F2.binding_digest(
+                            missing_payload
+                        ),
+                    "timeoutDigest":
+                        F2.binding_digest(
+                            timeout_payload
+                        ),
+                    "timeoutSeconds":
+                        F2.TIMEOUT_SECONDS,
+                    "injectorSleepSeconds":
+                        F2.INJECTOR_SLEEP_SECONDS,
+                    "injector":
+                        str(injector),
+                    "injectorDigest":
+                        F2.binding_digest(
+                            injector.read_bytes()
+                        ),
+                },
+            )
+
+            harness[
+                "i1"
+            ].sanitize_env.assert_called_once_with(
+                os.environ
+            )
+
+            harness[
+                "i1"
+            ].NativePilot.assert_not_called()
+
+            self.assertEqual(
+                stat.S_IMODE(
+                    fixture["profile"].stat().st_mode
+                ),
+                original_mode,
+            )
+            self.assertEqual(
+                fixture["profile"].read_bytes(),
+                original_payload,
+            )
+
+    def test_setup_guard_contract_ambiguity_propagates_runtime_error(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            value = fixture["profile_value"]
+            value["hooks"][
+                "PreToolUse"
+            ][0]["hooks"].append(
+                {
+                    "type": "command",
+                    "command":
+                        str(
+                            fixture["guard"]
+                        ),
+                    "args": [],
+                }
+            )
+            fixture["profile"].write_text(
+                json.dumps(value)
+                + "\n",
+                encoding="utf-8",
+            )
+
+            iso, i1 = self.make_modules()
+
+            with mock.patch.object(
+                F2,
+                "load_module",
+                side_effect=self.module_loader(
+                    iso,
+                    i1,
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    (
+                        "pilot PreToolUse "
+                        "contract ambiguous"
+                    ),
+                ):
+                    F2.run_f2(
+                        fixture["args"]
+                    )
+
+    def test_execute_rejects_preexisting_marker_or_probe_including_dangling_symlink(
+        self,
+    ):
+        for kind in (
+            "marker",
+            "probe",
+        ):
+            with self.subTest(kind=kind):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = self.make_fixture(
+                        Path(temp)
+                    )
+
+                    runtime = fixture["runtime"]
+                    runtime.mkdir(
+                        parents=True,
+                        exist_ok=True,
+                    )
+
+                    marker = (
+                        runtime
+                        / (
+                            "probe-marker-"
+                            f"{self.RUN_ID}-control"
+                        )
+                    )
+                    probe = (
+                        runtime
+                        / (
+                            "probe-"
+                            f"{self.RUN_ID}-control.py"
+                        )
+                    )
+
+                    candidate = (
+                        marker
+                        if kind == "marker"
+                        else probe
+                    )
+
+                    try:
+                        candidate.symlink_to(
+                            runtime
+                            / "missing-target"
+                        )
+                    except OSError as exc:
+                        self.skipTest(
+                            f"symlink unavailable: {exc}"
+                        )
+
+                    harness = (
+                        self.install_common_stubs(
+                            fixture
+                        )
+                    )
+
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        (
+                            "pre-existing F2 "
+                            f"{kind}"
+                        ),
+                    ):
+                        F2.run_f2(
+                            fixture["args"]
+                        )
+
+                    harness[
+                        "write_probe"
+                    ].assert_not_called()
+                    harness[
+                        "i1"
+                    ].NativePilot.assert_not_called()
+
+    def test_execute_containment_nonpass_returns_early_without_profile_replacement_or_native_start(
+        self,
+    ):
+        for verdict in (
+            "fail",
+            "unknown",
+        ):
+            with self.subTest(
+                verdict=verdict
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = self.make_fixture(
+                        Path(temp)
+                    )
+                    original_payload = (
+                        fixture["profile"].read_bytes()
+                    )
+
+                    harness = (
+                        self.install_common_stubs(
+                            fixture,
+                            containment=
+                                self.failing_containment(
+                                    verdict
+                                ),
+                        )
+                    )
+
+                    atomic_spy = (
+                        mock.patch.object(
+                            F2,
+                            "atomic_bytes",
+                            wraps=F2.atomic_bytes,
+                        )
+                    )
+                    atomic_mock = atomic_spy.start()
+                    self.addCleanup(
+                        atomic_spy.stop
+                    )
+
+                    status = F2.run_f2(
+                        fixture["args"]
+                    )
+
+                    self.assertEqual(
+                        status,
+                        (
+                            1
+                            if verdict == "fail"
+                            else 2
+                        ),
+                    )
+
+                    harness[
+                        "i1"
+                    ].NativePilot.assert_not_called()
+                    atomic_mock.assert_not_called()
+
+                    containment = F2.read_json(
+                        fixture["artifact"]
+                        / "control"
+                        / "containment.json"
+                    )
+                    self.assertEqual(
+                        containment["verdict"],
+                        verdict,
+                    )
+
+                    final = F2.read_json(
+                        fixture["artifact"]
+                        / "result.json"
+                    )
+                    self.assertEqual(
+                        final["verdict"],
+                        verdict,
+                    )
+                    self.assertEqual(
+                        final["reason"],
+                        "control_not_pass",
+                    )
+                    control = final[
+                        "cases"
+                    ]["control"]
+                    self.assertEqual(
+                        control["reason"],
+                        (
+                            "probe_containment_"
+                            "not_proved"
+                        ),
+                    )
+                    self.assertEqual(
+                        fixture[
+                            "profile"
+                        ].read_bytes(),
+                        original_payload,
+                    )
+
+    def test_execute_profile_replacement_mismatch_raises_and_outer_finally_restores_profile(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            original_payload = (
+                fixture["profile"].read_bytes()
+            )
+            original_mode = stat.S_IMODE(
+                fixture["profile"].stat().st_mode
+            )
+
+            harness = (
+                self.install_common_stubs(
+                    fixture
+                )
+            )
+
+            calls = []
+
+            def corrupt_first_write(
+                path,
+                payload,
+                mode,
+            ):
+                calls.append(
+                    (
+                        Path(path),
+                        payload,
+                        mode,
+                    )
+                )
+
+                if len(calls) == 1:
+                    Path(path).write_bytes(
+                        b"wrong-profile"
+                    )
+                    Path(path).chmod(mode)
+                    return
+
+                Path(path).write_bytes(
+                    payload
+                )
+                Path(path).chmod(mode)
+
+            with mock.patch.object(
+                F2,
+                "atomic_bytes",
+                side_effect=corrupt_first_write,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    (
+                        "control profile "
+                        "replacement mismatch"
+                    ),
+                ):
+                    F2.run_f2(
+                        fixture["args"]
+                    )
+
+            self.assertGreaterEqual(
+                len(calls),
+                2,
+            )
+            self.assertEqual(
+                calls[0],
+                (
+                    fixture["profile"],
+                    original_payload,
+                    original_mode,
+                ),
+            )
+            harness[
+                "i1"
+            ].NativePilot.assert_not_called()
+            self.assertEqual(
+                fixture["profile"].read_bytes(),
+                original_payload,
+            )
+            self.assertFalse(
+                (
+                    fixture["artifact"]
+                    / "control"
+                    / "restore.json"
+                ).exists()
+            )
+
+    def test_execute_normal_three_cases_replace_profile_start_native_invoke_evaluate_and_restore_each_case(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            original_payload = (
+                fixture["profile"].read_bytes()
+            )
+            original_mode = stat.S_IMODE(
+                fixture["profile"].stat().st_mode
+            )
+
+            observed_profiles = {}
+            observations = {}
+
+            def invoke(
+                i1,
+                *,
+                native,
+                command,
+                collector,
+                claude_config,
+                collector_state,
+                artifact,
+            ):
+                label = artifact.name
+                observed_profiles[
+                    label
+                ] = fixture[
+                    "profile"
+                ].read_bytes()
+                observations[label] = {
+                    "verdict": "pass",
+                    "toolUseId":
+                        f"tool-{label}",
+                }
+                return observations[label]
+
+            def evaluate(**kwargs):
+                return {
+                    "schemaVersion": 1,
+                    "case": kwargs["label"],
+                    "verdict": "pass",
+                    "checks": [],
+                    "observation":
+                        kwargs["observation"],
+                }
+
+            harness = (
+                self.install_common_stubs(
+                    fixture,
+                    invoke_side_effect=invoke,
+                    evaluate_side_effect=evaluate,
+                )
+            )
+
+            status = F2.run_f2(
+                fixture["args"]
+            )
+
+            self.assertEqual(
+                status,
+                0,
+            )
+
+            injector = (
+                fixture["runtime"]
+                / "timeout-injector.py"
+            )
+            original_profile = json.loads(
+                original_payload.decode(
+                    "utf-8"
+                )
+            )
+            expected_payloads = {
+                "control":
+                    original_payload,
+                "missing":
+                    F2.encode_profile(
+                        F2.make_missing_profile(
+                            original_profile
+                        )
+                    ),
+                "timeout":
+                    F2.encode_profile(
+                        F2.make_timeout_profile(
+                            original_profile,
+                            fixture["guard"],
+                            injector,
+                        )
+                    ),
+            }
+
+            self.assertEqual(
+                observed_profiles,
+                expected_payloads,
+            )
+
+            self.assertEqual(
+                harness[
+                    "i1"
+                ].NativePilot.call_count,
+                3,
+            )
+
+            constructor_calls = (
+                harness[
+                    "i1"
+                ].NativePilot.call_args_list
+            )
+
+            for index, label in enumerate(
+                (
+                    "control",
+                    "missing",
+                    "timeout",
+                )
+            ):
+                call = constructor_calls[index]
+
+                self.assertEqual(
+                    call.args[0],
+                    fixture["launcher"],
+                )
+                self.assertEqual(
+                    call.args[1],
+                    fixture["gate_repo"],
+                )
+                self.assertEqual(
+                    call.args[2],
+                    self.GATE_TEAM,
+                )
+                self.assertEqual(
+                    call.args[3],
+                    fixture["claude_config"],
+                )
+                self.assertEqual(
+                    call.args[4],
+                    (
+                        fixture["artifact"]
+                        / label
+                        / "native"
+                    ),
+                )
+
+                env = call.args[5]
+                self.assertEqual(
+                    env["BASE_ENV"],
+                    "preserved",
+                )
+                self.assertEqual(
+                    env[
+                        "CLAUDE_CONFIG_DIR"
+                    ],
+                    str(
+                        fixture[
+                            "claude_config"
+                        ]
+                    ),
+                )
+                self.assertEqual(
+                    call.args[6],
+                    11.0,
+                )
+
+                native = harness[
+                    "natives"
+                ][index]
+                native.start.assert_called_once()
+                native.stop.assert_called_once()
+
+                harness[
+                    "validate_binding_profile"
+                ].assert_any_call(
+                    native,
+                    expected_payloads[label],
+                )
+
+                probe = (
+                    fixture["runtime"]
+                    / (
+                        "probe-"
+                        f"{self.RUN_ID}-{label}.py"
+                    )
+                )
+                expected_command = str(
+                    probe.resolve(
+                        strict=True
+                    )
+                )
+
+                invoke_call = (
+                    harness[
+                        "invoke_probe"
+                    ].call_args_list[index]
+                )
+                self.assertIs(
+                    invoke_call.args[0],
+                    harness["i1"],
+                )
+                self.assertIs(
+                    invoke_call.kwargs[
+                        "native"
+                    ],
+                    native,
+                )
+                self.assertEqual(
+                    invoke_call.kwargs[
+                        "command"
+                    ],
+                    expected_command,
+                )
+                self.assertEqual(
+                    invoke_call.kwargs[
+                        "collector"
+                    ],
+                    fixture["collector"],
+                )
+                self.assertEqual(
+                    invoke_call.kwargs[
+                        "claude_config"
+                    ],
+                    fixture["claude_config"],
+                )
+                self.assertEqual(
+                    invoke_call.kwargs[
+                        "collector_state"
+                    ],
+                    (
+                        fixture["artifact"]
+                        / label
+                        / "collector-state"
+                    ),
+                )
+                self.assertEqual(
+                    invoke_call.kwargs[
+                        "artifact"
+                    ],
+                    fixture["artifact"]
+                    / label,
+                )
+
+                evaluate_call = (
+                    harness[
+                        "evaluate_case"
+                    ].call_args_list[index]
+                )
+                self.assertEqual(
+                    evaluate_call.kwargs[
+                        "label"
+                    ],
+                    label,
+                )
+                self.assertEqual(
+                    evaluate_call.kwargs[
+                        "observation"
+                    ],
+                    observations[label],
+                )
+                self.assertEqual(
+                    evaluate_call.kwargs[
+                        "marker"
+                    ],
+                    (
+                        fixture["runtime"]
+                        / (
+                            "probe-marker-"
+                            f"{self.RUN_ID}-{label}"
+                        )
+                    ),
+                )
+                self.assertEqual(
+                    evaluate_call.kwargs[
+                        "injector_log"
+                    ],
+                    (
+                        fixture["artifact"]
+                        / "timeout"
+                        / "injector.jsonl"
+                        if label == "timeout"
+                        else None
+                    ),
+                )
+
+                result = F2.read_json(
+                    fixture["artifact"]
+                    / label
+                    / "result.json"
+                )
+                self.assertEqual(
+                    result["case"],
+                    label,
+                )
+                self.assertEqual(
+                    result["verdict"],
+                    "pass",
+                )
+
+                restore = F2.read_json(
+                    fixture["artifact"]
+                    / label
+                    / "restore.json"
+                )
+                self.assertEqual(
+                    restore[
+                        "restoredDigest"
+                    ],
+                    F2.binding_digest(
+                        original_payload
+                    ),
+                )
+                self.assertEqual(
+                    restore[
+                        "originalDigest"
+                    ],
+                    F2.binding_digest(
+                        original_payload
+                    ),
+                )
+                self.assertIs(
+                    restore[
+                        "matchesOriginal"
+                    ],
+                    True,
+                )
+
+            self.assertEqual(
+                fixture["profile"].read_bytes(),
+                original_payload,
+            )
+            self.assertEqual(
+                stat.S_IMODE(
+                    fixture["profile"].stat().st_mode
+                ),
+                original_mode,
+            )
+
+    def test_execute_exception_after_native_start_stops_native_restores_profile_writes_restore_and_preserves_original_exception(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            original_payload = (
+                fixture["profile"].read_bytes()
+            )
+
+            harness = (
+                self.install_common_stubs(
+                    fixture,
+                    invoke_side_effect=
+                        RuntimeError(
+                            "invoke exploded"
+                        ),
+                )
+            )
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "invoke exploded",
+            ):
+                F2.run_f2(
+                    fixture["args"]
+                )
+
+            native = harness[
+                "natives"
+            ][0]
+            native.start.assert_called_once()
+            native.stop.assert_called_once()
+
+            self.assertEqual(
+                fixture["profile"].read_bytes(),
+                original_payload,
+            )
+
+            restore = F2.read_json(
+                fixture["artifact"]
+                / "control"
+                / "restore.json"
+            )
+
+            self.assertEqual(
+                restore[
+                    "restoredDigest"
+                ],
+                F2.binding_digest(
+                    original_payload
+                ),
+            )
+            self.assertEqual(
+                restore[
+                    "originalDigest"
+                ],
+                F2.binding_digest(
+                    original_payload
+                ),
+            )
+            self.assertIs(
+                restore[
+                    "matchesOriginal"
+                ],
+                True,
+            )
+
+    def test_execute_restore_failure_overrides_original_exception_and_outer_finally_repairs_profile(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            original_payload = (
+                fixture["profile"].read_bytes()
+            )
+            original_mode = stat.S_IMODE(
+                fixture["profile"].stat().st_mode
+            )
+
+            harness = (
+                self.install_common_stubs(
+                    fixture,
+                    invoke_side_effect=
+                        ValueError(
+                            "original invoke failure"
+                        ),
+                )
+            )
+
+            calls = []
+
+            def write_with_bad_inner_restore(
+                path,
+                payload,
+                mode,
+            ):
+                calls.append(
+                    (
+                        Path(path),
+                        payload,
+                        mode,
+                    )
+                )
+
+                if len(calls) == 2:
+                    Path(path).write_bytes(
+                        b"corrupt-after-restore"
+                    )
+                    Path(path).chmod(mode)
+                    return
+
+                Path(path).write_bytes(
+                    payload
+                )
+                Path(path).chmod(mode)
+
+            with mock.patch.object(
+                F2,
+                "atomic_bytes",
+                side_effect=
+                    write_with_bad_inner_restore,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    (
+                        "control profile "
+                        "restore failed"
+                    ),
+                ):
+                    F2.run_f2(
+                        fixture["args"]
+                    )
+
+            native = harness[
+                "natives"
+            ][0]
+            native.start.assert_called_once()
+            native.stop.assert_called_once()
+
+            self.assertGreaterEqual(
+                len(calls),
+                3,
+            )
+
+            restore = F2.read_json(
+                fixture["artifact"]
+                / "control"
+                / "restore.json"
+            )
+
+            self.assertEqual(
+                restore[
+                    "restoredDigest"
+                ],
+                F2.binding_digest(
+                    b"corrupt-after-restore"
+                ),
+            )
+            self.assertEqual(
+                restore[
+                    "originalDigest"
+                ],
+                F2.binding_digest(
+                    original_payload
+                ),
+            )
+            self.assertIs(
+                restore[
+                    "matchesOriginal"
+                ],
+                False,
+            )
+
+            self.assertEqual(
+                fixture["profile"].read_bytes(),
+                original_payload,
+            )
+            self.assertEqual(
+                stat.S_IMODE(
+                    fixture["profile"].stat().st_mode
+                ),
+                original_mode,
+            )
+
 if __name__ == "__main__":
     unittest.main()
