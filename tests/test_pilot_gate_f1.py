@@ -3364,5 +3364,1613 @@ class PilotGateF1RoundBRunCase(unittest.TestCase):
             native.start.assert_called_once()
             native.stop.assert_called_once()
 
+
+class PilotGateF1RoundCRunF1(unittest.TestCase):
+    ORIGINAL_DIGEST = "provider-original-digest"
+    FAULT_DIGEST = "provider-fault-digest"
+    RUN_ID = "round-c-run"
+    GATE_TEAM = "agmsg-g4gate-round-c"
+
+    def make_fixture(
+        self,
+        root: Path,
+    ):
+        root = root.resolve()
+        run_root = root / "run-root"
+        gate_repo = run_root / "repo"
+        claude_config = run_root / "claude"
+        artifact_dir = root / "artifacts"
+
+        scripts = gate_repo / "scripts"
+        scripts.mkdir(parents=True, exist_ok=True)
+        claude_config.mkdir(parents=True, exist_ok=True)
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+
+        for name in (
+            "p2-provider.sh",
+            "p2-consumer-broker.sh",
+            "pilot-launcher.sh",
+            "join.sh",
+        ):
+            path = scripts / name
+            path.write_text(
+                "#!/bin/sh\nexit 0\n",
+                encoding="utf-8",
+            )
+            path.chmod(0o700)
+
+        args = types.SimpleNamespace(
+            gate_repo=str(gate_repo),
+            run_root=str(run_root),
+            claude_config=str(claude_config),
+            artifact_dir=str(artifact_dir),
+            run_id=self.RUN_ID,
+            gate_team=self.GATE_TEAM,
+            timeout_seconds=17,
+        )
+
+        return {
+            "root": root,
+            "run_root": run_root,
+            "gate_repo": gate_repo,
+            "claude_config": claude_config,
+            "artifact_dir": artifact_dir,
+            "artifact": artifact_dir / "F1",
+            "provider": scripts / "p2-provider.sh",
+            "broker": scripts / "p2-consumer-broker.sh",
+            "launcher": scripts / "pilot-launcher.sh",
+            "join": scripts / "join.sh",
+            "args": args,
+        }
+
+    def case_record(
+        self,
+        label: str,
+        *,
+        verdict: str = "pass",
+        request_id: str | None = None,
+        team: str | None = None,
+    ):
+        return {
+            "schemaVersion": 1,
+            "case": label,
+            "runId": f"{self.RUN_ID}-F1-{label}",
+            "requestId": (
+                request_id
+                if request_id is not None
+                else f"request-{label}"
+            ),
+            "team": (
+                team
+                if team is not None
+                else f"team-{label}"
+            ),
+            "verdict": verdict,
+        }
+
+    def default_cases(self):
+        return [
+            self.case_record(F1.CASE_CONTROL),
+            self.case_record(F1.CASE_FAULT),
+            self.case_record(F1.CASE_RECOVERY),
+        ]
+
+    @contextlib.contextmanager
+    def harness(
+        self,
+        fixture,
+        *,
+        run_case_side_effect=None,
+        sha_side_effect=None,
+        shim_result=None,
+        storage_side_effect=None,
+        write_count_side_effect=None,
+        fault=None,
+        sanitize_env=None,
+        atomic_json_side_effect=None,
+    ):
+        iso = mock.Mock()
+        iso.canonical.side_effect = (
+            lambda value: str(
+                Path(value).resolve()
+            )
+        )
+
+        if sha_side_effect is None:
+            sha_side_effect = [
+                self.ORIGINAL_DIGEST,
+                self.ORIGINAL_DIGEST,
+                self.ORIGINAL_DIGEST,
+                self.ORIGINAL_DIGEST,
+            ]
+        iso.sha256_file.side_effect = sha_side_effect
+
+        i1 = mock.Mock()
+        if sanitize_env is None:
+            sanitize_env = {
+                "BASE_ENV": "preserved",
+            }
+        i1.sanitize_env.return_value = dict(
+            sanitize_env
+        )
+
+        if storage_side_effect is None:
+            i1.storage_db.side_effect = (
+                lambda gate_repo, team, env:
+                    Path(
+                        fixture["root"]
+                        / f"{team}.db"
+                    )
+            )
+        else:
+            i1.storage_db.side_effect = (
+                storage_side_effect
+            )
+
+        if fault is None:
+            fault = mock.Mock()
+            fault.original_bytes = b"captured-original"
+            fault.original_mode = 0o700
+            fault.fault_digest = self.FAULT_DIGEST
+            fault.restored_digest = (
+                self.ORIGINAL_DIGEST
+            )
+
+        if run_case_side_effect is None:
+            run_case_side_effect = (
+                self.default_cases()
+            )
+
+        if shim_result is None:
+            shim_result = [
+                {
+                    "schemaVersion": 1,
+                    "argv": ["message-send"],
+                }
+            ]
+
+        if write_count_side_effect is None:
+            counts = {
+                "request-control": 1,
+                "request-fault": 0,
+                "request-recovery": 1,
+            }
+
+            def write_count(
+                db,
+                *,
+                team,
+                request_id,
+            ):
+                return counts[
+                    request_id
+                ]
+
+            write_count_side_effect = (
+                write_count
+            )
+
+        script_dir = Path(
+            F1.__file__
+        ).resolve().parent
+
+        def load_side_effect(
+            path,
+            name,
+        ):
+            path = Path(path)
+            if path == (
+                script_dir
+                / "pilot-gate-isolation.py"
+            ):
+                self.assertEqual(
+                    name,
+                    "pilot_gate_isolation",
+                )
+                return iso
+
+            if path == (
+                script_dir
+                / "pilot-gate-i1.py"
+            ):
+                self.assertEqual(
+                    name,
+                    "pilot_gate_i1",
+                )
+                return i1
+
+            raise AssertionError(
+                f"unexpected module load: {path} {name}"
+            )
+
+        stack = contextlib.ExitStack()
+
+        patches = {
+            "load_module":
+                stack.enter_context(
+                    mock.patch.object(
+                        F1,
+                        "load_module",
+                        side_effect=load_side_effect,
+                    )
+                ),
+            "require_regular_executable":
+                stack.enter_context(
+                    mock.patch.object(
+                        F1,
+                        "require_regular_executable",
+                    )
+                ),
+            "ProviderFault":
+                stack.enter_context(
+                    mock.patch.object(
+                        F1,
+                        "ProviderFault",
+                        return_value=fault,
+                    )
+                ),
+            "run_case":
+                stack.enter_context(
+                    mock.patch.object(
+                        F1,
+                        "run_case",
+                        side_effect=run_case_side_effect,
+                    )
+                ),
+            "shim_invocations":
+                stack.enter_context(
+                    mock.patch.object(
+                        F1,
+                        "shim_invocations",
+                        return_value=shim_result,
+                    )
+                ),
+            "delegate_write_count":
+                stack.enter_context(
+                    mock.patch.object(
+                        F1,
+                        "delegate_write_count",
+                        side_effect=write_count_side_effect,
+                    )
+                ),
+        }
+
+        if atomic_json_side_effect is not None:
+            patches[
+                "atomic_json"
+            ] = stack.enter_context(
+                mock.patch.object(
+                    F1,
+                    "atomic_json",
+                    side_effect=atomic_json_side_effect,
+                )
+            )
+
+        try:
+            yield {
+                "iso": iso,
+                "i1": i1,
+                "fault": fault,
+                **patches,
+            }
+        finally:
+            stack.close()
+
+    def read_result(
+        self,
+        fixture,
+    ):
+        return F1.read_json(
+            fixture["artifact"]
+            / "result.json"
+        )
+
+    def checks_by_name(
+        self,
+        result,
+    ):
+        return {
+            item["name"]: item
+            for item
+            in result["checks"]
+        }
+
+    def test_setup_canonicalizes_paths_cleans_old_logs_validates_binaries_and_builds_fault_environment(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            artifact = fixture["artifact"]
+            mutation_log = (
+                artifact
+                / "mutation-log.jsonl"
+            )
+            shim_log = (
+                artifact
+                / "fault-provider"
+                / "shim-invocations.jsonl"
+            )
+
+            shim_log.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+            mutation_log.write_text(
+                "stale mutation\n",
+                encoding="utf-8",
+            )
+            shim_log.write_text(
+                "stale shim\n",
+                encoding="utf-8",
+            )
+
+            with self.harness(
+                fixture
+            ) as harness:
+                status = F1.run_f1(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                0,
+            )
+            self.assertTrue(
+                artifact.is_dir()
+            )
+            self.assertFalse(
+                mutation_log.exists()
+            )
+            self.assertFalse(
+                shim_log.exists()
+            )
+
+            self.assertEqual(
+                harness[
+                    "iso"
+                ].canonical.call_args_list,
+                [
+                    mock.call(
+                        fixture[
+                            "args"
+                        ].gate_repo
+                    ),
+                    mock.call(
+                        fixture[
+                            "args"
+                        ].run_root
+                    ),
+                    mock.call(
+                        fixture[
+                            "args"
+                        ].claude_config
+                    ),
+                ],
+            )
+
+            self.assertEqual(
+                harness[
+                    "require_regular_executable"
+                ].call_args_list,
+                [
+                    mock.call(
+                        fixture["provider"]
+                    ),
+                    mock.call(
+                        fixture["broker"]
+                    ),
+                    mock.call(
+                        fixture["launcher"]
+                    ),
+                    mock.call(
+                        fixture["join"]
+                    ),
+                ],
+            )
+
+            harness[
+                "i1"
+            ].sanitize_env.assert_called_once_with(
+                os.environ
+            )
+
+            first_run = harness[
+                "run_case"
+            ].call_args_list[0]
+
+            env = first_run.kwargs["env"]
+
+            self.assertEqual(
+                env["BASE_ENV"],
+                "preserved",
+            )
+            self.assertEqual(
+                env["CLAUDE_CONFIG_DIR"],
+                str(
+                    fixture[
+                        "claude_config"
+                    ]
+                ),
+            )
+            self.assertEqual(
+                env[
+                    "AGMSG_GATE_F1_SHIM_LOG"
+                ],
+                str(shim_log),
+            )
+
+            harness[
+                "ProviderFault"
+            ].assert_called_once_with(
+                provider=fixture["provider"],
+                artifact=(
+                    artifact
+                    / "fault-provider"
+                ),
+                iso=harness["iso"],
+                mutation_log=mutation_log,
+            )
+
+            self.assertEqual(
+                harness[
+                    "iso"
+                ].sha256_file.call_args_list[
+                    0
+                ],
+                mock.call(
+                    fixture["provider"]
+                ),
+            )
+
+    def test_provider_and_broker_real_paths_are_contained_under_gate_repo(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            with self.harness(
+                fixture
+            ):
+                status = F1.run_f1(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                0,
+            )
+
+    def test_control_nonpass_returns_early_and_skips_fault_and_recovery(
+        self,
+    ):
+        for verdict, expected_status in (
+            ("fail", 1),
+            ("unknown", 2),
+        ):
+            with self.subTest(
+                verdict=verdict
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = (
+                        self.make_fixture(
+                            Path(temp)
+                        )
+                    )
+
+                    control = self.case_record(
+                        F1.CASE_CONTROL,
+                        verdict=verdict,
+                    )
+
+                    with self.harness(
+                        fixture,
+                        run_case_side_effect=[
+                            control
+                        ],
+                        sha_side_effect=[
+                            self.ORIGINAL_DIGEST,
+                            self.ORIGINAL_DIGEST,
+                        ],
+                    ) as harness:
+                        status = F1.run_f1(
+                            fixture["args"]
+                        )
+
+                    self.assertEqual(
+                        status,
+                        expected_status,
+                    )
+                    self.assertEqual(
+                        harness[
+                            "run_case"
+                        ].call_count,
+                        1,
+                    )
+
+                    result = self.read_result(
+                        fixture
+                    )
+
+                    self.assertEqual(
+                        result["verdict"],
+                        verdict,
+                    )
+                    self.assertEqual(
+                        result["reason"],
+                        "control_not_pass",
+                    )
+                    self.assertEqual(
+                        result["control"],
+                        control,
+                    )
+
+                    harness[
+                        "shim_invocations"
+                    ].assert_not_called()
+
+    def test_provider_not_restored_after_fault_is_unknown_exit_two_and_skips_recovery(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            control = self.case_record(
+                F1.CASE_CONTROL
+            )
+            fault_case = self.case_record(
+                F1.CASE_FAULT
+            )
+
+            with self.harness(
+                fixture,
+                run_case_side_effect=[
+                    control,
+                    fault_case,
+                ],
+                sha_side_effect=[
+                    self.ORIGINAL_DIGEST,
+                    "still-faulted",
+                    self.ORIGINAL_DIGEST,
+                ],
+            ) as harness:
+                status = F1.run_f1(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                2,
+            )
+            self.assertEqual(
+                harness[
+                    "run_case"
+                ].call_count,
+                2,
+            )
+
+            labels = [
+                call.kwargs["label"]
+                for call
+                in harness[
+                    "run_case"
+                ].call_args_list
+            ]
+
+            self.assertEqual(
+                labels,
+                [
+                    F1.CASE_CONTROL,
+                    F1.CASE_FAULT,
+                ],
+            )
+
+            result = self.read_result(
+                fixture
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "unknown",
+            )
+            self.assertEqual(
+                result["reason"],
+                (
+                    "provider_not_restored_"
+                    "before_recovery"
+                ),
+            )
+            self.assertEqual(
+                result["provider"],
+                {
+                    "originalDigest":
+                        self.ORIGINAL_DIGEST,
+                    "observedDigest":
+                        "still-faulted",
+                },
+            )
+
+    def test_post_count_exception_is_isolated_to_only_that_case(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            def storage(
+                gate_repo,
+                team,
+                env,
+            ):
+                if team == "team-fault":
+                    raise RuntimeError(
+                        "fault db unavailable"
+                    )
+
+                return Path(
+                    fixture["root"]
+                    / f"{team}.db"
+                )
+
+            with self.harness(
+                fixture,
+                storage_side_effect=storage,
+            ) as harness:
+                status = F1.run_f1(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                2,
+            )
+
+            result = self.read_result(
+                fixture
+            )
+
+            self.assertEqual(
+                result[
+                    "persistentWriteCountsAfterRecovery"
+                ],
+                {
+                    F1.CASE_CONTROL: 1,
+                    F1.CASE_FAULT: None,
+                    F1.CASE_RECOVERY: 1,
+                },
+            )
+
+            checks = self.checks_by_name(
+                result
+            )
+
+            self.assertEqual(
+                checks[
+                    "control-write-count-one"
+                ]["verdict"],
+                "pass",
+            )
+            self.assertEqual(
+                checks[
+                    "fault-write-count-zero"
+                ]["verdict"],
+                "unknown",
+            )
+            self.assertEqual(
+                checks[
+                    "recovery-write-count-one"
+                ]["verdict"],
+                "pass",
+            )
+
+            self.assertEqual(
+                harness[
+                    "delegate_write_count"
+                ].call_count,
+                2,
+            )
+
+    def test_normal_result_contains_all_thirteen_passing_checks(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            with self.harness(
+                fixture
+            ):
+                status = F1.run_f1(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                0,
+            )
+
+            result = self.read_result(
+                fixture
+            )
+            checks = self.checks_by_name(
+                result
+            )
+
+            expected_names = {
+                "request-ids-nonempty-and-distinct",
+                "control-case-pass",
+                "fault-case-pass",
+                "recovery-case-pass",
+                "control-write-count-one",
+                "fault-write-count-zero",
+                "recovery-write-count-one",
+                "fault-provider-invoked-exactly-once",
+                "fault-automatic-retry-count-zero",
+                "fault-request-not-replayed-after-recovery",
+                "provider-final-digest-restored",
+                "fault-digest-different-from-original",
+                "restore-digest-equals-original",
+            }
+
+            self.assertEqual(
+                set(checks),
+                expected_names,
+            )
+            self.assertEqual(
+                len(checks),
+                13,
+            )
+            self.assertTrue(
+                all(
+                    item["verdict"] == "pass"
+                    for item in checks.values()
+                )
+            )
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+
+    def test_shim_unknown_makes_invocation_and_retry_checks_unknown(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            with self.harness(
+                fixture
+            ) as harness:
+                harness[
+                    "shim_invocations"
+                ].return_value = None
+
+                status = F1.run_f1(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                2,
+            )
+
+            checks = self.checks_by_name(
+                self.read_result(
+                    fixture
+                )
+            )
+
+            self.assertEqual(
+                checks[
+                    "fault-provider-invoked-exactly-once"
+                ]["verdict"],
+                "unknown",
+            )
+            self.assertEqual(
+                checks[
+                    "fault-automatic-retry-count-zero"
+                ]["verdict"],
+                "unknown",
+            )
+
+    def test_wrong_control_post_count_is_fail(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            def counts(
+                db,
+                *,
+                team,
+                request_id,
+            ):
+                return {
+                    "request-control": 2,
+                    "request-fault": 0,
+                    "request-recovery": 1,
+                }[
+                    request_id
+                ]
+
+            with self.harness(
+                fixture,
+                write_count_side_effect=counts,
+            ):
+                status = F1.run_f1(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                1,
+            )
+
+            checks = self.checks_by_name(
+                self.read_result(
+                    fixture
+                )
+            )
+
+            self.assertEqual(
+                checks[
+                    "control-write-count-one"
+                ]["verdict"],
+                "fail",
+            )
+
+    def test_duplicate_request_ids_fail_distinctness_check(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            cases = [
+                self.case_record(
+                    F1.CASE_CONTROL,
+                    request_id="duplicate",
+                ),
+                self.case_record(
+                    F1.CASE_FAULT,
+                    request_id="duplicate",
+                ),
+                self.case_record(
+                    F1.CASE_RECOVERY,
+                    request_id="recovery-id",
+                ),
+            ]
+
+            def counts(
+                db,
+                *,
+                team,
+                request_id,
+            ):
+                if team == "team-fault":
+                    return 0
+                return 1
+
+            with self.harness(
+                fixture,
+                run_case_side_effect=cases,
+                write_count_side_effect=counts,
+            ):
+                status = F1.run_f1(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                1,
+            )
+
+            checks = self.checks_by_name(
+                self.read_result(
+                    fixture
+                )
+            )
+
+            self.assertEqual(
+                checks[
+                    "request-ids-nonempty-and-distinct"
+                ]["verdict"],
+                "fail",
+            )
+
+    def test_final_provider_digest_mismatch_is_fail(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            with self.harness(
+                fixture,
+                sha_side_effect=[
+                    self.ORIGINAL_DIGEST,
+                    self.ORIGINAL_DIGEST,
+                    "wrong-final-digest",
+                    self.ORIGINAL_DIGEST,
+                ],
+            ):
+                status = F1.run_f1(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                1,
+            )
+
+            checks = self.checks_by_name(
+                self.read_result(
+                    fixture
+                )
+            )
+
+            self.assertEqual(
+                checks[
+                    "provider-final-digest-restored"
+                ]["verdict"],
+                "fail",
+            )
+
+    def test_final_result_shape_and_pass_exit_code(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            control, fault_case, recovery = (
+                self.default_cases()
+            )
+
+            with self.harness(
+                fixture,
+                run_case_side_effect=[
+                    control,
+                    fault_case,
+                    recovery,
+                ],
+            ) as harness:
+                status = F1.run_f1(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                0,
+            )
+
+            result = self.read_result(
+                fixture
+            )
+
+            self.assertEqual(
+                set(result),
+                {
+                    "schemaVersion",
+                    "check",
+                    "runId",
+                    "faultMethod",
+                    "controlRequestId",
+                    "faultRequestId",
+                    "recoveryRequestId",
+                    "persistentWriteCountsAfterRecovery",
+                    "faultProviderInvocationCount",
+                    "automaticRetryCountForFaultRequest",
+                    "providerDigests",
+                    "control",
+                    "fault",
+                    "recovery",
+                    "checks",
+                    "verdict",
+                },
+            )
+
+            self.assertEqual(
+                result["schemaVersion"],
+                1,
+            )
+            self.assertEqual(
+                result["check"],
+                "F1",
+            )
+            self.assertEqual(
+                result["runId"],
+                self.RUN_ID,
+            )
+            self.assertEqual(
+                result["faultMethod"],
+                (
+                    "isolated-provider-atomic-"
+                    "shim-substitution"
+                ),
+            )
+            self.assertEqual(
+                result["controlRequestId"],
+                "request-control",
+            )
+            self.assertEqual(
+                result["faultRequestId"],
+                "request-fault",
+            )
+            self.assertEqual(
+                result["recoveryRequestId"],
+                "request-recovery",
+            )
+            self.assertEqual(
+                result[
+                    "persistentWriteCountsAfterRecovery"
+                ],
+                {
+                    F1.CASE_CONTROL: 1,
+                    F1.CASE_FAULT: 0,
+                    F1.CASE_RECOVERY: 1,
+                },
+            )
+            self.assertEqual(
+                result[
+                    "faultProviderInvocationCount"
+                ],
+                1,
+            )
+            self.assertEqual(
+                result[
+                    "automaticRetryCountForFaultRequest"
+                ],
+                0,
+            )
+            self.assertEqual(
+                result["providerDigests"],
+                {
+                    "original":
+                        self.ORIGINAL_DIGEST,
+                    "fault":
+                        self.FAULT_DIGEST,
+                    "restored":
+                        self.ORIGINAL_DIGEST,
+                    "final":
+                        self.ORIGINAL_DIGEST,
+                },
+            )
+            self.assertEqual(
+                result["control"],
+                control,
+            )
+            self.assertEqual(
+                result["fault"],
+                fault_case,
+            )
+            self.assertEqual(
+                result["recovery"],
+                recovery,
+            )
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+
+            harness[
+                "fault"
+            ].restore.assert_not_called()
+
+    def test_final_verdict_maps_pass_fail_unknown_to_zero_one_two(
+        self,
+    ):
+        scenarios = (
+            (
+                "pass",
+                {},
+                0,
+            ),
+            (
+                "fail",
+                {
+                    "write_count_side_effect":
+                        lambda db, *,
+                        team,
+                        request_id:
+                            (
+                                2
+                                if request_id
+                                == "request-control"
+                                else 0
+                                if request_id
+                                == "request-fault"
+                                else 1
+                            ),
+                },
+                1,
+            ),
+            (
+                "unknown",
+                {
+                    "storage_side_effect":
+                        lambda gate_repo,
+                        team,
+                        env:
+                            (
+                                (_ for _ in ())
+                                .throw(
+                                    RuntimeError(
+                                        "unreadable"
+                                    )
+                                )
+                                if team
+                                == "team-control"
+                                else Path(
+                                    gate_repo
+                                    / f"{team}.db"
+                                )
+                            ),
+                },
+                2,
+            ),
+        )
+
+        for (
+            expected_verdict,
+            overrides,
+            expected_status,
+        ) in scenarios:
+            with self.subTest(
+                expected_verdict=(
+                    expected_verdict
+                )
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = (
+                        self.make_fixture(
+                            Path(temp)
+                        )
+                    )
+
+                    with self.harness(
+                        fixture,
+                        **overrides,
+                    ):
+                        status = F1.run_f1(
+                            fixture["args"]
+                        )
+
+                    self.assertEqual(
+                        status,
+                        expected_status,
+                    )
+                    self.assertEqual(
+                        self.read_result(
+                            fixture
+                        )["verdict"],
+                        expected_verdict,
+                    )
+
+    def test_normal_finally_matching_digest_does_not_restore(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            with self.harness(
+                fixture,
+                sha_side_effect=[
+                    self.ORIGINAL_DIGEST,
+                    self.ORIGINAL_DIGEST,
+                    self.ORIGINAL_DIGEST,
+                    self.ORIGINAL_DIGEST,
+                ],
+            ) as harness:
+                status = F1.run_f1(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                0,
+            )
+            harness[
+                "fault"
+            ].restore.assert_not_called()
+
+    def test_exception_with_changed_digest_emergency_restores_when_original_was_captured(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            fault = mock.Mock()
+            fault.original_bytes = (
+                b"captured"
+            )
+            fault.original_mode = 0o700
+            fault.fault_digest = (
+                self.FAULT_DIGEST
+            )
+            fault.restored_digest = (
+                self.ORIGINAL_DIGEST
+            )
+
+            with self.harness(
+                fixture,
+                fault=fault,
+                run_case_side_effect=(
+                    RuntimeError(
+                        "run-case exploded"
+                    )
+                ),
+                sha_side_effect=[
+                    self.ORIGINAL_DIGEST,
+                    "changed-provider",
+                ],
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "run-case exploded",
+                ):
+                    F1.run_f1(
+                        fixture["args"]
+                    )
+
+            fault.restore.assert_called_once()
+
+    def test_emergency_restore_is_skipped_if_original_bytes_or_mode_was_not_captured(
+        self,
+    ):
+        for (
+            original_bytes,
+            original_mode,
+        ) in (
+            (None, 0o700),
+            (b"captured", None),
+            (None, None),
+        ):
+            with self.subTest(
+                original_bytes=(
+                    original_bytes
+                ),
+                original_mode=(
+                    original_mode
+                ),
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = (
+                        self.make_fixture(
+                            Path(temp)
+                        )
+                    )
+
+                    fault = mock.Mock()
+                    fault.original_bytes = (
+                        original_bytes
+                    )
+                    fault.original_mode = (
+                        original_mode
+                    )
+                    fault.fault_digest = (
+                        self.FAULT_DIGEST
+                    )
+                    fault.restored_digest = ""
+
+                    with self.harness(
+                        fixture,
+                        fault=fault,
+                        run_case_side_effect=(
+                            RuntimeError(
+                                "before-inject"
+                            )
+                        ),
+                        sha_side_effect=[
+                            self.ORIGINAL_DIGEST,
+                            "changed-provider",
+                        ],
+                    ):
+                        with self.assertRaisesRegex(
+                            RuntimeError,
+                            "before-inject",
+                        ):
+                            F1.run_f1(
+                                fixture["args"]
+                            )
+
+                    fault.restore.assert_not_called()
+
+    def test_emergency_restore_failure_writes_unknown_evidence_and_preserves_original_exception(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            fault = mock.Mock()
+            fault.original_bytes = b"captured"
+            fault.original_mode = 0o700
+            fault.fault_digest = (
+                self.FAULT_DIGEST
+            )
+            fault.restored_digest = ""
+            fault.restore.side_effect = (
+                RuntimeError(
+                    "restore failed"
+                )
+            )
+
+            with self.harness(
+                fixture,
+                fault=fault,
+                run_case_side_effect=(
+                    ValueError(
+                        "original failure"
+                    )
+                ),
+                sha_side_effect=[
+                    self.ORIGINAL_DIGEST,
+                    "changed-provider",
+                ],
+            ):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "original failure",
+                ):
+                    F1.run_f1(
+                        fixture["args"]
+                    )
+
+            fault.restore.assert_called_once()
+
+            evidence = F1.read_json(
+                fixture["artifact"]
+                / "emergency-restore-error.json"
+            )
+
+            self.assertEqual(
+                evidence,
+                {
+                    "schemaVersion": 1,
+                    "verdict": "unknown",
+                    "reason":
+                        (
+                            "emergency_restore_failed:"
+                            "RuntimeError:"
+                            "restore failed"
+                        ),
+                },
+            )
+
+    def test_emergency_evidence_write_failure_is_swallowed_and_original_exception_survives(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            fault = mock.Mock()
+            fault.original_bytes = b"captured"
+            fault.original_mode = 0o700
+            fault.fault_digest = (
+                self.FAULT_DIGEST
+            )
+            fault.restored_digest = ""
+            fault.restore.side_effect = (
+                RuntimeError(
+                    "restore failed"
+                )
+            )
+
+            real_atomic = F1.atomic_json
+
+            def atomic_side_effect(
+                path,
+                value,
+            ):
+                if Path(path).name == (
+                    "emergency-restore-error.json"
+                ):
+                    raise OSError(
+                        "evidence write failed"
+                    )
+                return real_atomic(
+                    path,
+                    value,
+                )
+
+            with self.harness(
+                fixture,
+                fault=fault,
+                run_case_side_effect=(
+                    LookupError(
+                        "original lookup failure"
+                    )
+                ),
+                sha_side_effect=[
+                    self.ORIGINAL_DIGEST,
+                    "changed-provider",
+                ],
+                atomic_json_side_effect=(
+                    atomic_side_effect
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    LookupError,
+                    "original lookup failure",
+                ):
+                    F1.run_f1(
+                        fixture["args"]
+                    )
+
+            fault.restore.assert_called_once()
+            self.assertFalse(
+                (
+                    fixture["artifact"]
+                    / "emergency-restore-error.json"
+                ).exists()
+            )
+
+    def test_finally_sha256_failure_falls_back_to_empty_digest_and_attempts_restore(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            fault = mock.Mock()
+            fault.original_bytes = b"captured"
+            fault.original_mode = 0o700
+            fault.fault_digest = (
+                self.FAULT_DIGEST
+            )
+            fault.restored_digest = ""
+
+            with self.harness(
+                fixture,
+                fault=fault,
+                run_case_side_effect=(
+                    RuntimeError(
+                        "run-case failure"
+                    )
+                ),
+                sha_side_effect=[
+                    self.ORIGINAL_DIGEST,
+                    OSError(
+                        "digest unavailable"
+                    ),
+                ],
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "run-case failure",
+                ):
+                    F1.run_f1(
+                        fixture["args"]
+                    )
+
+            fault.restore.assert_called_once()
+
+    def test_run_case_receives_control_fault_recovery_provider_fault_contract(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            with self.harness(
+                fixture
+            ) as harness:
+                status = F1.run_f1(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                0,
+            )
+
+            calls = harness[
+                "run_case"
+            ].call_args_list
+
+            self.assertEqual(
+                len(calls),
+                3,
+            )
+
+            self.assertEqual(
+                [
+                    call.kwargs["label"]
+                    for call in calls
+                ],
+                [
+                    F1.CASE_CONTROL,
+                    F1.CASE_FAULT,
+                    F1.CASE_RECOVERY,
+                ],
+            )
+
+            self.assertIsNone(
+                calls[0].kwargs[
+                    "provider_fault"
+                ]
+            )
+            self.assertIs(
+                calls[1].kwargs[
+                    "provider_fault"
+                ],
+                harness["fault"],
+            )
+            self.assertIsNone(
+                calls[2].kwargs[
+                    "provider_fault"
+                ]
+            )
+
+            for call in calls:
+                self.assertEqual(
+                    call.kwargs[
+                        "base_run_id"
+                    ],
+                    self.RUN_ID,
+                )
+                self.assertEqual(
+                    call.kwargs[
+                        "base_team"
+                    ],
+                    self.GATE_TEAM,
+                )
+                self.assertEqual(
+                    call.kwargs[
+                        "gate_repo"
+                    ],
+                    fixture["gate_repo"],
+                )
+                self.assertEqual(
+                    call.kwargs[
+                        "run_root"
+                    ],
+                    fixture["run_root"],
+                )
+                self.assertEqual(
+                    call.kwargs[
+                        "claude_config"
+                    ],
+                    fixture[
+                        "claude_config"
+                    ],
+                )
+                self.assertEqual(
+                    call.kwargs[
+                        "artifact_root"
+                    ],
+                    fixture["artifact"],
+                )
+                self.assertEqual(
+                    call.kwargs[
+                        "timeout_seconds"
+                    ],
+                    17.0,
+                )
+
 if __name__ == "__main__":
     unittest.main()
