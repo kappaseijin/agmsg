@@ -55,6 +55,7 @@ F1_HELPER="$SCRIPT_DIR/lib/pilot-gate-f1.py"
 F2_HELPER="$SCRIPT_DIR/lib/pilot-gate-f2.py"
 F3_HELPER="$SCRIPT_DIR/lib/pilot-gate-f3.py"
 F4_HELPER="$SCRIPT_DIR/lib/pilot-gate-f4.py"
+F5_HELPER="$SCRIPT_DIR/lib/pilot-gate-f5.py"
 
 SUBCOMMAND="run"
 SOURCE=""
@@ -98,7 +99,7 @@ Usage:
     --live-skill-dir <live-agmsg-root> \
     --artifact-dir <artifact-dir> \
     [--collector-cutoff-seconds <seconds>] \
-    [--check all|N1|I1|F1|F2|F3|F4]
+    [--check all|N1|I1|F1|F2|F3|F4|F5]
 
 Subcommands:
   preflight
@@ -106,7 +107,7 @@ Subcommands:
 
   run
       Execute P0-P4 followed by the implemented gate checks.
-      In Issue #396 Part 6 this means N1, I1, F1, F2, F3, and F4.
+      In Issue #396 Part 7 this means N1, I1, F1, F2, F3, F4, and F5.
 
   evaluate
       Reserved for a later Issue #396 part.
@@ -131,8 +132,10 @@ Notes:
 
   --check N1 is intended only for development/partial verification.
 
-  --check all can NEVER return gate-pass from the Part 6 implementation
-  because F5 has not yet been implemented.
+  --check all can NEVER return gate-pass from the Part 7 implementation.
+  N1/I1/F1-F5 are now all implemented, but P5-P7 (isolated cleanup
+  verification, live PM after-control, aggregate verdict), full
+  evidence aggregation/evaluation, and cleanup remain unimplemented.
 USAGE
 }
 
@@ -242,11 +245,11 @@ parse_args() {
   esac
 
   case "$CHECK" in
-    all|N1|I1|F1|F2|F3|F4)
+    all|N1|I1|F1|F2|F3|F4|F5)
       ;;
     *)
       usage_error \
-        "--check must be one of: all, N1, I1, F1, F2, F3, F4"
+        "--check must be one of: all, N1, I1, F1, F2, F3, F4, F5"
       ;;
   esac
 }
@@ -275,6 +278,10 @@ validate_static_inputs() {
   [ -x "$F4_HELPER" ] ||
     usage_error \
       "F4 helper unavailable or not executable: $F4_HELPER"
+
+  [ -x "$F5_HELPER" ] ||
+    usage_error \
+      "F5 helper unavailable or not executable: $F5_HELPER"
 
   [ -d "$SOURCE" ] ||
     usage_error \
@@ -1495,6 +1502,43 @@ phase_f4() {
   esac
 }
 
+phase_f5() {
+  local status
+
+  log "F5 notification delivery"
+
+  set +e
+  python3 "$F5_HELPER" \
+    --run-id "$RUN_ID" \
+    --run-root "$RUN_ROOT" \
+    --gate-repo "$GATE_REPO" \
+    --artifact-dir "$ARTIFACT_DIR" \
+    --gate-team "$GATE_TEAM" \
+    --claude-config "$GATE_CLAUDE_CONFIG"
+  status="$?"
+  set -e
+
+  case "$status" in
+    0)
+      log "F5 passed"
+      return "$EX_GATE_PASS"
+      ;;
+    1)
+      log "F5 failed"
+      return "$EX_GATE_FAIL"
+      ;;
+    2)
+      log "F5 unknown"
+      return "$EX_GATE_UNKNOWN"
+      ;;
+    *)
+      log \
+        "F5 helper returned unsupported exit status: $status"
+      return "$EX_INTERNAL"
+      ;;
+  esac
+}
+
 subcommand_run() {
   local status
   local n1_status
@@ -1503,6 +1547,7 @@ subcommand_run() {
   local f2_status
   local f3_status
   local f4_status
+  local f5_status
 
   set +e
   run_p0_through_p4
@@ -1589,13 +1634,25 @@ subcommand_run() {
     return "$EX_GATE_PASS"
   fi
 
+  set +e
+  phase_f5
+  f5_status="$?"
+  set -e
+
+  [ "$f5_status" -eq 0 ] ||
+    return "$f5_status"
+
+  if [ "$CHECK" = "F5" ]; then
+    return "$EX_GATE_PASS"
+  fi
+
   # Critical fail-closed behavior during incremental implementation:
   #
-  # F5 does not exist yet after F4 implementation. Therefore an "all"
-  # invocation remains
-  # incomplete and MUST NOT appear as a successful full gate.
+  # N1/I1/F1-F5 are now implemented, but the full runbook still requires
+  # P5/P6/P7, final evidence aggregation/evaluation, and cleanup. Therefore
+  # CHECK=all MUST NOT yet be interpreted as a completed full pilot gate.
   log \
-    "Part 6 complete: N1/I1/F1/F2/F3/F4 passed, but F5 remains unknown; pilot_ready cannot be true"
+    "Part 7 complete: N1/I1/F1-F5 passed, but P5-P7/evaluation/cleanup remain unknown; pilot_ready cannot be true"
 
   return "$EX_GATE_UNKNOWN"
 }
