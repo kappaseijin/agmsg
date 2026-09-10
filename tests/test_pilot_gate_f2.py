@@ -5919,5 +5919,1028 @@ class PilotGateF2RoundE(unittest.TestCase):
                 original_mode,
             )
 
+
+class PilotGateF2RoundF(unittest.TestCase):
+    RUN_ID = "round-f"
+    GATE_TEAM = "agmsg-g4gate-round-f"
+
+    def make_fixture(self, root: Path):
+        root = root.resolve()
+        run_root = root / "run-root"
+        gate_repo = run_root / "repo"
+        scripts = gate_repo / "scripts"
+        claude_dir = gate_repo / ".claude"
+        claude_config = run_root / "claude"
+        artifact_dir = root / "artifacts"
+
+        scripts.mkdir(parents=True, exist_ok=True)
+        claude_dir.mkdir(parents=True, exist_ok=True)
+        claude_config.mkdir(parents=True, exist_ok=True)
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+
+        launcher = scripts / "pilot-launcher.sh"
+        guard = scripts / "pm-pilot-pretool-guard"
+        collector = scripts / "pilot-collector.sh"
+
+        for path in (launcher, guard, collector):
+            path.write_text(
+                "#!/bin/sh\nexit 0\n",
+                encoding="utf-8",
+            )
+            path.chmod(0o700)
+
+        profile = claude_dir / "settings.local.json"
+        profile_value = {
+            "schemaVersion": 1,
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": str(guard),
+                                "args": [],
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+        profile.write_text(
+            json.dumps(
+                profile_value,
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        profile.chmod(0o640)
+
+        args = F2.argparse.Namespace(
+            gate_repo=str(gate_repo),
+            run_root=str(run_root),
+            claude_config=str(claude_config),
+            artifact_dir=str(artifact_dir),
+            run_id=self.RUN_ID,
+            gate_team=self.GATE_TEAM,
+            timeout_seconds=5,
+        )
+
+        return {
+            "root": root,
+            "run_root": run_root,
+            "gate_repo": gate_repo,
+            "launcher": launcher,
+            "guard": guard,
+            "collector": collector,
+            "profile": profile,
+            "profile_value": profile_value,
+            "original_payload": profile.read_bytes(),
+            "original_mode": stat.S_IMODE(
+                profile.stat().st_mode
+            ),
+            "claude_config": claude_config,
+            "artifact_dir": artifact_dir,
+            "artifact": artifact_dir / "F2",
+            "runtime": gate_repo / ".agmsg-gate" / "f2",
+            "args": args,
+        }
+
+    def make_modules(self):
+        iso = mock.Mock()
+        iso.canonical.side_effect = (
+            lambda value: str(
+                Path(value).resolve(strict=True)
+            )
+        )
+
+        i1 = mock.Mock()
+        i1.sanitize_env.return_value = {
+            "BASE_ENV": "preserved",
+        }
+
+        return iso, i1
+
+    def module_loader(self, iso, i1):
+        def load(path, name):
+            if name == "pilot_gate_isolation":
+                return iso
+            if name == "pilot_gate_i1":
+                return i1
+            raise AssertionError(
+                f"unexpected module request: {path} {name}"
+            )
+
+        return load
+
+    def injector_writer(self, path, log_path):
+        path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        path.write_bytes(
+            b"#!/usr/bin/env python3\n"
+            b"raise SystemExit(0)\n"
+        )
+        path.chmod(0o700)
+
+    def probe_writer(self, path, marker, run_id, case):
+        path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        path.write_text(
+            "#!/bin/sh\nexit 0\n",
+            encoding="utf-8",
+        )
+        path.chmod(0o700)
+
+    def passing_containment(self):
+        return [
+            F2.assertion(
+                "containment",
+                True,
+                "fixture",
+            )
+        ]
+
+    def make_native(self, label):
+        native = mock.Mock()
+        native.binding = Path(
+            f"/tmp/f2-{label}-binding.json"
+        )
+        native.session_id = f"session-{label}"
+        native.start = mock.Mock()
+        native.stop = mock.Mock()
+        return native
+
+    def harness(
+        self,
+        fixture,
+        *,
+        verdicts=None,
+        evaluate_side_effect=None,
+        probe_side_effect=None,
+        atomic_json_side_effect=None,
+        atomic_bytes_side_effect=None,
+    ):
+        from contextlib import ExitStack
+
+        iso, i1 = self.make_modules()
+
+        labels = (
+            "control",
+            "missing",
+            "timeout",
+        )
+        natives = [
+            self.make_native(label)
+            for label in labels
+        ]
+        i1.NativePilot.side_effect = natives
+
+        if verdicts is None:
+            verdicts = {
+                "control": "pass",
+                "missing": "pass",
+                "timeout": "pass",
+            }
+
+        evaluate_labels = []
+
+        if evaluate_side_effect is None:
+            def evaluate(**kwargs):
+                label = kwargs["label"]
+                evaluate_labels.append(label)
+                return {
+                    "schemaVersion": 1,
+                    "case": label,
+                    "verdict": verdicts[label],
+                    "checks": [],
+                    "observation": kwargs["observation"],
+                }
+
+            evaluate_side_effect = evaluate
+
+        if probe_side_effect is None:
+            probe_side_effect = self.probe_writer
+
+        real_atomic_json = F2.atomic_json
+        real_atomic_bytes = F2.atomic_bytes
+
+        stack = ExitStack()
+
+        load_mock = stack.enter_context(
+            mock.patch.object(
+                F2,
+                "load_module",
+                side_effect=self.module_loader(
+                    iso,
+                    i1,
+                ),
+            )
+        )
+        injector_mock = stack.enter_context(
+            mock.patch.object(
+                F2,
+                "write_timeout_injector",
+                side_effect=self.injector_writer,
+            )
+        )
+        probe_mock = stack.enter_context(
+            mock.patch.object(
+                F2,
+                "write_probe",
+                side_effect=probe_side_effect,
+            )
+        )
+        containment_mock = stack.enter_context(
+            mock.patch.object(
+                F2,
+                "prove_probe_contained",
+                return_value=self.passing_containment(),
+            )
+        )
+        binding_mock = stack.enter_context(
+            mock.patch.object(
+                F2,
+                "validate_binding_profile",
+                return_value=F2.assertion(
+                    "binding-profile-digest",
+                    True,
+                    "fixture",
+                ),
+            )
+        )
+        invoke_mock = stack.enter_context(
+            mock.patch.object(
+                F2,
+                "invoke_probe",
+                side_effect=lambda i1, **kwargs: {
+                    "verdict": "pass",
+                    "toolUseId": (
+                        "tool-"
+                        + kwargs["artifact"].name
+                    ),
+                },
+            )
+        )
+        evaluate_mock = stack.enter_context(
+            mock.patch.object(
+                F2,
+                "evaluate_case",
+                side_effect=evaluate_side_effect,
+            )
+        )
+
+        if atomic_json_side_effect is not None:
+            atomic_json_mock = stack.enter_context(
+                mock.patch.object(
+                    F2,
+                    "atomic_json",
+                    side_effect=atomic_json_side_effect,
+                )
+            )
+        else:
+            atomic_json_mock = stack.enter_context(
+                mock.patch.object(
+                    F2,
+                    "atomic_json",
+                    wraps=real_atomic_json,
+                )
+            )
+
+        if atomic_bytes_side_effect is not None:
+            atomic_bytes_mock = stack.enter_context(
+                mock.patch.object(
+                    F2,
+                    "atomic_bytes",
+                    side_effect=atomic_bytes_side_effect,
+                )
+            )
+        else:
+            atomic_bytes_mock = stack.enter_context(
+                mock.patch.object(
+                    F2,
+                    "atomic_bytes",
+                    wraps=real_atomic_bytes,
+                )
+            )
+
+        values = {
+            "iso": iso,
+            "i1": i1,
+            "natives": natives,
+            "evaluate_labels": evaluate_labels,
+            "load_module": load_mock,
+            "write_timeout_injector": injector_mock,
+            "write_probe": probe_mock,
+            "prove_probe_contained": containment_mock,
+            "validate_binding_profile": binding_mock,
+            "invoke_probe": invoke_mock,
+            "evaluate_case": evaluate_mock,
+            "atomic_json": atomic_json_mock,
+            "atomic_bytes": atomic_bytes_mock,
+            "real_atomic_json": real_atomic_json,
+            "real_atomic_bytes": real_atomic_bytes,
+        }
+
+        class HarnessContext:
+            def __enter__(self):
+                return values
+
+            def __exit__(
+                self,
+                exc_type,
+                exc,
+                traceback,
+            ):
+                stack.close()
+                return False
+
+        return HarnessContext()
+
+    def check_map(self, result):
+        return {
+            item["name"]: item
+            for item in result["checks"]
+        }
+
+    def test_control_fail_or_unknown_returns_early_and_skips_missing_timeout(
+        self,
+    ):
+        for verdict, expected_status in (
+            ("fail", 1),
+            ("unknown", 2),
+        ):
+            with self.subTest(verdict=verdict):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = self.make_fixture(
+                        Path(temp)
+                    )
+
+                    with self.harness(
+                        fixture,
+                        verdicts={
+                            "control": verdict,
+                            "missing": "pass",
+                            "timeout": "pass",
+                        },
+                    ) as harness:
+                        status = F2.run_f2(
+                            fixture["args"]
+                        )
+
+                    self.assertEqual(
+                        status,
+                        expected_status,
+                    )
+                    self.assertEqual(
+                        harness["evaluate_labels"],
+                        ["control"],
+                    )
+                    self.assertEqual(
+                        harness[
+                            "i1"
+                        ].NativePilot.call_count,
+                        1,
+                    )
+                    self.assertEqual(
+                        harness[
+                            "invoke_probe"
+                        ].call_count,
+                        1,
+                    )
+                    self.assertEqual(
+                        harness[
+                            "evaluate_case"
+                        ].call_count,
+                        1,
+                    )
+
+                    result = F2.read_json(
+                        fixture["artifact"]
+                        / "result.json"
+                    )
+
+                    self.assertEqual(
+                        result,
+                        {
+                            "schemaVersion": 1,
+                            "check": "F2",
+                            "runId": self.RUN_ID,
+                            "verdict": verdict,
+                            "reason": "control_not_pass",
+                            "cases": {
+                                "control": {
+                                    "schemaVersion": 1,
+                                    "case": "control",
+                                    "verdict": verdict,
+                                    "checks": [],
+                                    "observation": {
+                                        "verdict": "pass",
+                                        "toolUseId":
+                                            "tool-control",
+                                    },
+                                }
+                            },
+                        },
+                    )
+
+    def test_three_cases_execute_in_control_missing_timeout_order_and_full_result_passes(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            with self.harness(
+                fixture
+            ) as harness:
+                status = F2.run_f2(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                0,
+            )
+            self.assertEqual(
+                harness["evaluate_labels"],
+                [
+                    "control",
+                    "missing",
+                    "timeout",
+                ],
+            )
+            self.assertEqual(
+                harness[
+                    "i1"
+                ].NativePilot.call_count,
+                3,
+            )
+
+            result = F2.read_json(
+                fixture["artifact"]
+                / "result.json"
+            )
+            checks = self.check_map(result)
+
+            self.assertEqual(
+                result["schemaVersion"],
+                1,
+            )
+            self.assertEqual(
+                result["check"],
+                "F2",
+            )
+            self.assertEqual(
+                result["runId"],
+                self.RUN_ID,
+            )
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+            self.assertEqual(
+                result["control"]["case"],
+                "control",
+            )
+            self.assertEqual(
+                result["F2a"]["case"],
+                "missing",
+            )
+            self.assertEqual(
+                result["F2b"]["case"],
+                "timeout",
+            )
+            self.assertEqual(
+                set(checks),
+                {
+                    "F2a-missing-pass",
+                    "F2b-timeout-pass",
+                    "profile-finally-restored",
+                },
+            )
+            self.assertTrue(
+                all(
+                    item["verdict"] == "pass"
+                    for item in checks.values()
+                )
+            )
+
+    def test_missing_or_timeout_nonpass_makes_full_aggregate_fail_exit_one(
+        self,
+    ):
+        scenarios = (
+            {
+                "control": "pass",
+                "missing": "fail",
+                "timeout": "pass",
+            },
+            {
+                "control": "pass",
+                "missing": "unknown",
+                "timeout": "pass",
+            },
+            {
+                "control": "pass",
+                "missing": "pass",
+                "timeout": "unknown",
+            },
+            {
+                "control": "pass",
+                "missing": "pass",
+                "timeout": "fail",
+            },
+        )
+
+        for verdicts in scenarios:
+            with self.subTest(
+                verdicts=verdicts
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = self.make_fixture(
+                        Path(temp)
+                    )
+
+                    with self.harness(
+                        fixture,
+                        verdicts=verdicts,
+                    ):
+                        status = F2.run_f2(
+                            fixture["args"]
+                        )
+
+                    self.assertEqual(
+                        status,
+                        1,
+                    )
+                    result = F2.read_json(
+                        fixture["artifact"]
+                        / "result.json"
+                    )
+                    self.assertEqual(
+                        result["verdict"],
+                        "fail",
+                    )
+
+                    checks = self.check_map(result)
+                    self.assertEqual(
+                        checks[
+                            "F2a-missing-pass"
+                        ]["verdict"],
+                        (
+                            "pass"
+                            if verdicts["missing"]
+                            == "pass"
+                            else "fail"
+                        ),
+                    )
+                    self.assertEqual(
+                        checks[
+                            "F2b-timeout-pass"
+                        ]["verdict"],
+                        (
+                            "pass"
+                            if verdicts["timeout"]
+                            == "pass"
+                            else "fail"
+                        ),
+                    )
+
+    def test_profile_finally_restored_check_fails_if_profile_is_mutated_after_timeout_restore(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            real_atomic_json = F2.atomic_json
+
+            def atomic_json_side_effect(
+                path,
+                value,
+            ):
+                real_atomic_json(
+                    path,
+                    value,
+                )
+                path = Path(path)
+                if (
+                    path.name == "restore.json"
+                    and path.parent.name == "timeout"
+                ):
+                    fixture[
+                        "profile"
+                    ].write_bytes(
+                        b"tampered-after-timeout"
+                    )
+
+            with self.harness(
+                fixture,
+                atomic_json_side_effect=
+                    atomic_json_side_effect,
+            ) as harness:
+                status = F2.run_f2(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                1,
+            )
+
+            result = F2.read_json(
+                fixture["artifact"]
+                / "result.json"
+            )
+            checks = self.check_map(result)
+
+            self.assertEqual(
+                checks[
+                    "F2a-missing-pass"
+                ]["verdict"],
+                "pass",
+            )
+            self.assertEqual(
+                checks[
+                    "F2b-timeout-pass"
+                ]["verdict"],
+                "pass",
+            )
+            self.assertEqual(
+                checks[
+                    "profile-finally-restored"
+                ]["verdict"],
+                "fail",
+            )
+            self.assertEqual(
+                result["verdict"],
+                "fail",
+            )
+
+            self.assertEqual(
+                fixture["profile"].read_bytes(),
+                fixture["original_payload"],
+            )
+
+            self.assertEqual(
+                harness[
+                    "atomic_bytes"
+                ].call_count,
+                7,
+            )
+
+    def test_normal_completion_outer_finally_does_not_perform_extra_restore(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            with self.harness(
+                fixture
+            ) as harness:
+                status = F2.run_f2(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                0,
+            )
+            self.assertEqual(
+                harness[
+                    "atomic_bytes"
+                ].call_count,
+                6,
+            )
+            self.assertEqual(
+                fixture["profile"].read_bytes(),
+                fixture["original_payload"],
+            )
+            self.assertFalse(
+                (
+                    fixture["artifact"]
+                    / "emergency-restore-error.json"
+                ).exists()
+            )
+
+    def test_exception_before_execute_inner_finally_with_dirty_profile_is_emergency_restored_and_original_exception_propagates(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            calls = {"count": 0}
+
+            def probe_side_effect(
+                path,
+                marker,
+                run_id,
+                case,
+            ):
+                calls["count"] += 1
+                if case == "missing":
+                    fixture[
+                        "profile"
+                    ].write_bytes(
+                        b"dirty-before-inner-finally"
+                    )
+                    raise ValueError(
+                        "missing probe exploded"
+                    )
+                return self.probe_writer(
+                    path,
+                    marker,
+                    run_id,
+                    case,
+                )
+
+            with self.harness(
+                fixture,
+                probe_side_effect=
+                    probe_side_effect,
+            ) as harness:
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "missing probe exploded",
+                ):
+                    F2.run_f2(
+                        fixture["args"]
+                    )
+
+            self.assertEqual(
+                calls["count"],
+                2,
+            )
+            self.assertEqual(
+                fixture["profile"].read_bytes(),
+                fixture["original_payload"],
+            )
+            self.assertEqual(
+                harness[
+                    "atomic_bytes"
+                ].call_count,
+                3,
+            )
+
+    def test_emergency_restore_failure_writes_unknown_evidence_and_preserves_original_exception(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            real_atomic_bytes = F2.atomic_bytes
+
+            def probe_side_effect(
+                path,
+                marker,
+                run_id,
+                case,
+            ):
+                if case == "missing":
+                    fixture[
+                        "profile"
+                    ].write_bytes(
+                        b"dirty-before-emergency"
+                    )
+                    raise LookupError(
+                        "original missing failure"
+                    )
+                return self.probe_writer(
+                    path,
+                    marker,
+                    run_id,
+                    case,
+                )
+
+            atomic_calls = {"count": 0}
+
+            def atomic_bytes_side_effect(
+                path,
+                payload,
+                mode,
+            ):
+                atomic_calls["count"] += 1
+                if atomic_calls["count"] == 3:
+                    raise OSError(
+                        "emergency restore failed"
+                    )
+                return real_atomic_bytes(
+                    path,
+                    payload,
+                    mode,
+                )
+
+            with self.harness(
+                fixture,
+                probe_side_effect=
+                    probe_side_effect,
+                atomic_bytes_side_effect=
+                    atomic_bytes_side_effect,
+            ):
+                with self.assertRaisesRegex(
+                    LookupError,
+                    "original missing failure",
+                ):
+                    F2.run_f2(
+                        fixture["args"]
+                    )
+
+            evidence = F2.read_json(
+                fixture["artifact"]
+                / "emergency-restore-error.json"
+            )
+
+            self.assertEqual(
+                evidence,
+                {
+                    "schemaVersion": 1,
+                    "verdict": "unknown",
+                    "reason": (
+                        "profile_restore_failed:"
+                        "OSError:"
+                        "emergency restore failed"
+                    ),
+                },
+            )
+
+    def test_outer_finally_profile_read_failure_writes_evidence_and_original_exception_propagates(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            def probe_side_effect(
+                path,
+                marker,
+                run_id,
+                case,
+            ):
+                if case == "missing":
+                    raise RuntimeError(
+                        "missing execution failed"
+                    )
+                return self.probe_writer(
+                    path,
+                    marker,
+                    run_id,
+                    case,
+                )
+
+            real_read_bytes = Path.read_bytes
+            profile_reads = {"count": 0}
+
+            def read_bytes_side_effect(path_self):
+                if path_self == fixture["profile"]:
+                    profile_reads["count"] += 1
+                    if profile_reads["count"] == 4:
+                        raise OSError(
+                            "profile read unavailable"
+                        )
+                return real_read_bytes(
+                    path_self
+                )
+
+            with mock.patch.object(
+                Path,
+                "read_bytes",
+                new=read_bytes_side_effect,
+            ):
+                with self.harness(
+                    fixture,
+                    probe_side_effect=
+                        probe_side_effect,
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "missing execution failed",
+                    ):
+                        F2.run_f2(
+                            fixture["args"]
+                        )
+
+            evidence = F2.read_json(
+                fixture["artifact"]
+                / "emergency-restore-error.json"
+            )
+
+            self.assertEqual(
+                evidence,
+                {
+                    "schemaVersion": 1,
+                    "verdict": "unknown",
+                    "reason": (
+                        "profile_restore_failed:"
+                        "OSError:"
+                        "profile read unavailable"
+                    ),
+                },
+            )
+
+    def test_emergency_evidence_write_failure_is_swallowed_and_original_exception_survives(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            real_atomic_json = F2.atomic_json
+            real_atomic_bytes = F2.atomic_bytes
+
+            def probe_side_effect(
+                path,
+                marker,
+                run_id,
+                case,
+            ):
+                if case == "missing":
+                    fixture[
+                        "profile"
+                    ].write_bytes(
+                        b"dirty"
+                    )
+                    raise KeyError(
+                        "original-key-error"
+                    )
+                return self.probe_writer(
+                    path,
+                    marker,
+                    run_id,
+                    case,
+                )
+
+            atomic_calls = {"count": 0}
+
+            def atomic_bytes_side_effect(
+                path,
+                payload,
+                mode,
+            ):
+                atomic_calls["count"] += 1
+                if atomic_calls["count"] == 3:
+                    raise OSError(
+                        "restore failed"
+                    )
+                return real_atomic_bytes(
+                    path,
+                    payload,
+                    mode,
+                )
+
+            def atomic_json_side_effect(
+                path,
+                value,
+            ):
+                if Path(path).name == (
+                    "emergency-restore-error.json"
+                ):
+                    raise OSError(
+                        "evidence write failed"
+                    )
+                return real_atomic_json(
+                    path,
+                    value,
+                )
+
+            with self.harness(
+                fixture,
+                probe_side_effect=
+                    probe_side_effect,
+                atomic_bytes_side_effect=
+                    atomic_bytes_side_effect,
+                atomic_json_side_effect=
+                    atomic_json_side_effect,
+            ):
+                with self.assertRaises(
+                    KeyError
+                ) as cm:
+                    F2.run_f2(
+                        fixture["args"]
+                    )
+
+            self.assertEqual(
+                cm.exception.args,
+                ("original-key-error",),
+            )
+            self.assertFalse(
+                (
+                    fixture["artifact"]
+                    / "emergency-restore-error.json"
+                ).exists()
+            )
+
 if __name__ == "__main__":
     unittest.main()
