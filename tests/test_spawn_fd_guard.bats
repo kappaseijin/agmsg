@@ -28,7 +28,7 @@ _unguarded_spawns() {
         ;;
       *) printf '%s:%s: closes neither fd 3 nor fd 4 -- %s\n' "$file" "$line" "$rest" ;;
     esac
-  done < <(grep -rnE '^[^#]*[^&|]&[[:space:]]*$' "$root" 2>/dev/null)
+  done < <(grep -IrnE '^[^#]*[^&|]&[[:space:]]*$' "$root" 2>/dev/null)
 }
 
 @test "every background spawn under scripts/ closes bats' fd 3 and fd 4" {
@@ -45,7 +45,7 @@ _unguarded_spawns() {
   # passing because it found nothing -- the failure being guarded against is a
   # silent one, so the count is asserted rather than assumed.
   local total
-  total="$(grep -rcE '^[^#]*[^&|]&[[:space:]]*$' "$REPO_ROOT/scripts" 2>/dev/null \
+  total="$(grep -IrcE '^[^#]*[^&|]&[[:space:]]*$' "$REPO_ROOT/scripts" 2>/dev/null \
     | awk -F: '{s+=$2} END {print s+0}')"
   [ "$total" -ge 5 ]
 }
