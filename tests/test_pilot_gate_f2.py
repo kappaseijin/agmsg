@@ -2820,5 +2820,703 @@ class PilotGateF2RoundB(unittest.TestCase):
                         },
                     )
 
+
+class PilotGateF2RoundC(unittest.TestCase):
+    SESSION_ID = "123e4567-e89b-42d3-a456-426614174000"
+    COMMAND = "/gate/probe.py"
+    TOOL_ID = "tool-123"
+
+    def make_fixture(self, root: Path):
+        root = root.resolve()
+        artifact = root / "artifact"
+        collector = root / "repo" / "scripts" / "pilot-collector.sh"
+        collector.parent.mkdir(parents=True, exist_ok=True)
+        collector.write_text(
+            "#!/bin/sh\nexit 0\n",
+            encoding="utf-8",
+        )
+        collector.chmod(0o700)
+
+        claude_config = root / "claude"
+        claude_config.mkdir()
+        collector_state = root / "collector-state"
+        binding = root / "binding.json"
+        binding.write_text(
+            '{"generation":1}\n',
+            encoding="utf-8",
+        )
+        decisions = root / "decisions.jsonl"
+
+        native = mock.Mock()
+        native.proc = mock.Mock()
+        native.master = 123
+        native.binding = binding
+        native.session_id = self.SESSION_ID
+        native.timeout = 1.0
+        native.decisions = decisions
+        native.env = {"BASE": "yes"}
+        native.pump = mock.Mock()
+        native.discover_transcript = mock.Mock()
+        native.proc.poll = mock.Mock(return_value=None)
+
+        i1 = mock.Mock()
+        i1.hook_decision.return_value = "allow"
+
+        return {
+            "root": root,
+            "artifact": artifact,
+            "collector": collector,
+            "claude_config": claude_config,
+            "collector_state": collector_state,
+            "binding": binding,
+            "decisions": decisions,
+            "native": native,
+            "i1": i1,
+        }
+
+    def invoke(self, fixture):
+        return F2.invoke_probe(
+            fixture["i1"],
+            native=fixture["native"],
+            command=self.COMMAND,
+            collector=fixture["collector"],
+            claude_config=fixture["claude_config"],
+            collector_state=fixture["collector_state"],
+            artifact=fixture["artifact"],
+        )
+
+    def test_native_not_started_guard_for_proc_master_or_binding(
+        self,
+    ):
+        fields = ("proc", "master", "binding")
+
+        for field in fields:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = self.make_fixture(
+                        Path(temp)
+                    )
+                    setattr(
+                        fixture["native"],
+                        field,
+                        None,
+                    )
+
+                    with mock.patch.object(
+                        F2.os,
+                        "write",
+                    ) as write_mock, mock.patch.object(
+                        F2,
+                        "find_probe_evidence",
+                    ) as evidence_mock, mock.patch.object(
+                        F2,
+                        "collector_observation",
+                    ) as collector_mock, mock.patch.object(
+                        F2,
+                        "raw_timeout_indication",
+                    ) as timeout_mock:
+                        result = self.invoke(
+                            fixture
+                        )
+
+                    self.assertEqual(
+                        result,
+                        {
+                            "verdict": "unknown",
+                            "reason": "native_not_started",
+                        },
+                    )
+                    write_mock.assert_not_called()
+                    evidence_mock.assert_not_called()
+                    collector_mock.assert_not_called()
+                    timeout_mock.assert_not_called()
+                    fixture[
+                        "native"
+                    ].pump.assert_not_called()
+                    fixture[
+                        "native"
+                    ].discover_transcript.assert_not_called()
+
+    def test_prompt_token_text_file_and_master_write_are_exact(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            transcript = (
+                fixture["root"]
+                / "transcript.jsonl"
+            )
+            transcript.write_text(
+                "{}\n",
+                encoding="utf-8",
+            )
+            fixture[
+                "native"
+            ].discover_transcript.return_value = transcript
+
+            evidence = {
+                "toolUseId": self.TOOL_ID,
+                "resultFound": True,
+                "resultIsError": False,
+                "resultText": "ok",
+            }
+
+            token = hashlib.sha256(
+                (
+                    self.SESSION_ID
+                    + self.COMMAND
+                ).encode("utf-8")
+            ).hexdigest()[:16]
+
+            expected_prompt = (
+                "For the G4 F2 integration gate, use the Bash tool exactly once. "
+                "Run exactly the following command without changing, wrapping, "
+                "retrying, or adding any other command:\n"
+                f"{self.COMMAND}\n"
+                "After that single tool attempt finishes, reply "
+                f"AGMSG_F2_DONE_{token}."
+            )
+
+            with mock.patch.object(
+                F2.os,
+                "write",
+                return_value=len(
+                    expected_prompt.encode("utf-8")
+                ) + 1,
+            ) as write_mock, mock.patch.object(
+                F2,
+                "find_probe_evidence",
+                return_value=evidence,
+            ), mock.patch.object(
+                F2,
+                "collector_observation",
+                return_value={
+                    "verdict": "pass",
+                },
+            ), mock.patch.object(
+                F2,
+                "raw_timeout_indication",
+                return_value={
+                    "found": False,
+                    "matches": [],
+                },
+            ):
+                result = self.invoke(
+                    fixture
+                )
+
+            self.assertTrue(
+                fixture["artifact"].is_dir()
+            )
+            self.assertEqual(
+                (
+                    fixture["artifact"]
+                    / "prompt.txt"
+                ).read_text(
+                    encoding="utf-8"
+                ),
+                expected_prompt + "\n",
+            )
+            write_mock.assert_called_once_with(
+                123,
+                expected_prompt.encode("utf-8")
+                + b"\r",
+            )
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+
+    def test_poll_loop_breaks_immediately_on_unique_tool_result_and_final_pumps_once_more(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            transcript = (
+                fixture["root"]
+                / "transcript.jsonl"
+            )
+            transcript.write_text(
+                "{}\n",
+                encoding="utf-8",
+            )
+            fixture[
+                "native"
+            ].discover_transcript.return_value = transcript
+
+            evidence = {
+                "toolUseId": self.TOOL_ID,
+                "resultFound": True,
+                "resultIsError": False,
+                "resultText": "ok",
+            }
+
+            with mock.patch.object(
+                F2.os,
+                "write",
+                return_value=1,
+            ), mock.patch.object(
+                F2,
+                "find_probe_evidence",
+                return_value=evidence,
+            ) as evidence_mock, mock.patch.object(
+                F2,
+                "collector_observation",
+                return_value={
+                    "verdict": "pass",
+                },
+            ), mock.patch.object(
+                F2,
+                "raw_timeout_indication",
+                return_value={
+                    "found": False,
+                    "matches": [],
+                },
+            ):
+                result = self.invoke(
+                    fixture
+                )
+
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+            self.assertEqual(
+                fixture[
+                    "native"
+                ].pump.call_args_list,
+                [
+                    mock.call(0.2),
+                    mock.call(0.2),
+                ],
+            )
+            fixture[
+                "native"
+            ].discover_transcript.assert_called_once()
+            evidence_mock.assert_called_once_with(
+                fixture["i1"],
+                transcript,
+                self.COMMAND,
+            )
+            fixture[
+                "native"
+            ].proc.poll.assert_not_called()
+
+    def test_poll_loop_breaks_when_process_exits_and_still_performs_final_pump(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            transcript = (
+                fixture["root"]
+                / "transcript.jsonl"
+            )
+            transcript.write_text(
+                "{}\n",
+                encoding="utf-8",
+            )
+            fixture[
+                "native"
+            ].discover_transcript.return_value = transcript
+            fixture[
+                "native"
+            ].proc.poll.return_value = 9
+
+            evidence = {
+                "toolUseId": None,
+                "resultFound": False,
+                "resultIsError": None,
+                "resultText": "",
+                "toolUseCount": 0,
+            }
+
+            with mock.patch.object(
+                F2.os,
+                "write",
+                return_value=1,
+            ), mock.patch.object(
+                F2,
+                "find_probe_evidence",
+                return_value=evidence,
+            ) as evidence_mock, mock.patch.object(
+                F2,
+                "collector_observation",
+            ) as collector_mock, mock.patch.object(
+                F2,
+                "raw_timeout_indication",
+            ) as timeout_mock:
+                result = self.invoke(
+                    fixture
+                )
+
+            self.assertEqual(
+                fixture[
+                    "native"
+                ].pump.call_args_list,
+                [
+                    mock.call(0.2),
+                    mock.call(0.2),
+                ],
+            )
+            fixture[
+                "native"
+            ].discover_transcript.assert_called_once()
+            evidence_mock.assert_called_once()
+            fixture[
+                "native"
+            ].proc.poll.assert_called_once()
+
+            self.assertEqual(
+                result,
+                {
+                    "verdict": "unknown",
+                    "reason":
+                        "tool_attempt_unobservable",
+                    "transcript":
+                        str(transcript),
+                    "evidence": evidence,
+                },
+            )
+            collector_mock.assert_not_called()
+            timeout_mock.assert_not_called()
+
+    def test_poll_loop_deadline_exit_is_deterministic_and_final_pump_occurs(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            fixture["native"].timeout = 0.5
+            fixture[
+                "native"
+            ].discover_transcript.return_value = None
+            fixture[
+                "native"
+            ].proc.poll.return_value = None
+
+            with mock.patch.object(
+                F2.time,
+                "monotonic",
+                side_effect=[
+                    100.0,
+                    100.1,
+                    100.6,
+                ],
+            ), mock.patch.object(
+                F2.os,
+                "write",
+                return_value=1,
+            ), mock.patch.object(
+                F2,
+                "find_probe_evidence",
+            ) as evidence_mock, mock.patch.object(
+                F2,
+                "collector_observation",
+            ) as collector_mock, mock.patch.object(
+                F2,
+                "raw_timeout_indication",
+            ) as timeout_mock:
+                result = self.invoke(
+                    fixture
+                )
+
+            self.assertEqual(
+                fixture[
+                    "native"
+                ].pump.call_args_list,
+                [
+                    mock.call(0.2),
+                    mock.call(0.2),
+                ],
+            )
+            fixture[
+                "native"
+            ].discover_transcript.assert_called_once()
+            fixture[
+                "native"
+            ].proc.poll.assert_called_once()
+
+            evidence_mock.assert_not_called()
+            collector_mock.assert_not_called()
+            timeout_mock.assert_not_called()
+
+            self.assertEqual(
+                result,
+                {
+                    "verdict": "unknown",
+                    "reason":
+                        "transcript_unavailable",
+                    "evidence": {
+                        "toolUseId": None,
+                        "resultFound": False,
+                        "resultIsError": None,
+                        "resultText": "",
+                    },
+                },
+            )
+
+    def test_transcript_unavailable_returns_last_evidence_default(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            fixture["native"].timeout = 0.5
+            fixture[
+                "native"
+            ].discover_transcript.return_value = None
+
+            with mock.patch.object(
+                F2.time,
+                "monotonic",
+                side_effect=[
+                    10.0,
+                    10.1,
+                    10.6,
+                ],
+            ), mock.patch.object(
+                F2.os,
+                "write",
+                return_value=1,
+            ):
+                result = self.invoke(
+                    fixture
+                )
+
+            self.assertEqual(
+                result,
+                {
+                    "verdict": "unknown",
+                    "reason":
+                        "transcript_unavailable",
+                    "evidence": {
+                        "toolUseId": None,
+                        "resultFound": False,
+                        "resultIsError": None,
+                        "resultText": "",
+                    },
+                },
+            )
+
+    def test_transcript_found_but_missing_tool_id_returns_tool_attempt_unobservable(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            transcript = (
+                fixture["root"]
+                / "transcript.jsonl"
+            )
+            transcript.write_text(
+                "{}\n",
+                encoding="utf-8",
+            )
+            fixture[
+                "native"
+            ].discover_transcript.return_value = transcript
+            fixture[
+                "native"
+            ].proc.poll.return_value = 0
+
+            for tool_id in (
+                None,
+                "",
+            ):
+                with self.subTest(
+                    tool_id=tool_id
+                ):
+                    fixture[
+                        "native"
+                    ].reset_mock()
+                    fixture[
+                        "native"
+                    ].proc.poll.return_value = 0
+                    fixture[
+                        "native"
+                    ].discover_transcript.return_value = transcript
+
+                    evidence = {
+                        "toolUseId": tool_id,
+                        "resultFound": False,
+                        "resultIsError": None,
+                        "resultText": "",
+                    }
+
+                    with mock.patch.object(
+                        F2.os,
+                        "write",
+                        return_value=1,
+                    ), mock.patch.object(
+                        F2,
+                        "find_probe_evidence",
+                        return_value=evidence,
+                    ), mock.patch.object(
+                        F2,
+                        "collector_observation",
+                    ) as collector_mock, mock.patch.object(
+                        F2,
+                        "raw_timeout_indication",
+                    ) as timeout_mock:
+                        result = self.invoke(
+                            fixture
+                        )
+
+                    self.assertEqual(
+                        result,
+                        {
+                            "verdict": "unknown",
+                            "reason":
+                                "tool_attempt_unobservable",
+                            "transcript":
+                                str(transcript),
+                            "evidence":
+                                evidence,
+                        },
+                    )
+                    collector_mock.assert_not_called()
+                    timeout_mock.assert_not_called()
+
+    def test_success_aggregates_hook_collector_timeout_writes_observation_and_returns_same_value(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            transcript = (
+                fixture["root"]
+                / "transcript.jsonl"
+            )
+            transcript.write_text(
+                "{}\n",
+                encoding="utf-8",
+            )
+            fixture[
+                "native"
+            ].discover_transcript.return_value = transcript
+
+            evidence = {
+                "toolUseId": self.TOOL_ID,
+                "resultFound": True,
+                "resultIsError": False,
+                "resultText":
+                    '{"state":"ok"}',
+            }
+            collector_result = {
+                "verdict": "pass",
+                "reason":
+                    "collector_observation_identified",
+                "observation": {
+                    "toolUseId":
+                        self.TOOL_ID,
+                    "completionState":
+                        "success",
+                },
+            }
+            raw_timeout = {
+                "found": True,
+                "matches": [
+                    {
+                        "source": "pty",
+                        "excerpt":
+                            "hook timed out",
+                    }
+                ],
+            }
+
+            fixture[
+                "i1"
+            ].hook_decision.return_value = "deny"
+
+            with mock.patch.object(
+                F2.os,
+                "write",
+                return_value=1,
+            ), mock.patch.object(
+                F2,
+                "find_probe_evidence",
+                return_value=evidence,
+            ) as evidence_mock, mock.patch.object(
+                F2,
+                "collector_observation",
+                return_value=collector_result,
+            ) as collector_mock, mock.patch.object(
+                F2,
+                "raw_timeout_indication",
+                return_value=raw_timeout,
+            ) as timeout_mock:
+                result = self.invoke(
+                    fixture
+                )
+
+            fixture[
+                "i1"
+            ].hook_decision.assert_called_once_with(
+                fixture["native"].decisions,
+                self.TOOL_ID,
+            )
+
+            collector_mock.assert_called_once_with(
+                fixture["i1"],
+                collector=fixture["collector"],
+                binding=fixture["native"].binding,
+                claude_config=fixture[
+                    "claude_config"
+                ],
+                state_dir=fixture[
+                    "collector_state"
+                ],
+                tool_id=self.TOOL_ID,
+                env=fixture["native"].env,
+                artifact=fixture["artifact"],
+            )
+
+            timeout_mock.assert_called_once_with(
+                fixture["native"],
+                transcript,
+            )
+
+            expected = {
+                "verdict": "pass",
+                "reason":
+                    "tool_attempt_observed",
+                "toolUseId": self.TOOL_ID,
+                "hookDecision": "deny",
+                "transcript": str(transcript),
+                "evidence": evidence,
+                "collector": collector_result,
+                "rawTimeoutIndication":
+                    raw_timeout,
+            }
+
+            self.assertEqual(
+                result,
+                expected,
+            )
+
+            self.assertEqual(
+                F2.read_json(
+                    fixture["artifact"]
+                    / "observation.json"
+                ),
+                expected,
+            )
+
+            evidence_mock.assert_called_once_with(
+                fixture["i1"],
+                transcript,
+                self.COMMAND,
+            )
+
 if __name__ == "__main__":
     unittest.main()
