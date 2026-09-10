@@ -2930,6 +2930,1413 @@ time.sleep(float(os.environ["TEST_SLEEP_SECONDS"]))
                 2,
             )
 
+class PilotGateI1RoundCValidation(unittest.TestCase):
+    SESSION_ID = "123e4567-e89b-42d3-a456-426614174000"
+    GENERATION = "7"
+    GATE_TEAM = "agmsg-g4gate-round-c"
+
+    def make_identity_fixture(
+        self,
+        root: Path,
+    ) -> dict[str, object]:
+        root = root.resolve()
+
+        run_root = root / "run-root"
+        gate_repo = run_root / "repo"
+        artifact = root / "artifacts" / "I1"
+        mutation_log = artifact / "mutation-log.jsonl"
+        gh_log = artifact / "gh-invocations.jsonl"
+        live_identity = root / "live-identity.json"
+
+        gate_repo.mkdir(parents=True)
+        artifact.mkdir(parents=True)
+
+        binding = {
+            "team": self.GATE_TEAM,
+            "agent": I1.PILOT_AGENT,
+            "project": str(gate_repo),
+            "sessionId": self.SESSION_ID,
+            "generation": self.GENERATION,
+        }
+
+        return {
+            "root": root,
+            "run_root": run_root,
+            "gate_repo": gate_repo,
+            "artifact": artifact,
+            "mutation_log": mutation_log,
+            "gh_log": gh_log,
+            "live_identity": live_identity,
+            "binding": binding,
+        }
+
+    def validate_identity(
+        self,
+        fixture: dict[str, object],
+        *,
+        binding: dict[str, object] | None = None,
+        operation_results: dict[str, dict[str, object]] | None = None,
+        live_identity_json: Path | None = None,
+    ) -> dict[str, object]:
+        return I1.validate_identity(
+            gate_repo=fixture["gate_repo"],
+            run_root=fixture["run_root"],
+            artifact=fixture["artifact"],
+            gate_team=self.GATE_TEAM,
+            binding=(
+                binding
+                if binding is not None
+                else fixture["binding"]
+            ),
+            operation_results=(
+                operation_results
+                if operation_results is not None
+                else {}
+            ),
+            mutation_log=fixture["mutation_log"],
+            gh_log=fixture["gh_log"],
+            live_identity_json=live_identity_json,
+        )
+
+    def check(
+        self,
+        record: dict[str, object],
+        name: str,
+    ) -> dict[str, object]:
+        return next(
+            item
+            for item in record["checks"]
+            if item["name"] == name
+        )
+
+    def append_record(
+        self,
+        path: Path,
+        value: object,
+    ) -> None:
+        path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        with open(
+            path,
+            "a",
+            encoding="utf-8",
+        ) as fh:
+            fh.write(
+                json.dumps(
+                    value,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+            fh.write("\n")
+
+    def test_validate_gh_store_unreadable_or_invalid_json_is_unknown(
+        self,
+    ):
+        cases = (
+            "missing",
+            "invalid-json",
+        )
+
+        for case in cases:
+            with self.subTest(case=case):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp).resolve()
+                    store = root / "gh-store"
+                    store.mkdir()
+
+                    if case == "invalid-json":
+                        (
+                            store
+                            / "comments.json"
+                        ).write_text(
+                            "{not-json\n",
+                            encoding="utf-8",
+                        )
+
+                    checks = I1.validate_gh_store(
+                        store,
+                        "expected body",
+                    )
+
+                    self.assertEqual(
+                        len(checks),
+                        1,
+                    )
+                    self.assertEqual(
+                        checks[0]["name"],
+                        "gh-store-readable",
+                    )
+                    self.assertEqual(
+                        checks[0]["verdict"],
+                        "unknown",
+                    )
+                    self.assertTrue(
+                        checks[0]["detail"]
+                    )
+
+    def test_validate_gh_store_non_object_or_non_list_comments_is_unknown(
+        self,
+    ):
+        cases = (
+            (
+                [],
+                None,
+            ),
+            (
+                {
+                    "comments": {},
+                },
+                {},
+            ),
+            (
+                {
+                    "comments": None,
+                },
+                None,
+            ),
+        )
+
+        for value, expected_detail in cases:
+            with self.subTest(value=value):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp).resolve()
+                    store = root / "gh-store"
+                    store.mkdir()
+
+                    I1.atomic_json(
+                        store / "comments.json",
+                        value,
+                    )
+
+                    checks = I1.validate_gh_store(
+                        store,
+                        "expected body",
+                    )
+
+                    self.assertEqual(
+                        checks,
+                        [
+                            {
+                                "name":
+                                    "gh-comments-array",
+                                "verdict":
+                                    "unknown",
+                                "detail":
+                                    expected_detail,
+                            }
+                        ],
+                    )
+
+    def test_validate_gh_store_exact_single_matching_comment_passes(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            store = root / "gh-store"
+            store.mkdir()
+
+            expected_body = "isolated issue body"
+
+            matching = {
+                "url":
+                    "https://github.com/gate/agmsg/"
+                    "issues/396#issuecomment-1",
+                "body": expected_body,
+                "issue": I1.ISSUE_NUMBER,
+                "repo": I1.ISSUE_REPO,
+            }
+
+            I1.atomic_json(
+                store / "comments.json",
+                {
+                    "schemaVersion": 1,
+                    "comments": [
+                        {
+                            "body": expected_body,
+                            "issue": 999,
+                            "repo": I1.ISSUE_REPO,
+                        },
+                        matching,
+                        {
+                            "body": "other body",
+                            "issue": I1.ISSUE_NUMBER,
+                            "repo": I1.ISSUE_REPO,
+                        },
+                    ],
+                },
+            )
+
+            checks = I1.validate_gh_store(
+                store,
+                expected_body,
+            )
+
+            self.assertEqual(
+                len(checks),
+                2,
+            )
+
+            self.assertEqual(
+                checks[0],
+                {
+                    "name":
+                        "pseudo-comment-exactly-once",
+                    "verdict":
+                        "pass",
+                    "detail":
+                        {
+                            "count": 1,
+                        },
+                },
+            )
+
+            self.assertEqual(
+                checks[1],
+                {
+                    "name":
+                        "pseudo-comment-body",
+                    "verdict":
+                        "pass",
+                    "detail":
+                        matching,
+                },
+            )
+
+    def test_validate_gh_store_zero_or_duplicate_matches_fail_and_non_dict_entries_are_ignored(
+        self,
+    ):
+        expected_body = "expected body"
+
+        cases = (
+            (
+                [
+                    "not-an-object",
+                    123,
+                    {
+                        "repo":
+                            I1.ISSUE_REPO,
+                        "issue":
+                            I1.ISSUE_NUMBER,
+                        "body":
+                            "different",
+                    },
+                ],
+                0,
+            ),
+            (
+                [
+                    "ignored",
+                    {
+                        "repo":
+                            I1.ISSUE_REPO,
+                        "issue":
+                            I1.ISSUE_NUMBER,
+                        "body":
+                            expected_body,
+                    },
+                    {
+                        "repo":
+                            I1.ISSUE_REPO,
+                        "issue":
+                            I1.ISSUE_NUMBER,
+                        "body":
+                            expected_body,
+                    },
+                ],
+                2,
+            ),
+        )
+
+        for comments, expected_count in cases:
+            with self.subTest(
+                expected_count=expected_count
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp).resolve()
+                    store = root / "gh-store"
+                    store.mkdir()
+
+                    I1.atomic_json(
+                        store / "comments.json",
+                        {
+                            "comments": comments,
+                        },
+                    )
+
+                    checks = I1.validate_gh_store(
+                        store,
+                        expected_body,
+                    )
+
+                    self.assertEqual(
+                        len(checks),
+                        2,
+                    )
+
+                    self.assertEqual(
+                        checks[0]["name"],
+                        (
+                            "pseudo-comment-"
+                            "exactly-once"
+                        ),
+                    )
+                    self.assertEqual(
+                        checks[0]["verdict"],
+                        "fail",
+                    )
+                    self.assertEqual(
+                        checks[0]["detail"],
+                        {
+                            "count":
+                                expected_count,
+                        },
+                    )
+
+                    self.assertEqual(
+                        checks[1]["name"],
+                        "pseudo-comment-body",
+                    )
+                    self.assertEqual(
+                        checks[1]["verdict"],
+                        "fail",
+                    )
+                    self.assertIsNone(
+                        checks[1]["detail"]
+                    )
+
+    def test_validate_identity_binding_identity_passes(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_identity_fixture(
+                    Path(temp)
+                )
+            )
+
+            result = self.validate_identity(
+                fixture
+            )
+
+            self.assertEqual(
+                result["schemaVersion"],
+                1,
+            )
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+
+            self.assertEqual(
+                self.check(
+                    result,
+                    "binding-team",
+                )["verdict"],
+                "pass",
+            )
+            self.assertEqual(
+                self.check(
+                    result,
+                    "binding-agent",
+                )["verdict"],
+                "pass",
+            )
+            self.assertEqual(
+                self.check(
+                    result,
+                    "binding-project",
+                )["verdict"],
+                "pass",
+            )
+
+    def test_validate_identity_binding_mismatch_is_fail_and_unresolvable_project_is_unknown(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_identity_fixture(
+                    Path(temp)
+                )
+            )
+
+            wrong = dict(
+                fixture["binding"]
+            )
+            wrong["team"] = "wrong-team"
+            wrong["agent"] = "wrong-agent"
+
+            other_project = (
+                fixture["root"]
+                / "other-project"
+            )
+            other_project.mkdir()
+            wrong["project"] = str(
+                other_project
+            )
+
+            result = self.validate_identity(
+                fixture,
+                binding=wrong,
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "fail",
+            )
+
+            self.assertEqual(
+                self.check(
+                    result,
+                    "binding-team",
+                )["verdict"],
+                "fail",
+            )
+            self.assertEqual(
+                self.check(
+                    result,
+                    "binding-agent",
+                )["verdict"],
+                "fail",
+            )
+            self.assertEqual(
+                self.check(
+                    result,
+                    "binding-project",
+                )["verdict"],
+                "fail",
+            )
+
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_identity_fixture(
+                    Path(temp)
+                )
+            )
+
+            unprovable = dict(
+                fixture["binding"]
+            )
+            unprovable["project"] = str(
+                fixture["root"]
+                / "missing-project"
+            )
+
+            result = self.validate_identity(
+                fixture,
+                binding=unprovable,
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "unknown",
+            )
+
+            project_check = self.check(
+                result,
+                "binding-project",
+            )
+
+            self.assertEqual(
+                project_check["verdict"],
+                "unknown",
+            )
+            self.assertTrue(
+                project_check["detail"]
+            )
+
+    def test_validate_identity_adds_broker_checks_only_for_dict_brokers_and_owner_only_when_present(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_identity_fixture(
+                    Path(temp)
+                )
+            )
+
+            valid_owner = (
+                "p2:"
+                f"{self.SESSION_ID}:"
+                f"{self.GENERATION}:run-1"
+            )
+
+            operation_results = {
+                "receive": {
+                    "broker": {
+                        "team":
+                            self.GATE_TEAM,
+                        "actor":
+                            I1.PILOT_AGENT,
+                        "generation":
+                            self.GENERATION,
+                        "owner":
+                            valid_owner,
+                    }
+                },
+                "delegate": {
+                    "broker": {
+                        "team":
+                            self.GATE_TEAM,
+                        "actor":
+                            I1.PILOT_AGENT,
+                        "generation":
+                            int(
+                                self.GENERATION
+                            ),
+                    }
+                },
+                "ignored-none": {
+                    "broker": None,
+                },
+                "ignored-list": {
+                    "broker": [],
+                },
+                "ignored-record": "not-dict",
+            }
+
+            result = self.validate_identity(
+                fixture,
+                operation_results=(
+                    operation_results
+                ),
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+
+            names = {
+                item["name"]
+                for item in result["checks"]
+            }
+
+            for suffix in (
+                "team",
+                "actor",
+                "generation",
+            ):
+                self.assertIn(
+                    f"receive.{suffix}",
+                    names,
+                )
+                self.assertIn(
+                    f"delegate.{suffix}",
+                    names,
+                )
+
+            self.assertIn(
+                "receive.owner",
+                names,
+            )
+            self.assertNotIn(
+                "delegate.owner",
+                names,
+            )
+
+            self.assertFalse(
+                any(
+                    name.startswith(
+                        "ignored-"
+                    )
+                    for name in names
+                )
+            )
+
+    def test_validate_identity_broker_mismatches_and_bad_owner_are_fail(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_identity_fixture(
+                    Path(temp)
+                )
+            )
+
+            operation_results = {
+                "receive": {
+                    "broker": {
+                        "team": "wrong-team",
+                        "actor": "wrong-agent",
+                        "generation": "99",
+                        "owner": "wrong-owner",
+                    }
+                }
+            }
+
+            result = self.validate_identity(
+                fixture,
+                operation_results=(
+                    operation_results
+                ),
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "fail",
+            )
+
+            for name in (
+                "receive.team",
+                "receive.actor",
+                "receive.generation",
+                "receive.owner",
+            ):
+                self.assertEqual(
+                    self.check(
+                        result,
+                        name,
+                    )["verdict"],
+                    "fail",
+                )
+
+    def test_validate_identity_combines_mutation_and_gh_logs_and_accepts_allowed_targets(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_identity_fixture(
+                    Path(temp)
+                )
+            )
+
+            gate_target = (
+                fixture["gate_repo"]
+                / "request.json"
+            )
+            run_target = (
+                fixture["run_root"]
+                / "runtime"
+                / "state.json"
+            )
+            artifact_target = (
+                fixture["artifact"]
+                / "evidence.json"
+            )
+
+            self.append_record(
+                fixture["mutation_log"],
+                {
+                    "team": self.GATE_TEAM,
+                    "target":
+                        str(gate_target),
+                },
+            )
+            self.append_record(
+                fixture["mutation_log"],
+                {
+                    "team": self.GATE_TEAM,
+                    "target":
+                        str(run_target),
+                },
+            )
+            self.append_record(
+                fixture["gh_log"],
+                {
+                    "team": self.GATE_TEAM,
+                    "target":
+                        str(artifact_target),
+                },
+            )
+
+            result = self.validate_identity(
+                fixture
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+
+            for index in range(3):
+                self.assertEqual(
+                    self.check(
+                        result,
+                        f"mutation-{index}-team",
+                    )["verdict"],
+                    "pass",
+                )
+
+                self.assertEqual(
+                    self.check(
+                        result,
+                        (
+                            f"mutation-{index}-"
+                            "target"
+                        ),
+                    )["verdict"],
+                    "pass",
+                )
+
+    def test_validate_identity_mutation_wrong_team_or_target_outside_allowed_roots_is_fail(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_identity_fixture(
+                    Path(temp)
+                )
+            )
+
+            outside = (
+                fixture["root"]
+                / "outside"
+                / "target"
+            )
+
+            self.append_record(
+                fixture["mutation_log"],
+                {
+                    "team": "live-team",
+                    "target": str(outside),
+                },
+            )
+
+            result = self.validate_identity(
+                fixture
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "fail",
+            )
+
+            self.assertEqual(
+                self.check(
+                    result,
+                    "mutation-0-team",
+                )["verdict"],
+                "fail",
+            )
+
+            target_check = self.check(
+                result,
+                "mutation-0-target",
+            )
+
+            self.assertEqual(
+                target_check["verdict"],
+                "fail",
+            )
+            self.assertEqual(
+                target_check["detail"],
+                str(
+                    outside.resolve(
+                        strict=False
+                    )
+                ),
+            )
+
+    def test_validate_identity_mutation_target_resolution_failure_is_unknown(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_identity_fixture(
+                    Path(temp)
+                )
+            )
+
+            failing_target = (
+                fixture["gate_repo"]
+                / "resolution-failure"
+            )
+
+            self.append_record(
+                fixture["mutation_log"],
+                {
+                    "team":
+                        self.GATE_TEAM,
+                    "target":
+                        str(failing_target),
+                },
+            )
+
+            original_resolve = (
+                I1.pathlib.Path.resolve
+            )
+
+            def selective_resolve(
+                path_self,
+                strict=False,
+            ):
+                if (
+                    str(path_self)
+                    == str(failing_target)
+                ):
+                    raise OSError(
+                        "synthetic resolution failure"
+                    )
+
+                return original_resolve(
+                    path_self,
+                    strict=strict,
+                )
+
+            with mock.patch.object(
+                I1.pathlib.Path,
+                "resolve",
+                selective_resolve,
+            ):
+                result = (
+                    self.validate_identity(
+                        fixture
+                    )
+                )
+
+            self.assertEqual(
+                result["verdict"],
+                "unknown",
+            )
+
+            self.assertEqual(
+                self.check(
+                    result,
+                    "mutation-0-team",
+                )["verdict"],
+                "pass",
+            )
+
+            target_check = self.check(
+                result,
+                "mutation-0-target",
+            )
+
+            self.assertEqual(
+                target_check["verdict"],
+                "unknown",
+            )
+            self.assertIn(
+                "synthetic resolution failure",
+                target_check["detail"],
+            )
+
+    def test_validate_identity_invalid_jsonl_adds_read_unknown_and_keeps_records_read_before_failure(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_identity_fixture(
+                    Path(temp)
+                )
+            )
+
+            valid_target = (
+                fixture["gate_repo"]
+                / "before-error"
+            )
+
+            fixture[
+                "mutation_log"
+            ].write_text(
+                (
+                    json.dumps(
+                        {
+                            "team":
+                                self.GATE_TEAM,
+                            "target":
+                                str(
+                                    valid_target
+                                ),
+                        }
+                    )
+                    + "\n"
+                    + "{not-json}\n"
+                    + json.dumps(
+                        {
+                            "team":
+                                "must-not-be-read",
+                        }
+                    )
+                    + "\n"
+                ),
+                encoding="utf-8",
+            )
+
+            result = self.validate_identity(
+                fixture
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "unknown",
+            )
+
+            read_check = self.check(
+                result,
+                (
+                    "read-"
+                    + fixture[
+                        "mutation_log"
+                    ].name
+                ),
+            )
+
+            self.assertEqual(
+                read_check["verdict"],
+                "unknown",
+            )
+
+            # The first valid record was appended before json.loads()
+            # failed on the second line.
+            self.assertEqual(
+                self.check(
+                    result,
+                    "mutation-0-team",
+                )["verdict"],
+                "pass",
+            )
+
+            self.assertEqual(
+                self.check(
+                    result,
+                    "mutation-0-target",
+                )["verdict"],
+                "pass",
+            )
+
+            names = [
+                item["name"]
+                for item in result["checks"]
+            ]
+
+            self.assertNotIn(
+                "mutation-1-team",
+                names,
+            )
+
+    def test_validate_identity_non_dict_jsonl_records_are_ignored(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_identity_fixture(
+                    Path(temp)
+                )
+            )
+
+            fixture[
+                "mutation_log"
+            ].write_text(
+                (
+                    "[]\n"
+                    '"string"\n'
+                    "42\n"
+                    + json.dumps(
+                        {
+                            "team":
+                                self.GATE_TEAM,
+                        }
+                    )
+                    + "\n"
+                ),
+                encoding="utf-8",
+            )
+
+            result = self.validate_identity(
+                fixture
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+
+            names = [
+                item["name"]
+                for item in result["checks"]
+            ]
+
+            self.assertIn(
+                "mutation-0-team",
+                names,
+            )
+            self.assertNotIn(
+                "mutation-1-team",
+                names,
+            )
+
+    def test_validate_identity_live_tokens_absent_from_mutations_all_pass(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_identity_fixture(
+                    Path(temp)
+                )
+            )
+
+            self.append_record(
+                fixture["mutation_log"],
+                {
+                    "team": self.GATE_TEAM,
+                    "target": str(
+                        fixture["gate_repo"]
+                        / "safe-target"
+                    ),
+                },
+            )
+
+            live = {
+                "team": "live-production-team",
+                "bindingPath":
+                    "/live/run/pilot/binding.json",
+                "sessionId":
+                    "aaaaaaaa-aaaa-4aaa-8aaa-"
+                    "aaaaaaaaaaaa",
+                "claimFile":
+                    "/live/run/claim.json",
+                "ignored": "not-a-token",
+            }
+
+            I1.atomic_json(
+                fixture["live_identity"],
+                live,
+            )
+
+            result = self.validate_identity(
+                fixture,
+                live_identity_json=(
+                    fixture[
+                        "live_identity"
+                    ]
+                ),
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+
+            for key in (
+                "team",
+                "bindingPath",
+                "sessionId",
+                "claimFile",
+            ):
+                token = live[key]
+
+                name = (
+                    "live-token-not-"
+                    "mutation-target:"
+                    + hashlib.sha256(
+                        token.encode()
+                    ).hexdigest()[:8]
+                )
+
+                check = self.check(
+                    result,
+                    name,
+                )
+
+                self.assertEqual(
+                    check["verdict"],
+                    "pass",
+                )
+                self.assertEqual(
+                    check["detail"],
+                    "absent",
+                )
+
+    def test_validate_identity_live_token_in_mutation_record_is_definite_fail(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_identity_fixture(
+                    Path(temp)
+                )
+            )
+
+            live_session = (
+                "aaaaaaaa-aaaa-4aaa-8aaa-"
+                "aaaaaaaaaaaa"
+            )
+
+            live = {
+                "sessionId": live_session,
+            }
+
+            I1.atomic_json(
+                fixture["live_identity"],
+                live,
+            )
+
+            # Keep the mutation target itself inside gate_repo so the
+            # ordinary mutation containment assertion passes. The live
+            # token assertion must be the one that detects this leak.
+            target = (
+                fixture["gate_repo"]
+                / "mutation"
+                / live_session
+                / "record.json"
+            )
+
+            self.append_record(
+                fixture["mutation_log"],
+                {
+                    "team":
+                        self.GATE_TEAM,
+                    "target":
+                        str(target),
+                },
+            )
+
+            result = self.validate_identity(
+                fixture,
+                live_identity_json=(
+                    fixture[
+                        "live_identity"
+                    ]
+                ),
+            )
+
+            self.assertEqual(
+                self.check(
+                    result,
+                    "mutation-0-team",
+                )["verdict"],
+                "pass",
+            )
+
+            self.assertEqual(
+                self.check(
+                    result,
+                    "mutation-0-target",
+                )["verdict"],
+                "pass",
+            )
+
+            token_name = (
+                "live-token-not-"
+                "mutation-target:"
+                + hashlib.sha256(
+                    live_session.encode()
+                ).hexdigest()[:8]
+            )
+
+            token_check = self.check(
+                result,
+                token_name,
+            )
+
+            self.assertEqual(
+                token_check["verdict"],
+                "fail",
+            )
+            self.assertEqual(
+                token_check["detail"],
+                "matched",
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "fail",
+            )
+
+    def test_validate_identity_live_token_match_is_substring_based_across_entire_record(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_identity_fixture(
+                    Path(temp)
+                )
+            )
+
+            live_team = "live-team-token"
+
+            I1.atomic_json(
+                fixture["live_identity"],
+                {
+                    "team": live_team,
+                },
+            )
+
+            # validate_identity serializes the entire mutation record,
+            # not only target/team fields. Therefore a live token in
+            # another field must also fail the non-mutation assertion.
+            self.append_record(
+                fixture["mutation_log"],
+                {
+                    "team":
+                        self.GATE_TEAM,
+                    "note":
+                        (
+                            "contains:"
+                            + live_team
+                        ),
+                },
+            )
+
+            result = self.validate_identity(
+                fixture,
+                live_identity_json=(
+                    fixture[
+                        "live_identity"
+                    ]
+                ),
+            )
+
+            token_name = (
+                "live-token-not-"
+                "mutation-target:"
+                + hashlib.sha256(
+                    live_team.encode()
+                ).hexdigest()[:8]
+            )
+
+            self.assertEqual(
+                self.check(
+                    result,
+                    token_name,
+                )["verdict"],
+                "fail",
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "fail",
+            )
+
+    def test_validate_identity_live_identity_ignores_empty_and_non_string_tokens(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_identity_fixture(
+                    Path(temp)
+                )
+            )
+
+            I1.atomic_json(
+                fixture["live_identity"],
+                {
+                    "team": "",
+                    "bindingPath": None,
+                    "sessionId": 123,
+                    "claimFile": [],
+                },
+            )
+
+            result = self.validate_identity(
+                fixture,
+                live_identity_json=(
+                    fixture[
+                        "live_identity"
+                    ]
+                ),
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+
+            self.assertFalse(
+                any(
+                    item["name"].startswith(
+                        "live-token-not-"
+                        "mutation-target:"
+                    )
+                    for item in result["checks"]
+                )
+            )
+
+    def test_validate_identity_unreadable_live_identity_adds_unknown(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_identity_fixture(
+                    Path(temp)
+                )
+            )
+
+            fixture[
+                "live_identity"
+            ].write_text(
+                "{not-json\n",
+                encoding="utf-8",
+            )
+
+            result = self.validate_identity(
+                fixture,
+                live_identity_json=(
+                    fixture[
+                        "live_identity"
+                    ]
+                ),
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "unknown",
+            )
+
+            live_read = self.check(
+                result,
+                "live-identity-read",
+            )
+
+            self.assertEqual(
+                live_read["verdict"],
+                "unknown",
+            )
+
+            self.assertTrue(
+                live_read["detail"]
+            )
+
+    def test_validate_identity_missing_live_identity_file_adds_no_live_checks(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_identity_fixture(
+                    Path(temp)
+                )
+            )
+
+            missing = (
+                fixture["root"]
+                / "missing-live-identity.json"
+            )
+
+            result = self.validate_identity(
+                fixture,
+                live_identity_json=missing,
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+
+            names = {
+                item["name"]
+                for item in result["checks"]
+            }
+
+            self.assertNotIn(
+                "live-identity-read",
+                names,
+            )
+
+            self.assertFalse(
+                any(
+                    name.startswith(
+                        "live-token-not-"
+                        "mutation-target:"
+                    )
+                    for name in names
+                )
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
