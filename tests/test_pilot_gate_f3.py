@@ -3743,5 +3743,1737 @@ class PilotGateF3RoundC(unittest.TestCase):
 
             native.stop.assert_called_once_with()
 
+
+class PilotGateF3RoundD(unittest.TestCase):
+    RUN_ID = "round-d"
+    TEAM = "agmsg-g4gate-round-d"
+
+    def make_fixture(
+        self,
+        root: Path,
+        *,
+        gate_inside=True,
+    ):
+        root = root.resolve()
+
+        run_root = root / "run-root"
+        run_root.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        gate_repo = (
+            run_root / "repo"
+            if gate_inside
+            else root / "outside-repo"
+        )
+
+        scripts = gate_repo / "scripts"
+        claude_dir = gate_repo / ".claude"
+
+        scripts.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        claude_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        launcher = (
+            scripts
+            / "pilot-launcher.sh"
+        )
+        broker = (
+            scripts
+            / "p2-consumer-broker.sh"
+        )
+        collector = (
+            scripts
+            / "pilot-collector.sh"
+        )
+        posttool = (
+            scripts
+            / "posttool-original.sh"
+        )
+
+        for path in (
+            launcher,
+            broker,
+            collector,
+            posttool,
+        ):
+            path.write_text(
+                "#!/bin/sh\nexit 0\n",
+                encoding="utf-8",
+            )
+            path.chmod(0o700)
+
+        profile = (
+            claude_dir
+            / "settings.local.json"
+        )
+
+        profile_value = {
+            "schemaVersion": 1,
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
+                            {
+                                "type":
+                                    "command",
+                                "command":
+                                    str(
+                                        scripts
+                                        / "pretool.sh"
+                                    ),
+                                "args": [],
+                            }
+                        ],
+                    }
+                ],
+                "PostToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
+                            {
+                                "type":
+                                    "command",
+                                "command":
+                                    str(
+                                        posttool
+                                    ),
+                                "args": [],
+                                "timeout": 7,
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+
+        profile.write_text(
+            json.dumps(
+                profile_value,
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        profile.chmod(0o640)
+
+        claude_config = (
+            run_root
+            / "claude"
+        )
+        claude_config.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        artifact_dir = (
+            root
+            / "artifacts"
+        )
+        artifact_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        args = F3.argparse.Namespace(
+            gate_repo=str(gate_repo),
+            run_root=str(run_root),
+            claude_config=str(
+                claude_config
+            ),
+            artifact_dir=str(
+                artifact_dir
+            ),
+            run_id=self.RUN_ID,
+            gate_team=self.TEAM,
+            timeout_seconds=13,
+        )
+
+        return {
+            "root": root,
+            "run_root": run_root,
+            "gate_repo": gate_repo,
+            "scripts": scripts,
+            "launcher": launcher,
+            "broker": broker,
+            "collector": collector,
+            "posttool": posttool,
+            "profile": profile,
+            "profile_value":
+                profile_value,
+            "original_payload":
+                profile.read_bytes(),
+            "original_mode":
+                stat.S_IMODE(
+                    profile.stat().st_mode
+                ),
+            "claude_config":
+                claude_config,
+            "artifact_dir":
+                artifact_dir,
+            "artifact":
+                artifact_dir / "F3",
+            "runtime":
+                gate_repo
+                / ".agmsg-gate"
+                / "f3",
+            "args": args,
+        }
+
+    def make_modules(self):
+        iso = mock.Mock()
+        iso.canonical.side_effect = (
+            lambda value: str(
+                Path(value).resolve(
+                    strict=True
+                )
+            )
+        )
+
+        i1 = mock.Mock()
+        i1.sanitize_env.return_value = {
+            "BASE_ENV":
+                "preserved",
+        }
+
+        return iso, i1
+
+    def module_loader(
+        self,
+        iso,
+        i1,
+    ):
+        def load(path, name):
+            if (
+                name
+                == "pilot_gate_isolation"
+            ):
+                return iso
+
+            if (
+                name
+                == "pilot_gate_i1"
+            ):
+                return i1
+
+            raise AssertionError(
+                (
+                    "unexpected module: "
+                    f"{name}"
+                )
+            )
+
+        return load
+
+    def patch_modules(
+        self,
+        iso,
+        i1,
+    ):
+        return mock.patch.object(
+            F3,
+            "load_module",
+            side_effect=
+                self.module_loader(
+                    iso,
+                    i1,
+                ),
+        )
+
+    def test_setup_rejects_gate_repo_outside_run_root(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp),
+                gate_inside=False,
+            )
+            iso, i1 = (
+                self.make_modules()
+            )
+
+            with self.patch_modules(
+                iso,
+                i1,
+            ):
+                with self.assertRaises(
+                    ValueError
+                ):
+                    F3.run_f3(
+                        fixture["args"]
+                    )
+
+    def test_setup_rejects_nonexecutable_launcher_broker_collector_and_nonregular_profile(
+        self,
+    ):
+        for target in (
+            "launcher",
+            "broker",
+            "collector",
+            "profile",
+        ):
+            with self.subTest(
+                target=target
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = (
+                        self.make_fixture(
+                            Path(temp)
+                        )
+                    )
+                    iso, i1 = (
+                        self.make_modules()
+                    )
+
+                    if target == "profile":
+                        fixture[
+                            "profile"
+                        ].unlink()
+                        fixture[
+                            "profile"
+                        ].mkdir()
+                    else:
+                        fixture[
+                            target
+                        ].chmod(0o600)
+
+                    with self.patch_modules(
+                        iso,
+                        i1,
+                    ):
+                        with self.assertRaises(
+                            RuntimeError
+                        ):
+                            F3.run_f3(
+                                fixture[
+                                    "args"
+                                ]
+                            )
+
+    def test_setup_creates_runtime_uses_original_posttool_and_rejects_invalid_posttool_command(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            iso, i1 = (
+                self.make_modules()
+            )
+
+            with self.patch_modules(
+                iso,
+                i1,
+            ), mock.patch.object(
+                F3,
+                "run_case",
+                return_value={
+                    "verdict": "fail"
+                },
+            ), mock.patch.object(
+                F3,
+                "find_single_posttool_handler",
+                wraps=
+                    F3.find_single_posttool_handler,
+            ) as handler_mock:
+                status = F3.run_f3(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                1,
+            )
+            self.assertTrue(
+                fixture[
+                    "runtime"
+                ].is_dir()
+            )
+
+            fixture[
+                "runtime"
+            ].resolve(
+                strict=True
+            ).relative_to(
+                fixture[
+                    "gate_repo"
+                ].resolve(
+                    strict=True
+                )
+            )
+
+            self.assertGreaterEqual(
+                handler_mock.call_count,
+                2,
+            )
+
+            first_profile = (
+                handler_mock
+                .call_args_list[0]
+                .args[0]
+            )
+            self.assertEqual(
+                first_profile,
+                fixture[
+                    "profile_value"
+                ],
+            )
+
+        # The explicit run_f3 guard is normally
+        # unreachable because the real handler finder
+        # rejects an empty command first.
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            iso, i1 = (
+                self.make_modules()
+            )
+
+            bad_handler = {
+                "type": "command",
+                "command": "",
+                "args": [],
+            }
+
+            with self.patch_modules(
+                iso,
+                i1,
+            ), mock.patch.object(
+                F3,
+                "find_single_posttool_handler",
+                return_value=(
+                    0,
+                    0,
+                    bad_handler,
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "PostToolUse command invalid",
+                ):
+                    F3.run_f3(
+                        fixture["args"]
+                    )
+
+    def test_existing_logs_are_deleted_before_preexisting_wrapper_is_rejected(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            artifact = (
+                fixture["artifact"]
+            )
+
+            control_log = (
+                artifact
+                / "control"
+                / "posttool-records.jsonl"
+            )
+            fault_log = (
+                artifact
+                / "fault"
+                / "posttool-records.jsonl"
+            )
+
+            control_log.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+            fault_log.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            control_log.write_text(
+                "stale\n",
+                encoding="utf-8",
+            )
+            fault_log.write_text(
+                "stale\n",
+                encoding="utf-8",
+            )
+
+            fixture[
+                "runtime"
+            ].mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            wrapper = (
+                fixture["runtime"]
+                / (
+                    "posttool-wrapper-"
+                    f"{self.RUN_ID}.py"
+                )
+            )
+
+            try:
+                wrapper.symlink_to(
+                    fixture[
+                        "runtime"
+                    ]
+                    / "missing-target"
+                )
+            except OSError as exc:
+                self.skipTest(
+                    (
+                        "symlink unavailable: "
+                        f"{exc}"
+                    )
+                )
+
+            iso, i1 = (
+                self.make_modules()
+            )
+
+            with self.patch_modules(
+                iso,
+                i1,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "pre-existing F3 wrapper",
+                ):
+                    F3.run_f3(
+                        fixture["args"]
+                    )
+
+            self.assertFalse(
+                control_log.exists()
+            )
+            self.assertFalse(
+                fault_log.exists()
+            )
+
+    def test_pretool_checks_all_pass_profiles_json_and_env_are_exact(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            iso, i1 = (
+                self.make_modules()
+            )
+
+            control_result = {
+                "verdict": "fail",
+                "reason": "stop",
+            }
+
+            with self.patch_modules(
+                iso,
+                i1,
+            ), mock.patch.object(
+                F3,
+                "run_case",
+                return_value=
+                    control_result,
+            ) as run_case_mock:
+                status = F3.run_f3(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                1,
+            )
+
+            result = F3.read_json(
+                fixture["artifact"]
+                / "result.json"
+            )
+
+            self.assertEqual(
+                [
+                    item["name"]
+                    for item
+                    in result[
+                        "profileChecks"
+                    ]
+                ],
+                [
+                    (
+                        "control-pretool-"
+                        "unchanged"
+                    ),
+                    (
+                        "fault-pretool-"
+                        "unchanged"
+                    ),
+                    (
+                        "fault-posttool-"
+                        "removed"
+                    ),
+                ],
+            )
+
+            self.assertTrue(
+                all(
+                    item["verdict"]
+                    == "pass"
+                    for item
+                    in result[
+                        "profileChecks"
+                    ]
+                )
+            )
+
+            profiles = F3.read_json(
+                fixture["artifact"]
+                / "profiles.json"
+            )
+
+            wrapper = (
+                fixture["runtime"]
+                / (
+                    "posttool-wrapper-"
+                    f"{self.RUN_ID}.py"
+                )
+            )
+
+            original = (
+                fixture[
+                    "profile_value"
+                ]
+            )
+
+            control_profile = (
+                F3.make_control_profile(
+                    original,
+                    wrapper,
+                )
+            )
+            fault_profile = (
+                F3.make_fault_profile(
+                    original
+                )
+            )
+
+            control_payload = (
+                F3.encode_profile(
+                    control_profile
+                )
+            )
+            fault_payload = (
+                F3.encode_profile(
+                    fault_profile
+                )
+            )
+
+            original_pretool = (
+                original[
+                    "hooks"
+                ][
+                    "PreToolUse"
+                ]
+            )
+
+            self.assertEqual(
+                profiles,
+                {
+                    "schemaVersion": 1,
+                    "originalDigest":
+                        F3.digest_bytes(
+                            fixture[
+                                "original_payload"
+                            ]
+                        ),
+                    "controlDigest":
+                        F3.digest_bytes(
+                            control_payload
+                        ),
+                    "faultDigest":
+                        F3.digest_bytes(
+                            fault_payload
+                        ),
+                    (
+                        "originalPreToolUseDigest"
+                    ):
+                        F3.digest_json(
+                            original_pretool
+                        ),
+                    (
+                        "controlPreToolUseDigest"
+                    ):
+                        F3.digest_json(
+                            control_profile[
+                                "hooks"
+                            ][
+                                "PreToolUse"
+                            ]
+                        ),
+                    (
+                        "faultPreToolUseDigest"
+                    ):
+                        F3.digest_json(
+                            fault_profile[
+                                "hooks"
+                            ][
+                                "PreToolUse"
+                            ]
+                        ),
+                    "originalPostToolUseCommand":
+                        str(
+                            fixture[
+                                "posttool"
+                            ]
+                        ),
+                    "controlWrapper":
+                        str(wrapper),
+                    "controlWrapperDigest":
+                        F3.digest_bytes(
+                            wrapper.read_bytes()
+                        ),
+                },
+            )
+
+            i1.sanitize_env.assert_called_once_with(
+                os.environ
+            )
+
+            call = (
+                run_case_mock
+                .call_args
+            )
+
+            passed_env = call.args[6]
+
+            self.assertEqual(
+                passed_env[
+                    "BASE_ENV"
+                ],
+                "preserved",
+            )
+            self.assertEqual(
+                passed_env[
+                    "CLAUDE_CONFIG_DIR"
+                ],
+                str(
+                    fixture[
+                        "claude_config"
+                    ]
+                ),
+            )
+
+    def test_profile_fault_construction_fail_returns_one_and_skips_run_case(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            iso, i1 = (
+                self.make_modules()
+            )
+
+            real_make_control = (
+                F3.make_control_profile
+            )
+
+            def bad_control(
+                original,
+                wrapper,
+            ):
+                value = (
+                    real_make_control(
+                        original,
+                        wrapper,
+                    )
+                )
+                value[
+                    "hooks"
+                ][
+                    "PreToolUse"
+                ] = [
+                    {
+                        "tampered":
+                            True
+                    }
+                ]
+                return value
+
+            with self.patch_modules(
+                iso,
+                i1,
+            ), mock.patch.object(
+                F3,
+                "make_control_profile",
+                side_effect=bad_control,
+            ), mock.patch.object(
+                F3,
+                "run_case",
+            ) as run_case_mock:
+                status = F3.run_f3(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                1,
+            )
+            run_case_mock.assert_not_called()
+
+            result = F3.read_json(
+                fixture["artifact"]
+                / "result.json"
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "fail",
+            )
+            self.assertEqual(
+                result["reason"],
+                (
+                    "profile_fault_"
+                    "construction_not_proved"
+                ),
+            )
+
+            checks = {
+                item["name"]:
+                    item["verdict"]
+                for item
+                in result["checks"]
+            }
+
+            self.assertEqual(
+                checks[
+                    (
+                        "control-pretool-"
+                        "unchanged"
+                    )
+                ],
+                "fail",
+            )
+
+    def test_profile_fault_construction_unknown_branch_can_only_be_exercised_by_injected_verdict(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            iso, i1 = (
+                self.make_modules()
+            )
+
+            with self.patch_modules(
+                iso,
+                i1,
+            ), mock.patch.object(
+                F3,
+                "verdict_from_assertions",
+                return_value="unknown",
+            ), mock.patch.object(
+                F3,
+                "run_case",
+            ) as run_case_mock:
+                status = F3.run_f3(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                2,
+            )
+            run_case_mock.assert_not_called()
+
+            result = F3.read_json(
+                fixture["artifact"]
+                / "result.json"
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "unknown",
+            )
+            self.assertEqual(
+                result["reason"],
+                (
+                    "profile_fault_"
+                    "construction_not_proved"
+                ),
+            )
+
+    def test_control_fail_or_unknown_returns_early_and_skips_fault(
+        self,
+    ):
+        for (
+            verdict,
+            expected_status,
+        ) in (
+            (
+                "fail",
+                1,
+            ),
+            (
+                "unknown",
+                2,
+            ),
+        ):
+            with self.subTest(
+                verdict=verdict
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = (
+                        self.make_fixture(
+                            Path(temp)
+                        )
+                    )
+                    iso, i1 = (
+                        self.make_modules()
+                    )
+
+                    control = {
+                        "verdict":
+                            verdict,
+                        "detail":
+                            verdict,
+                    }
+
+                    with self.patch_modules(
+                        iso,
+                        i1,
+                    ), mock.patch.object(
+                        F3,
+                        "run_case",
+                        return_value=
+                            control,
+                    ) as run_case_mock:
+                        status = (
+                            F3.run_f3(
+                                fixture[
+                                    "args"
+                                ]
+                            )
+                        )
+
+                    self.assertEqual(
+                        status,
+                        expected_status,
+                    )
+                    self.assertEqual(
+                        run_case_mock.call_count,
+                        1,
+                    )
+                    self.assertEqual(
+                        run_case_mock
+                        .call_args
+                        .args[1],
+                        "control",
+                    )
+
+                    result = F3.read_json(
+                        fixture["artifact"]
+                        / "result.json"
+                    )
+
+                    self.assertEqual(
+                        result[
+                            "schemaVersion"
+                        ],
+                        1,
+                    )
+                    self.assertEqual(
+                        result["check"],
+                        "F3",
+                    )
+                    self.assertEqual(
+                        result["runId"],
+                        self.RUN_ID,
+                    )
+                    self.assertEqual(
+                        result["verdict"],
+                        verdict,
+                    )
+                    self.assertEqual(
+                        result["reason"],
+                        "control_not_pass",
+                    )
+                    self.assertEqual(
+                        result["control"],
+                        control,
+                    )
+                    self.assertTrue(
+                        all(
+                            item[
+                                "verdict"
+                            ]
+                            == "pass"
+                            for item
+                            in result[
+                                "profileChecks"
+                            ]
+                        )
+                    )
+
+    def test_control_fault_run_in_order_and_success_aggregates_five_checks(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            iso, i1 = (
+                self.make_modules()
+            )
+
+            control = {
+                "verdict": "pass",
+                "case": "control",
+            }
+            fault = {
+                "verdict": "pass",
+                "case": "fault",
+            }
+
+            with self.patch_modules(
+                iso,
+                i1,
+            ), mock.patch.object(
+                F3,
+                "run_case",
+                side_effect=[
+                    control,
+                    fault,
+                ],
+            ) as run_case_mock:
+                status = F3.run_f3(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                0,
+            )
+            self.assertEqual(
+                [
+                    call.args[1]
+                    for call
+                    in run_case_mock
+                    .call_args_list
+                ],
+                [
+                    "control",
+                    "fault",
+                ],
+            )
+
+            result = F3.read_json(
+                fixture["artifact"]
+                / "result.json"
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+            self.assertEqual(
+                result["faultMethod"],
+                (
+                    "remove-"
+                    "PostToolUse-only"
+                ),
+            )
+            self.assertEqual(
+                result["control"],
+                control,
+            )
+            self.assertEqual(
+                result["fault"],
+                fault,
+            )
+
+            self.assertEqual(
+                [
+                    item["name"]
+                    for item
+                    in result["checks"]
+                ],
+                [
+                    (
+                        "control-pretool-"
+                        "unchanged"
+                    ),
+                    (
+                        "fault-pretool-"
+                        "unchanged"
+                    ),
+                    (
+                        "fault-posttool-"
+                        "removed"
+                    ),
+                    "control-pass",
+                    "fault-pass",
+                ],
+            )
+
+            self.assertTrue(
+                all(
+                    item["verdict"]
+                    == "pass"
+                    for item
+                    in result["checks"]
+                )
+            )
+
+    def test_fault_nonpass_makes_full_aggregate_fail_exit_one(
+        self,
+    ):
+        for verdict in (
+            "fail",
+            "unknown",
+        ):
+            with self.subTest(
+                verdict=verdict
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = (
+                        self.make_fixture(
+                            Path(temp)
+                        )
+                    )
+                    iso, i1 = (
+                        self.make_modules()
+                    )
+
+                    with self.patch_modules(
+                        iso,
+                        i1,
+                    ), mock.patch.object(
+                        F3,
+                        "run_case",
+                        side_effect=[
+                            {
+                                "verdict":
+                                    "pass"
+                            },
+                            {
+                                "verdict":
+                                    verdict
+                            },
+                        ],
+                    ):
+                        status = (
+                            F3.run_f3(
+                                fixture[
+                                    "args"
+                                ]
+                            )
+                        )
+
+                    self.assertEqual(
+                        status,
+                        1,
+                    )
+
+                    result = F3.read_json(
+                        fixture["artifact"]
+                        / "result.json"
+                    )
+
+                    self.assertEqual(
+                        result["verdict"],
+                        "fail",
+                    )
+
+                    checks = {
+                        item["name"]:
+                            item[
+                                "verdict"
+                            ]
+                        for item
+                        in result[
+                            "checks"
+                        ]
+                    }
+
+                    self.assertEqual(
+                        checks[
+                            "control-pass"
+                        ],
+                        "pass",
+                    )
+                    self.assertEqual(
+                        checks[
+                            "fault-pass"
+                        ],
+                        "fail",
+                    )
+
+    def test_full_aggregate_unknown_exit_two_branch_requires_injected_verdict(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            iso, i1 = (
+                self.make_modules()
+            )
+
+            calls = {
+                "count": 0
+            }
+
+            def verdict_side_effect(
+                checks,
+            ):
+                calls["count"] += 1
+
+                if (
+                    calls["count"]
+                    == 1
+                ):
+                    return "pass"
+
+                return "unknown"
+
+            with self.patch_modules(
+                iso,
+                i1,
+            ), mock.patch.object(
+                F3,
+                "verdict_from_assertions",
+                side_effect=
+                    verdict_side_effect,
+            ), mock.patch.object(
+                F3,
+                "run_case",
+                side_effect=[
+                    {
+                        "verdict":
+                            "pass"
+                    },
+                    {
+                        "verdict":
+                            "pass"
+                    },
+                ],
+            ):
+                status = F3.run_f3(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                2,
+            )
+
+            result = F3.read_json(
+                fixture["artifact"]
+                / "result.json"
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "unknown",
+            )
+
+    def test_normal_finally_writes_restore_record_without_profile_restore_call(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            iso, i1 = (
+                self.make_modules()
+            )
+
+            real_atomic_bytes = (
+                F3.atomic_bytes
+            )
+
+            with self.patch_modules(
+                iso,
+                i1,
+            ), mock.patch.object(
+                F3,
+                "run_case",
+                return_value={
+                    "verdict":
+                        "fail"
+                },
+            ), mock.patch.object(
+                F3,
+                "atomic_bytes",
+                wraps=
+                    real_atomic_bytes,
+            ) as atomic_mock:
+                status = F3.run_f3(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                1,
+            )
+
+            # write_posttool_wrapper itself uses
+            # atomic_bytes once. What must not
+            # happen here is an extra profile restore.
+            profile_calls = [
+                call
+                for call
+                in atomic_mock
+                .call_args_list
+                if Path(
+                    call.args[0]
+                )
+                == fixture["profile"]
+            ]
+
+            self.assertEqual(
+                profile_calls,
+                [],
+            )
+
+            restore = F3.read_json(
+                fixture["artifact"]
+                / "profile-final-restore.json"
+            )
+
+            self.assertEqual(
+                restore,
+                {
+                    "schemaVersion": 1,
+                    "originalDigest":
+                        F3.digest_bytes(
+                            fixture[
+                                "original_payload"
+                            ]
+                        ),
+                    "restoredDigest":
+                        F3.digest_bytes(
+                            fixture[
+                                "original_payload"
+                            ]
+                        ),
+                    "matchesOriginal":
+                        True,
+                },
+            )
+
+    def test_dirty_profile_is_restored_in_finally_and_recorded(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            iso, i1 = (
+                self.make_modules()
+            )
+
+            real_atomic_bytes = (
+                F3.atomic_bytes
+            )
+
+            def control_side_effect(
+                *args,
+            ):
+                fixture[
+                    "profile"
+                ].write_bytes(
+                    b"dirty-profile"
+                )
+                return {
+                    "verdict": "fail"
+                }
+
+            with self.patch_modules(
+                iso,
+                i1,
+            ), mock.patch.object(
+                F3,
+                "run_case",
+                side_effect=
+                    control_side_effect,
+            ), mock.patch.object(
+                F3,
+                "atomic_bytes",
+                wraps=
+                    real_atomic_bytes,
+            ) as atomic_mock:
+                status = F3.run_f3(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                1,
+            )
+            self.assertEqual(
+                fixture[
+                    "profile"
+                ].read_bytes(),
+                fixture[
+                    "original_payload"
+                ],
+            )
+
+            profile_calls = [
+                call
+                for call
+                in atomic_mock
+                .call_args_list
+                if Path(
+                    call.args[0]
+                )
+                == fixture["profile"]
+            ]
+
+            self.assertEqual(
+                len(profile_calls),
+                1,
+            )
+            self.assertEqual(
+                profile_calls[0].args,
+                (
+                    fixture[
+                        "profile"
+                    ],
+                    fixture[
+                        "original_payload"
+                    ],
+                    fixture[
+                        "original_mode"
+                    ],
+                ),
+            )
+
+            restore = F3.read_json(
+                fixture["artifact"]
+                / "profile-final-restore.json"
+            )
+            self.assertTrue(
+                restore[
+                    "matchesOriginal"
+                ]
+            )
+
+    def test_restore_failure_records_unknown_evidence_and_preserves_run_case_exception(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            iso, i1 = (
+                self.make_modules()
+            )
+
+            real_atomic_bytes = (
+                F3.atomic_bytes
+            )
+
+            def run_case_side_effect(
+                *args,
+            ):
+                fixture[
+                    "profile"
+                ].write_bytes(
+                    b"dirty-profile"
+                )
+                raise LookupError(
+                    (
+                        "original "
+                        "run_case failure"
+                    )
+                )
+
+            def atomic_side_effect(
+                path,
+                payload,
+                mode,
+            ):
+                path = Path(path)
+
+                if (
+                    path
+                    == fixture[
+                        "profile"
+                    ]
+                ):
+                    raise OSError(
+                        (
+                            "profile "
+                            "restore failed"
+                        )
+                    )
+
+                return real_atomic_bytes(
+                    path,
+                    payload,
+                    mode,
+                )
+
+            with self.patch_modules(
+                iso,
+                i1,
+            ), mock.patch.object(
+                F3,
+                "run_case",
+                side_effect=
+                    run_case_side_effect,
+            ), mock.patch.object(
+                F3,
+                "atomic_bytes",
+                side_effect=
+                    atomic_side_effect,
+            ):
+                with self.assertRaisesRegex(
+                    LookupError,
+                    (
+                        "original "
+                        "run_case failure"
+                    ),
+                ):
+                    F3.run_f3(
+                        fixture["args"]
+                    )
+
+            evidence = F3.read_json(
+                fixture["artifact"]
+                / "emergency-restore-error.json"
+            )
+
+            self.assertEqual(
+                evidence,
+                {
+                    "schemaVersion": 1,
+                    "verdict": "unknown",
+                    "reason": (
+                        "profile_restore_failed:"
+                        "OSError:"
+                        "profile restore failed"
+                    ),
+                },
+            )
+
+    def test_final_restored_read_failure_records_unknown_evidence_and_preserves_original_exception(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            iso, i1 = (
+                self.make_modules()
+            )
+
+            real_read_bytes = (
+                Path.read_bytes
+            )
+            reads = {
+                "count": 0
+            }
+
+            def read_bytes_side_effect(
+                path_self,
+            ):
+                if (
+                    path_self
+                    == fixture[
+                        "profile"
+                    ]
+                ):
+                    reads["count"] += 1
+
+                    # 1: setup original_payload
+                    # 2: finally comparison
+                    # 3: finally restored read
+                    if (
+                        reads["count"]
+                        == 3
+                    ):
+                        raise OSError(
+                            (
+                                "final profile "
+                                "read failed"
+                            )
+                        )
+
+                return real_read_bytes(
+                    path_self
+                )
+
+            with self.patch_modules(
+                iso,
+                i1,
+            ), mock.patch.object(
+                F3,
+                "run_case",
+                side_effect=RuntimeError(
+                    "original run failure"
+                ),
+            ), mock.patch.object(
+                Path,
+                "read_bytes",
+                new=
+                    read_bytes_side_effect,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "original run failure",
+                ):
+                    F3.run_f3(
+                        fixture["args"]
+                    )
+
+            evidence = F3.read_json(
+                fixture["artifact"]
+                / "emergency-restore-error.json"
+            )
+
+            self.assertEqual(
+                evidence,
+                {
+                    "schemaVersion": 1,
+                    "verdict": "unknown",
+                    "reason": (
+                        "profile_restore_failed:"
+                        "OSError:"
+                        "final profile read failed"
+                    ),
+                },
+            )
+
+    def test_emergency_evidence_write_failure_is_swallowed_and_original_exception_survives(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+            iso, i1 = (
+                self.make_modules()
+            )
+
+            real_atomic_bytes = (
+                F3.atomic_bytes
+            )
+            real_atomic_json = (
+                F3.atomic_json
+            )
+
+            def run_case_side_effect(
+                *args,
+            ):
+                fixture[
+                    "profile"
+                ].write_bytes(
+                    b"dirty-profile"
+                )
+                raise KeyError(
+                    "original-key-error"
+                )
+
+            def atomic_bytes_side_effect(
+                path,
+                payload,
+                mode,
+            ):
+                path = Path(path)
+
+                if (
+                    path
+                    == fixture[
+                        "profile"
+                    ]
+                ):
+                    raise OSError(
+                        "restore failed"
+                    )
+
+                return real_atomic_bytes(
+                    path,
+                    payload,
+                    mode,
+                )
+
+            def atomic_json_side_effect(
+                path,
+                value,
+            ):
+                if (
+                    Path(path).name
+                    == (
+                        "emergency-"
+                        "restore-error.json"
+                    )
+                ):
+                    raise OSError(
+                        (
+                            "evidence "
+                            "write failed"
+                        )
+                    )
+
+                return real_atomic_json(
+                    path,
+                    value,
+                )
+
+            with self.patch_modules(
+                iso,
+                i1,
+            ), mock.patch.object(
+                F3,
+                "run_case",
+                side_effect=
+                    run_case_side_effect,
+            ), mock.patch.object(
+                F3,
+                "atomic_bytes",
+                side_effect=
+                    atomic_bytes_side_effect,
+            ), mock.patch.object(
+                F3,
+                "atomic_json",
+                side_effect=
+                    atomic_json_side_effect,
+            ):
+                with self.assertRaises(
+                    KeyError
+                ) as cm:
+                    F3.run_f3(
+                        fixture["args"]
+                    )
+
+            self.assertEqual(
+                cm.exception.args,
+                (
+                    "original-key-error",
+                ),
+            )
+
+            self.assertFalse(
+                (
+                    fixture["artifact"]
+                    / (
+                        "emergency-"
+                        "restore-error.json"
+                    )
+                ).exists()
+            )
+
 if __name__ == "__main__":
     unittest.main()
