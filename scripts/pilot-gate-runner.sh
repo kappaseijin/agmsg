@@ -56,6 +56,7 @@ F2_HELPER="$SCRIPT_DIR/lib/pilot-gate-f2.py"
 F3_HELPER="$SCRIPT_DIR/lib/pilot-gate-f3.py"
 F4_HELPER="$SCRIPT_DIR/lib/pilot-gate-f4.py"
 F5_HELPER="$SCRIPT_DIR/lib/pilot-gate-f5.py"
+CLEANUP_HELPER="$SCRIPT_DIR/lib/pilot-gate-cleanup.py"
 
 SUBCOMMAND="run"
 SOURCE=""
@@ -282,6 +283,10 @@ validate_static_inputs() {
   [ -x "$F5_HELPER" ] ||
     usage_error \
       "F5 helper unavailable or not executable: $F5_HELPER"
+
+  [ -x "$CLEANUP_HELPER" ] ||
+    usage_error \
+      "cleanup helper unavailable or not executable: $CLEANUP_HELPER"
 
   [ -d "$SOURCE" ] ||
     usage_error \
@@ -1539,134 +1544,599 @@ phase_f5() {
   esac
 }
 
+phase_p5_cleanup() {
+  local status
+
+  log "P5 cleanup + cleanup verification"
+
+  set +e
+  python3 "$CLEANUP_HELPER" cleanup \
+    --run-id "$RUN_ID" \
+    --run-root "$RUN_ROOT" \
+    --gate-repo "$GATE_REPO" \
+    --gate-home "$GATE_HOME" \
+    --xdg-config "$GATE_XDG_CONFIG" \
+    --xdg-cache "$GATE_XDG_CACHE" \
+    --xdg-data "$GATE_XDG_DATA" \
+    --xdg-state "$GATE_XDG_STATE" \
+    --claude-config "$GATE_CLAUDE_CONFIG" \
+    --artifact-dir "$ARTIFACT_DIR" \
+    --gate-team "$GATE_TEAM"
+  status="$?"
+  set -e
+
+  case "$status" in
+    0)
+      log "P5 cleanup passed"
+      return "$EX_GATE_PASS"
+      ;;
+    1)
+      log "P5 cleanup failed"
+      return "$EX_GATE_FAIL"
+      ;;
+    2)
+      log "P5 cleanup unknown"
+      return "$EX_GATE_UNKNOWN"
+      ;;
+    *)
+      log \
+        "cleanup helper returned unsupported exit status: $status"
+      return "$EX_INTERNAL"
+      ;;
+  esac
+}
+
+phase_p6_live_pm_after() {
+  local control_status
+  local compare_status
+
+  log "P6 live PM final negative control"
+
+  set +e
+  run_live_pm_control "after"
+  control_status="$?"
+  set -e
+
+  set +e
+  python3 "$CLEANUP_HELPER" compare-live \
+    --artifact-dir "$ARTIFACT_DIR" \
+    --after-status "$control_status"
+  compare_status="$?"
+  set -e
+
+  case "$control_status" in
+    0|1|2)
+      ;;
+    *)
+      log \
+        "live PM after-control returned unsupported exit status: $control_status"
+      return "$EX_INTERNAL"
+      ;;
+  esac
+
+  case "$compare_status" in
+    0)
+      log "P6 live PM negative control passed"
+      return "$EX_GATE_PASS"
+      ;;
+    1)
+      log "P6 live PM negative control failed"
+      return "$EX_GATE_FAIL"
+      ;;
+    2)
+      log "P6 live PM negative control unknown"
+      return "$EX_GATE_UNKNOWN"
+      ;;
+    *)
+      log \
+        "live PM comparison returned unsupported exit status: $compare_status"
+      return "$EX_INTERNAL"
+      ;;
+  esac
+}
+
+phase_p7_aggregate() {
+  local execution_status="${1:-2}"
+  local status
+
+  log "P7 aggregate verdict + results.json"
+
+  case "$execution_status" in
+    0|1|2)
+      ;;
+    *)
+      execution_status=2
+      ;;
+  esac
+
+  set +e
+  python3 "$CLEANUP_HELPER" evaluate \
+    --run-id "$RUN_ID" \
+    --artifact-dir "$ARTIFACT_DIR" \
+    --requested-check "$CHECK" \
+    --execution-status "$execution_status"
+  status="$?"
+  set -e
+
+  case "$status" in
+    0)
+      log "P7 aggregate passed"
+      return "$EX_GATE_PASS"
+      ;;
+    1)
+      log "P7 aggregate failed"
+      return "$EX_GATE_FAIL"
+      ;;
+    2)
+      log "P7 aggregate unknown"
+      return "$EX_GATE_UNKNOWN"
+      ;;
+    *)
+      log \
+        "aggregate helper returned unsupported exit status: $status"
+      return "$EX_INTERNAL"
+      ;;
+  esac
+}
+
 subcommand_run() {
   local status
-  local n1_status
-  local i1_status
-  local f1_status
-  local f2_status
-  local f3_status
-  local f4_status
-  local f5_status
+  local n1_status="$EX_GATE_UNKNOWN"
+  local i1_status="$EX_GATE_UNKNOWN"
+  local f1_status="$EX_GATE_UNKNOWN"
+  local f2_status="$EX_GATE_UNKNOWN"
+  local f3_status="$EX_GATE_UNKNOWN"
+  local f4_status="$EX_GATE_UNKNOWN"
+  local f5_status="$EX_GATE_UNKNOWN"
+  local execution_status="$EX_GATE_PASS"
+  local cleanup_status="$EX_GATE_UNKNOWN"
+  local live_status="$EX_GATE_UNKNOWN"
+  local aggregate_status="$EX_GATE_UNKNOWN"
+  local internal_status=0
+  local continue_checks=1
 
+  #
+  # P0-P4 are mandatory prerequisites for every N1/I1/F1-F5 check.
+  #
   set +e
   run_p0_through_p4
   status="$?"
   set -e
 
-  [ "$status" -eq 0 ] ||
-    return "$status"
-
-  set +e
-  phase_n1
-  n1_status="$?"
-  set -e
-
-  [ "$n1_status" -eq 0 ] ||
-    return "$n1_status"
+  case "$status" in
+    0)
+      ;;
+    1)
+      execution_status="$EX_GATE_FAIL"
+      continue_checks=0
+      ;;
+    2)
+      execution_status="$EX_GATE_UNKNOWN"
+      continue_checks=0
+      ;;
+    *)
+      execution_status="$EX_GATE_UNKNOWN"
+      internal_status="$EX_INTERNAL"
+      continue_checks=0
+      ;;
+  esac
 
   #
-  # N1 is a prerequisite for I1. Even --check I1 therefore executes N1 first,
-  # because I1 requires the native pilot binding/session established by the
-  # preceding native integration path.
+  # N1
   #
-  if [ "$CHECK" = "N1" ]; then
-    return "$EX_GATE_PASS"
+  if [ "$continue_checks" -eq 1 ]; then
+    set +e
+    phase_n1
+    n1_status="$?"
+    set -e
+
+    case "$n1_status" in
+      0)
+        if [ "$CHECK" = "N1" ]; then
+          return "$EX_GATE_PASS"
+        fi
+        ;;
+      1)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_GATE_FAIL"
+        fi
+        execution_status="$EX_GATE_FAIL"
+        continue_checks=0
+        ;;
+      2)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_GATE_UNKNOWN"
+        fi
+        execution_status="$EX_GATE_UNKNOWN"
+        continue_checks=0
+        ;;
+      *)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_INTERNAL"
+        fi
+        execution_status="$EX_GATE_UNKNOWN"
+        internal_status="$EX_INTERNAL"
+        continue_checks=0
+        ;;
+    esac
   fi
 
-  set +e
-  phase_i1
-  i1_status="$?"
-  set -e
-
-  [ "$i1_status" -eq 0 ] ||
-    return "$i1_status"
-
-  if [ "$CHECK" = "I1" ]; then
-    return "$EX_GATE_PASS"
-  fi
-
-  set +e
-  phase_f1
-  f1_status="$?"
-  set -e
-
-  [ "$f1_status" -eq 0 ] ||
-    return "$f1_status"
-
-  if [ "$CHECK" = "F1" ]; then
-    return "$EX_GATE_PASS"
-  fi
-
-  set +e
-  phase_f2
-  f2_status="$?"
-  set -e
-
-  [ "$f2_status" -eq 0 ] ||
-    return "$f2_status"
-
-  if [ "$CHECK" = "F2" ]; then
-    return "$EX_GATE_PASS"
-  fi
-
-  set +e
-  phase_f3
-  f3_status="$?"
-  set -e
-
-  [ "$f3_status" -eq 0 ] ||
-    return "$f3_status"
-
-  if [ "$CHECK" = "F3" ]; then
-    return "$EX_GATE_PASS"
-  fi
-
-  set +e
-  phase_f4
-  f4_status="$?"
-  set -e
-
-  [ "$f4_status" -eq 0 ] ||
-    return "$f4_status"
-
-  if [ "$CHECK" = "F4" ]; then
-    return "$EX_GATE_PASS"
-  fi
-
-  set +e
-  phase_f5
-  f5_status="$?"
-  set -e
-
-  [ "$f5_status" -eq 0 ] ||
-    return "$f5_status"
-
-  if [ "$CHECK" = "F5" ]; then
-    return "$EX_GATE_PASS"
-  fi
-
-  # Critical fail-closed behavior during incremental implementation:
   #
-  # N1/I1/F1-F5 are now implemented, but the full runbook still requires
-  # P5/P6/P7, final evidence aggregation/evaluation, and cleanup. Therefore
-  # CHECK=all MUST NOT yet be interpreted as a completed full pilot gate.
-  log \
-    "Part 7 complete: N1/I1/F1-F5 passed, but P5-P7/evaluation/cleanup remain unknown; pilot_ready cannot be true"
+  # I1
+  #
+  if [ "$continue_checks" -eq 1 ]; then
+    set +e
+    phase_i1
+    i1_status="$?"
+    set -e
 
-  return "$EX_GATE_UNKNOWN"
+    case "$i1_status" in
+      0)
+        if [ "$CHECK" = "I1" ]; then
+          return "$EX_GATE_PASS"
+        fi
+        ;;
+      1)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_GATE_FAIL"
+        fi
+        execution_status="$EX_GATE_FAIL"
+        continue_checks=0
+        ;;
+      2)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_GATE_UNKNOWN"
+        fi
+        execution_status="$EX_GATE_UNKNOWN"
+        continue_checks=0
+        ;;
+      *)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_INTERNAL"
+        fi
+        execution_status="$EX_GATE_UNKNOWN"
+        internal_status="$EX_INTERNAL"
+        continue_checks=0
+        ;;
+    esac
+  fi
+
+  #
+  # F1
+  #
+  if [ "$continue_checks" -eq 1 ]; then
+    set +e
+    phase_f1
+    f1_status="$?"
+    set -e
+
+    case "$f1_status" in
+      0)
+        if [ "$CHECK" = "F1" ]; then
+          return "$EX_GATE_PASS"
+        fi
+        ;;
+      1)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_GATE_FAIL"
+        fi
+        execution_status="$EX_GATE_FAIL"
+        continue_checks=0
+        ;;
+      2)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_GATE_UNKNOWN"
+        fi
+        execution_status="$EX_GATE_UNKNOWN"
+        continue_checks=0
+        ;;
+      *)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_INTERNAL"
+        fi
+        execution_status="$EX_GATE_UNKNOWN"
+        internal_status="$EX_INTERNAL"
+        continue_checks=0
+        ;;
+    esac
+  fi
+
+  #
+  # F2
+  #
+  if [ "$continue_checks" -eq 1 ]; then
+    set +e
+    phase_f2
+    f2_status="$?"
+    set -e
+
+    case "$f2_status" in
+      0)
+        if [ "$CHECK" = "F2" ]; then
+          return "$EX_GATE_PASS"
+        fi
+        ;;
+      1)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_GATE_FAIL"
+        fi
+        execution_status="$EX_GATE_FAIL"
+        continue_checks=0
+        ;;
+      2)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_GATE_UNKNOWN"
+        fi
+        execution_status="$EX_GATE_UNKNOWN"
+        continue_checks=0
+        ;;
+      *)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_INTERNAL"
+        fi
+        execution_status="$EX_GATE_UNKNOWN"
+        internal_status="$EX_INTERNAL"
+        continue_checks=0
+        ;;
+    esac
+  fi
+
+  #
+  # F3
+  #
+  if [ "$continue_checks" -eq 1 ]; then
+    set +e
+    phase_f3
+    f3_status="$?"
+    set -e
+
+    case "$f3_status" in
+      0)
+        if [ "$CHECK" = "F3" ]; then
+          return "$EX_GATE_PASS"
+        fi
+        ;;
+      1)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_GATE_FAIL"
+        fi
+        execution_status="$EX_GATE_FAIL"
+        continue_checks=0
+        ;;
+      2)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_GATE_UNKNOWN"
+        fi
+        execution_status="$EX_GATE_UNKNOWN"
+        continue_checks=0
+        ;;
+      *)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_INTERNAL"
+        fi
+        execution_status="$EX_GATE_UNKNOWN"
+        internal_status="$EX_INTERNAL"
+        continue_checks=0
+        ;;
+    esac
+  fi
+
+  #
+  # F4
+  #
+  if [ "$continue_checks" -eq 1 ]; then
+    set +e
+    phase_f4
+    f4_status="$?"
+    set -e
+
+    case "$f4_status" in
+      0)
+        if [ "$CHECK" = "F4" ]; then
+          return "$EX_GATE_PASS"
+        fi
+        ;;
+      1)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_GATE_FAIL"
+        fi
+        execution_status="$EX_GATE_FAIL"
+        continue_checks=0
+        ;;
+      2)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_GATE_UNKNOWN"
+        fi
+        execution_status="$EX_GATE_UNKNOWN"
+        continue_checks=0
+        ;;
+      *)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_INTERNAL"
+        fi
+        execution_status="$EX_GATE_UNKNOWN"
+        internal_status="$EX_INTERNAL"
+        continue_checks=0
+        ;;
+    esac
+  fi
+
+  #
+  # F5
+  #
+  if [ "$continue_checks" -eq 1 ]; then
+    set +e
+    phase_f5
+    f5_status="$?"
+    set -e
+
+    case "$f5_status" in
+      0)
+        if [ "$CHECK" = "F5" ]; then
+          return "$EX_GATE_PASS"
+        fi
+        ;;
+      1)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_GATE_FAIL"
+        fi
+        execution_status="$EX_GATE_FAIL"
+        continue_checks=0
+        ;;
+      2)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_GATE_UNKNOWN"
+        fi
+        execution_status="$EX_GATE_UNKNOWN"
+        continue_checks=0
+        ;;
+      *)
+        if [ "$CHECK" != "all" ]; then
+          return "$EX_INTERNAL"
+        fi
+        execution_status="$EX_GATE_UNKNOWN"
+        internal_status="$EX_INTERNAL"
+        continue_checks=0
+        ;;
+    esac
+  fi
+
+  #
+  # Development/partial checks returned above. Reaching here therefore means
+  # CHECK=all.
+  #
+  # Do not continue fault injection after a prerequisite/check has produced
+  # fail/unknown. The remaining unexecuted result artifacts stay absent and
+  # P7 will preserve them as unknown; an already observed fail still dominates.
+  #
+  # P5 MUST nevertheless be attempted regardless of the N1/I1/F1-F5 result.
+  #
+  set +e
+  phase_p5_cleanup
+  cleanup_status="$?"
+  set -e
+
+  case "$cleanup_status" in
+    0|1|2)
+      ;;
+    *)
+      internal_status="$EX_INTERNAL"
+      ;;
+  esac
+
+  #
+  # P6 also runs regardless of cleanup verdict. Its before-control evidence
+  # lives outside RUN_ROOT in ARTIFACT_DIR, so it remains available after P5.
+  #
+  set +e
+  phase_p6_live_pm_after
+  live_status="$?"
+  set -e
+
+  case "$live_status" in
+    0|1|2)
+      ;;
+    *)
+      internal_status="$EX_INTERNAL"
+      ;;
+  esac
+
+  #
+  # P7 is authoritative for the semantic gate verdict. execution_status is
+  # only the N1/I1/F1-F5 execution aggregate; cleanup and live PM negative
+  # control are read independently from their artifacts by the evaluator.
+  #
+  set +e
+  phase_p7_aggregate "$execution_status"
+  aggregate_status="$?"
+  set -e
+
+  case "$aggregate_status" in
+    0|1|2)
+      ;;
+    *)
+      internal_status="$EX_INTERNAL"
+      ;;
+  esac
+
+  #
+  # A harness-internal failure remains process exit 70 even if P7 managed to
+  # emit a conservative results.json. For ordinary gate fail/unknown/pass,
+  # P7/results.json is authoritative.
+  #
+  if [ "$internal_status" -ne 0 ]; then
+    return "$EX_INTERNAL"
+  fi
+
+  return "$aggregate_status"
 }
-
 subcommand_evaluate() {
-  log \
-    "evaluate is reserved for a later Issue #396 part; refusing to synthesize a full verdict"
-  return "$EX_INTERNAL"
+  local execution_status="$EX_GATE_UNKNOWN"
+  local recorded_execution_status=""
+  local status
+
+  if [ -f "$ARTIFACT_DIR/results.json" ]; then
+    set +e
+    recorded_execution_status="$(
+      python3 - "$ARTIFACT_DIR/results.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        value = json.load(fh)
+except Exception:
+    raise SystemExit(2)
+
+status = value.get("executionStatus")
+
+mapping = {
+    "pass": "0",
+    "fail": "1",
+    "unknown": "2",
 }
 
+result = mapping.get(status)
+
+if result is None:
+    raise SystemExit(2)
+
+print(result)
+PY
+    )"
+    status="$?"
+    set -e
+
+    if [ "$status" -eq 0 ]; then
+      case "$recorded_execution_status" in
+        0|1|2)
+          execution_status="$recorded_execution_status"
+          ;;
+        *)
+          execution_status="$EX_GATE_UNKNOWN"
+          ;;
+      esac
+    fi
+  fi
+
+  set +e
+  phase_p7_aggregate "$execution_status"
+  status="$?"
+  set -e
+
+  return "$status"
+}
 subcommand_cleanup() {
-  log \
-    "cleanup is reserved for a later Issue #396 part; refusing to report cleanup success"
-  return "$EX_INTERNAL"
+  local status
+
+  set +e
+  phase_p5_cleanup
+  status="$?"
+  set -e
+
+  return "$status"
 }
 
 on_signal() {
