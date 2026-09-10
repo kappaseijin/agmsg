@@ -3817,5 +3817,1221 @@ class PilotGateIsolationF2ProofTests(unittest.TestCase):
             )
 
 
+class PilotGateIsolationN1BindingTests(unittest.TestCase):
+    def run_cli(
+        self,
+        *args: str,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                str(HELPER),
+                *args,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+
+    def make_binding_fixture(
+        self,
+        root: Path,
+        *,
+        generation: str = "1",
+        pid: str = "4242",
+        session_id: str | None = None,
+    ) -> dict[str, object]:
+        # Keep lexical and canonical paths aligned on macOS
+        # (/var -> /private/var).
+        root = root.resolve()
+
+        gate_repo = root / "gate-repo"
+        project = root / "project"
+        output = root / "validate-binding.json"
+
+        team = "agmsg-g4gate-round-d1"
+        agent = "agmsg_pm_pilot_claude"
+
+        gate_repo.mkdir(parents=True)
+        project.mkdir(parents=True)
+
+        if session_id is None:
+            session_id = (
+                "123e4567-e89b-42d3-a456-426614174000"
+            )
+
+        binding = (
+            gate_repo
+            / "run"
+            / "pilot"
+            / f"{team}__{agent}"
+            / "bindings"
+            / f"{generation}.json"
+        )
+
+        binding.parent.mkdir(
+            parents=True
+        )
+
+        value = {
+            "schemaVersion": 1,
+            "team": team,
+            "agent": agent,
+            "project": str(project),
+            "generation": generation,
+            "sessionId": session_id,
+            "pid": pid,
+            "pidStart":
+                "2026-09-11T00:00:00Z",
+            "profileDigest":
+                "profile-digest",
+            "policyVersion":
+                "policy-v1",
+            "guardDigest":
+                "guard-digest",
+            "brokerDigest":
+                "broker-digest",
+            "providerCommit":
+                "0123456789abcdef",
+        }
+
+        ISOLATION.write_json(
+            binding,
+            value,
+        )
+
+        return {
+            "root": root,
+            "gate_repo": gate_repo,
+            "project": project,
+            "output": output,
+            "team": team,
+            "agent": agent,
+            "generation": generation,
+            "pid": pid,
+            "session_id": session_id,
+            "binding": binding,
+            "value": value,
+        }
+
+    def validate_binding_argv(
+        self,
+        fixture: dict[str, object],
+        *,
+        expected_session: str | None = None,
+        binding: Path | None = None,
+        output: Path | None = None,
+        project: Path | None = None,
+        generation: str | None = None,
+        process_pid: str | None = None,
+    ) -> list[str]:
+        argv = [
+            "validate-binding",
+            "--binding",
+            str(
+                binding
+                if binding is not None
+                else fixture["binding"]
+            ),
+            "--output",
+            str(
+                output
+                if output is not None
+                else fixture["output"]
+            ),
+            "--team",
+            str(fixture["team"]),
+            "--agent",
+            str(fixture["agent"]),
+            "--project",
+            str(
+                project
+                if project is not None
+                else fixture["project"]
+            ),
+            "--generation",
+            str(
+                generation
+                if generation is not None
+                else fixture["generation"]
+            ),
+            "--process-pid",
+            str(
+                process_pid
+                if process_pid is not None
+                else fixture["pid"]
+            ),
+        ]
+
+        if expected_session is not None:
+            argv.extend(
+                [
+                    "--expected-session",
+                    expected_session,
+                ]
+            )
+
+        return argv
+
+    def check(
+        self,
+        record: dict[str, object],
+        number: str,
+    ) -> dict[str, object]:
+        return next(
+            item
+            for item
+            in record["checks"]
+            if item["number"] == number
+        )
+
+    def test_binding_generation_text_and_binding_pid_text_share_same_contract(
+        self,
+    ):
+        cases = (
+            (True, None),
+            (False, None),
+            (1, "1"),
+            (42, "42"),
+            (0, None),
+            (-1, None),
+            ("1", "1"),
+            ("42", "42"),
+            ("0", None),
+            ("01", None),
+            ("", None),
+            ("abc", None),
+            (None, None),
+            ([], None),
+            ({}, None),
+        )
+
+        for value, expected in cases:
+            with self.subTest(
+                value=value
+            ):
+                self.assertEqual(
+                    ISOLATION
+                    .binding_generation_text(
+                        value
+                    ),
+                    expected,
+                )
+
+                self.assertEqual(
+                    ISOLATION
+                    .binding_pid_text(
+                        value
+                    ),
+                    expected,
+                )
+
+    def test_find_binding_outputs_existing_regular_candidate_and_exits_zero(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_binding_fixture(
+                    Path(temp)
+                )
+            )
+
+            result = self.run_cli(
+                "find-binding",
+                "--gate-repo",
+                str(
+                    fixture["gate_repo"]
+                ),
+                "--team",
+                str(
+                    fixture["team"]
+                ),
+                "--agent",
+                str(
+                    fixture["agent"]
+                ),
+                "--generation",
+                str(
+                    fixture["generation"]
+                ),
+            )
+
+            self.assertEqual(
+                result.returncode,
+                0,
+                result.stderr,
+            )
+
+            self.assertEqual(
+                result.stdout.strip(),
+                str(
+                    fixture["binding"]
+                ),
+            )
+
+    def test_find_binding_returns_one_when_candidate_is_missing(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_binding_fixture(
+                    Path(temp)
+                )
+            )
+
+            fixture[
+                "binding"
+            ].unlink()
+
+            result = self.run_cli(
+                "find-binding",
+                "--gate-repo",
+                str(
+                    fixture["gate_repo"]
+                ),
+                "--team",
+                str(
+                    fixture["team"]
+                ),
+                "--agent",
+                str(
+                    fixture["agent"]
+                ),
+                "--generation",
+                str(
+                    fixture["generation"]
+                ),
+            )
+
+            self.assertEqual(
+                result.returncode,
+                1,
+            )
+
+            self.assertEqual(
+                result.stdout,
+                "",
+            )
+
+    def test_find_binding_returns_one_when_candidate_is_symlink(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_binding_fixture(
+                    Path(temp)
+                )
+            )
+
+            binding = fixture["binding"]
+
+            real_binding = (
+                fixture["root"]
+                / "real-binding.json"
+            )
+
+            real_binding.write_text(
+                binding.read_text(
+                    encoding="utf-8"
+                ),
+                encoding="utf-8",
+            )
+
+            binding.unlink()
+
+            try:
+                binding.symlink_to(
+                    real_binding
+                )
+            except OSError as exc:
+                self.skipTest(
+                    "symlink unavailable: "
+                    f"{exc}"
+                )
+
+            result = self.run_cli(
+                "find-binding",
+                "--gate-repo",
+                str(
+                    fixture["gate_repo"]
+                ),
+                "--team",
+                str(
+                    fixture["team"]
+                ),
+                "--agent",
+                str(
+                    fixture["agent"]
+                ),
+                "--generation",
+                str(
+                    fixture["generation"]
+                ),
+            )
+
+            self.assertEqual(
+                result.returncode,
+                1,
+            )
+
+            self.assertEqual(
+                result.stdout,
+                "",
+            )
+
+    def test_find_binding_rejects_unsafe_team_or_agent_with_exit_two(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_binding_fixture(
+                    Path(temp)
+                )
+            )
+
+            cases = (
+                (
+                    "bad/team",
+                    str(
+                        fixture["agent"]
+                    ),
+                ),
+                (
+                    str(
+                        fixture["team"]
+                    ),
+                    "bad/agent",
+                ),
+            )
+
+            for team, agent in cases:
+                with self.subTest(
+                    team=team,
+                    agent=agent,
+                ):
+                    result = (
+                        self.run_cli(
+                            "find-binding",
+                            "--gate-repo",
+                            str(
+                                fixture[
+                                    "gate_repo"
+                                ]
+                            ),
+                            "--team",
+                            team,
+                            "--agent",
+                            agent,
+                            "--generation",
+                            "1",
+                        )
+                    )
+
+                    self.assertEqual(
+                        result.returncode,
+                        2,
+                    )
+
+                    self.assertIn(
+                        (
+                            "pilot-gate-isolation: "
+                            "cannot derive "
+                            "binding path:"
+                        ),
+                        result.stderr,
+                    )
+
+    def test_find_binding_rejects_invalid_generation_with_exit_two(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_binding_fixture(
+                    Path(temp)
+                )
+            )
+
+            for generation in (
+                "0",
+                "abc",
+            ):
+                with self.subTest(
+                    generation=generation
+                ):
+                    result = (
+                        self.run_cli(
+                            "find-binding",
+                            "--gate-repo",
+                            str(
+                                fixture[
+                                    "gate_repo"
+                                ]
+                            ),
+                            "--team",
+                            str(
+                                fixture[
+                                    "team"
+                                ]
+                            ),
+                            "--agent",
+                            str(
+                                fixture[
+                                    "agent"
+                                ]
+                            ),
+                            "--generation",
+                            generation,
+                        )
+                    )
+
+                    self.assertEqual(
+                        result.returncode,
+                        2,
+                    )
+
+                    self.assertIn(
+                        (
+                            "pilot-gate-isolation: "
+                            "cannot derive binding "
+                            "path: invalid generation"
+                        ),
+                        result.stderr,
+                    )
+
+    def test_validate_binding_complete_binding_passes_without_expected_session(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_binding_fixture(
+                    Path(temp)
+                )
+            )
+
+            result = self.run_cli(
+                *self.validate_binding_argv(
+                    fixture
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                0,
+                result.stderr,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                record["schemaVersion"],
+                1,
+            )
+
+            self.assertEqual(
+                record["binding"],
+                str(
+                    fixture["binding"]
+                ),
+            )
+
+            self.assertRegex(
+                record["observedAt"],
+                UTC_RE,
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "pass",
+            )
+
+            # 7 fixed checks +
+            # 6 immutable identity fields.
+            self.assertEqual(
+                len(record["checks"]),
+                13,
+            )
+
+            self.assertNotIn(
+                (
+                    "N1.binding."
+                    "resume-session"
+                ),
+                [
+                    item["number"]
+                    for item
+                    in record["checks"]
+                ],
+            )
+
+            self.assertTrue(
+                all(
+                    item["verdict"]
+                    == "pass"
+                    for item
+                    in record["checks"]
+                )
+            )
+
+    def test_validate_binding_complete_binding_passes_with_expected_session(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_binding_fixture(
+                    Path(temp)
+                )
+            )
+
+            result = self.run_cli(
+                *self.validate_binding_argv(
+                    fixture,
+                    expected_session=str(
+                        fixture[
+                            "session_id"
+                        ]
+                    ),
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                0,
+                result.stderr,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "pass",
+            )
+
+            self.assertEqual(
+                len(record["checks"]),
+                14,
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    (
+                        "N1.binding."
+                        "resume-session"
+                    ),
+                )["verdict"],
+                "pass",
+            )
+
+    def test_validate_binding_definite_mismatch_uses_normal_fail_exit_one(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_binding_fixture(
+                    Path(temp)
+                )
+            )
+
+            value = fixture["value"]
+            value["team"] = (
+                "wrong-team"
+            )
+
+            ISOLATION.write_json(
+                fixture["binding"],
+                value,
+            )
+
+            result = self.run_cli(
+                *self.validate_binding_argv(
+                    fixture
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                1,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "fail",
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    "N1.binding.team",
+                )["verdict"],
+                "fail",
+            )
+
+    def test_validate_binding_unprovable_generation_uses_normal_unknown_exit_two(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_binding_fixture(
+                    Path(temp)
+                )
+            )
+
+            value = fixture["value"]
+
+            # bool must not be accepted as int.
+            value["generation"] = True
+
+            ISOLATION.write_json(
+                fixture["binding"],
+                value,
+            )
+
+            result = self.run_cli(
+                *self.validate_binding_argv(
+                    fixture
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "unknown",
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    (
+                        "N1.binding."
+                        "generation"
+                    ),
+                )["verdict"],
+                "unknown",
+            )
+
+    def test_validate_binding_project_canonicalization_failure_is_unknown(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_binding_fixture(
+                    Path(temp)
+                )
+            )
+
+            value = fixture["value"]
+
+            value["project"] = str(
+                fixture["root"]
+                / "missing-project"
+            )
+
+            ISOLATION.write_json(
+                fixture["binding"],
+                value,
+            )
+
+            result = self.run_cli(
+                *self.validate_binding_argv(
+                    fixture
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            item = self.check(
+                record,
+                "N1.binding.project",
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "unknown",
+            )
+
+            self.assertEqual(
+                item["verdict"],
+                "unknown",
+            )
+
+            self.assertIn(
+                "error",
+                item["detail"],
+            )
+
+    def test_validate_binding_pid_bool_is_unknown(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_binding_fixture(
+                    Path(temp)
+                )
+            )
+
+            value = fixture["value"]
+
+            value["pid"] = True
+
+            ISOLATION.write_json(
+                fixture["binding"],
+                value,
+            )
+
+            result = self.run_cli(
+                *self.validate_binding_argv(
+                    fixture
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    "N1.binding.pid",
+                )["verdict"],
+                "unknown",
+            )
+
+    def test_validate_binding_invalid_session_and_resume_session_are_failures(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_binding_fixture(
+                    Path(temp)
+                )
+            )
+
+            value = fixture["value"]
+            value["sessionId"] = (
+                "not-a-uuid"
+            )
+
+            ISOLATION.write_json(
+                fixture["binding"],
+                value,
+            )
+
+            result = self.run_cli(
+                *self.validate_binding_argv(
+                    fixture,
+                    expected_session=(
+                        "123e4567-e89b-42d3-"
+                        "a456-426614174000"
+                    ),
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                1,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "fail",
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    "N1.binding.session",
+                )["verdict"],
+                "fail",
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    (
+                        "N1.binding."
+                        "resume-session"
+                    ),
+                )["verdict"],
+                "fail",
+            )
+
+    def test_validate_binding_expected_session_mismatch_is_definite_fail(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_binding_fixture(
+                    Path(temp)
+                )
+            )
+
+            result = self.run_cli(
+                *self.validate_binding_argv(
+                    fixture,
+                    expected_session=(
+                        "aaaaaaaa-aaaa-4aaa-"
+                        "8aaa-aaaaaaaaaaaa"
+                    ),
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                1,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    "N1.binding.session",
+                )["verdict"],
+                "pass",
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    (
+                        "N1.binding."
+                        "resume-session"
+                    ),
+                )["verdict"],
+                "fail",
+            )
+
+    def test_validate_binding_required_identity_fields_must_be_nonempty_strings(
+        self,
+    ):
+        required = (
+            "pidStart",
+            "profileDigest",
+            "policyVersion",
+            "guardDigest",
+            "brokerDigest",
+            "providerCommit",
+        )
+
+        for field in required:
+            with self.subTest(
+                field=field
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = (
+                        self.make_binding_fixture(
+                            Path(temp)
+                        )
+                    )
+
+                    value = fixture["value"]
+
+                    value[field] = ""
+
+                    ISOLATION.write_json(
+                        fixture[
+                            "binding"
+                        ],
+                        value,
+                    )
+
+                    result = (
+                        self.run_cli(
+                            *self
+                            .validate_binding_argv(
+                                fixture
+                            )
+                        )
+                    )
+
+                    self.assertEqual(
+                        result.returncode,
+                        1,
+                    )
+
+                    record = (
+                        ISOLATION
+                        .load_json(
+                            fixture[
+                                "output"
+                            ]
+                        )
+                    )
+
+                    self.assertEqual(
+                        record["verdict"],
+                        "fail",
+                    )
+
+                    self.assertEqual(
+                        self.check(
+                            record,
+                            (
+                                "N1.binding."
+                                f"{field}"
+                            ),
+                        )["verdict"],
+                        "fail",
+                    )
+
+    def test_validate_binding_missing_file_is_unknown_early_return(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_binding_fixture(
+                    Path(temp)
+                )
+            )
+
+            missing = (
+                fixture["root"]
+                / "missing-binding.json"
+            )
+
+            result = self.run_cli(
+                *self.validate_binding_argv(
+                    fixture,
+                    binding=missing,
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                record,
+                {
+                    "schemaVersion": 1,
+                    "verdict": "unknown",
+                    "reason":
+                        "binding unavailable",
+                    "checks": [],
+                },
+            )
+
+    def test_validate_binding_symlink_is_fail_early_return(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_binding_fixture(
+                    Path(temp)
+                )
+            )
+
+            real_binding = (
+                fixture["binding"]
+            )
+
+            symlink = (
+                fixture["root"]
+                / "binding-link.json"
+            )
+
+            try:
+                symlink.symlink_to(
+                    real_binding
+                )
+            except OSError as exc:
+                self.skipTest(
+                    "symlink unavailable: "
+                    f"{exc}"
+                )
+
+            result = self.run_cli(
+                *self.validate_binding_argv(
+                    fixture,
+                    binding=symlink,
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                1,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                record,
+                {
+                    "schemaVersion": 1,
+                    "verdict": "fail",
+                    "reason":
+                        "binding is symlink",
+                    "checks": [],
+                },
+            )
+
+    def test_validate_binding_invalid_json_is_unknown_early_return(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_binding_fixture(
+                    Path(temp)
+                )
+            )
+
+            fixture[
+                "binding"
+            ].write_text(
+                "{not-json\n",
+                encoding="utf-8",
+            )
+
+            result = self.run_cli(
+                *self.validate_binding_argv(
+                    fixture
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                record["schemaVersion"],
+                1,
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "unknown",
+            )
+
+            self.assertEqual(
+                record["checks"],
+                [],
+            )
+
+            self.assertIn(
+                "binding unreadable:",
+                record["reason"],
+            )
+
+    def test_validate_binding_non_object_root_is_unknown_early_return(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = (
+                self.make_binding_fixture(
+                    Path(temp)
+                )
+            )
+
+            fixture[
+                "binding"
+            ].write_text(
+                "[1, 2, 3]\n",
+                encoding="utf-8",
+            )
+
+            result = self.run_cli(
+                *self.validate_binding_argv(
+                    fixture
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                record,
+                {
+                    "schemaVersion": 1,
+                    "verdict": "unknown",
+                    "reason":
+                        (
+                            "binding root is "
+                            "not object"
+                        ),
+                    "checks": [],
+                },
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
