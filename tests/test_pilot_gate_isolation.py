@@ -2140,5 +2140,1682 @@ class PilotGateIsolationPreflightTests(unittest.TestCase):
             )
 
 
+class PilotGateIsolationF2ProofTests(unittest.TestCase):
+    def run_cli(
+        self,
+        *args: str,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(HELPER), *args],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            env=env,
+        )
+
+    def git_init(self, path: Path) -> None:
+        path.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            ["git", "-C", str(path), "init", "-q"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def clean_environment(self) -> dict[str, str]:
+        env = os.environ.copy()
+
+        for key in ISOLATION.GITHUB_CREDENTIAL_ENV_KEYS:
+            env.pop(key, None)
+
+        return env
+
+    def make_fixture(
+        self,
+        root: Path,
+        *,
+        make_probe: bool = True,
+    ) -> dict[str, object]:
+        # tempfile.TemporaryDirectory() can return a path with a symlinked
+        # ancestor (e.g. macOS /var -> /private/var). command_f2_proof
+        # canonicalizes gate_repo but not the raw --probe-target argument
+        # before calling no_symlink_components(), so a non-canonical root
+        # here would make relative_to() fail and every symlink-sensitive
+        # assertion spuriously report unknown instead of the intended
+        # pass/fail. Resolve once here so every derived path is consistent.
+        root = root.resolve()
+        run_root = root / "run-root"
+        gate_repo = run_root / "repo"
+        live_repo = root / "live-repo"
+        gate_home = run_root / "home"
+        xdg_config = run_root / "xdg" / "config"
+        artifact_dir = root / "artifacts"
+
+        gate_repo.mkdir(parents=True)
+        live_repo.mkdir(parents=True)
+        gate_home.mkdir(parents=True)
+        xdg_config.mkdir(parents=True)
+        artifact_dir.mkdir(parents=True)
+
+        self.git_init(gate_repo)
+
+        target = (
+            gate_repo
+            / "probe-target"
+            / "marker"
+        )
+        target.parent.mkdir(
+            parents=True
+        )
+
+        program = (
+            gate_repo
+            / "probe-program"
+            / "f2-probe.py"
+        )
+        manifest = (
+            artifact_dir
+            / "probe-manifest.json"
+        )
+        output = (
+            artifact_dir
+            / "f2-proof.json"
+        )
+        run_id = "round-c-run"
+
+        fixture: dict[str, object] = {
+            "run_root": run_root,
+            "gate_repo": gate_repo,
+            "live_repo": live_repo,
+            "gate_home": gate_home,
+            "xdg_config": xdg_config,
+            "artifact_dir": artifact_dir,
+            "target": target,
+            "program": program,
+            "manifest": manifest,
+            "output": output,
+            "run_id": run_id,
+        }
+
+        if make_probe:
+            result = self.run_make_probe(
+                fixture
+            )
+
+            self.assertEqual(
+                result.returncode,
+                0,
+                result.stderr,
+            )
+
+        return fixture
+
+    def run_make_probe(
+        self,
+        fixture: dict[str, object],
+        *,
+        target: Path | None = None,
+        program: Path | None = None,
+        manifest: Path | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        return self.run_cli(
+            "make-f2-probe",
+            "--run-id",
+            str(fixture["run_id"]),
+            "--gate-repo",
+            str(fixture["gate_repo"]),
+            "--target",
+            str(
+                target
+                if target is not None
+                else fixture["target"]
+            ),
+            "--program",
+            str(
+                program
+                if program is not None
+                else fixture["program"]
+            ),
+            "--manifest",
+            str(
+                manifest
+                if manifest is not None
+                else fixture["manifest"]
+            ),
+            env=self.clean_environment(),
+        )
+
+    def f2_argv(
+        self,
+        fixture: dict[str, object],
+    ) -> list[str]:
+        return [
+            "f2-proof",
+            "--output",
+            str(fixture["output"]),
+            "--run-id",
+            str(fixture["run_id"]),
+            "--run-root",
+            str(fixture["run_root"]),
+            "--gate-repo",
+            str(fixture["gate_repo"]),
+            "--live-repo",
+            str(fixture["live_repo"]),
+            "--gate-home",
+            str(fixture["gate_home"]),
+            "--xdg-config",
+            str(fixture["xdg_config"]),
+            "--probe-target",
+            str(fixture["target"]),
+            "--probe-program",
+            str(fixture["program"]),
+            "--probe-manifest",
+            str(fixture["manifest"]),
+        ]
+
+    def run_f2_proof(
+        self,
+        fixture: dict[str, object],
+        *,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        return self.run_cli(
+            *self.f2_argv(fixture),
+            env=(
+                env
+                if env is not None
+                else self.clean_environment()
+            ),
+        )
+
+    def parsed_f2_args(
+        self,
+        fixture: dict[str, object],
+    ):
+        return (
+            ISOLATION
+            .build_parser()
+            .parse_args(
+                self.f2_argv(fixture)
+            )
+        )
+
+    def check(
+        self,
+        record: dict[str, object],
+        number: int,
+    ) -> dict[str, object]:
+        return next(
+            item
+            for item
+            in record["checks"]
+            if item["number"]
+            == number
+        )
+
+    def test_make_f2_probe_writes_fixed_executable_program_and_manifest(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp),
+                make_probe=False,
+            )
+
+            program = fixture["program"]
+
+            self.assertFalse(
+                program.parent.exists()
+            )
+
+            result = self.run_make_probe(
+                fixture
+            )
+
+            self.assertEqual(
+                result.returncode,
+                0,
+                result.stderr,
+            )
+
+            self.assertTrue(
+                program.is_file()
+            )
+
+            self.assertEqual(
+                program.stat().st_mode
+                & 0o777,
+                0o700,
+            )
+
+            target_real = (
+                ISOLATION
+                .canonical_nonexistent(
+                    str(
+                        fixture["target"]
+                    )
+                )
+            )
+
+            program_real = (
+                ISOLATION.canonical(
+                    program
+                )
+            )
+
+            python_real = (
+                ISOLATION.canonical(
+                    sys.executable
+                )
+            )
+
+            expected_marker = (
+                "agmsg-g4-gate-f2:"
+                f"{fixture['run_id']}\n"
+            )
+
+            manifest = (
+                ISOLATION.load_json(
+                    fixture["manifest"]
+                )
+            )
+
+            self.assertEqual(
+                manifest["schemaVersion"],
+                1,
+            )
+
+            self.assertEqual(
+                manifest["runId"],
+                fixture["run_id"],
+            )
+
+            self.assertEqual(
+                manifest["probeTarget"],
+                target_real,
+            )
+
+            self.assertEqual(
+                manifest["probeProgram"],
+                program_real,
+            )
+
+            self.assertEqual(
+                manifest[
+                    "probeProgramSha256"
+                ],
+                ISOLATION.sha256_file(
+                    program
+                ),
+            )
+
+            self.assertEqual(
+                manifest[
+                    "allowedCommand"
+                ]["argv"],
+                [
+                    python_real,
+                    program_real,
+                ],
+            )
+
+            self.assertEqual(
+                manifest[
+                    "allowedCommand"
+                ]["bashCommand"],
+                " ".join(
+                    ISOLATION.shlex.quote(
+                        value
+                    )
+                    for value
+                    in [
+                        python_real,
+                        program_real,
+                    ]
+                ),
+            )
+
+            self.assertEqual(
+                manifest[
+                    "markerSha256"
+                ],
+                hashlib.sha256(
+                    expected_marker.encode(
+                        "utf-8"
+                    )
+                ).hexdigest(),
+            )
+
+            source = (
+                program.read_text(
+                    encoding="utf-8"
+                )
+            )
+
+            self.assertIn(
+                (
+                    f"TARGET = "
+                    f"{target_real!r}"
+                ),
+                source,
+            )
+
+            self.assertIn(
+                (
+                    f"MARKER = "
+                    f"{expected_marker!r}"
+                ),
+                source,
+            )
+
+            self.assertNotIn(
+                "sys.argv[",
+                source,
+            )
+
+            self.assertNotIn(
+                "argparse",
+                source,
+            )
+
+    def test_make_f2_probe_rejects_target_outside_gate_repository(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            fixture = self.make_fixture(
+                root,
+                make_probe=False,
+            )
+
+            outside = (
+                root
+                / "outside-target"
+            )
+
+            result = self.run_make_probe(
+                fixture,
+                target=outside,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            self.assertIn(
+                (
+                    "refusing F2 probe "
+                    "target outside "
+                    "gate repository"
+                ),
+                result.stderr,
+            )
+
+    def test_make_f2_probe_rejects_preexisting_target(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp),
+                make_probe=False,
+            )
+
+            fixture[
+                "target"
+            ].write_text(
+                "existing\n",
+                encoding="utf-8",
+            )
+
+            result = self.run_make_probe(
+                fixture
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            self.assertIn(
+                (
+                    "refusing pre-existing "
+                    "F2 probe target"
+                ),
+                result.stderr,
+            )
+
+    def test_make_f2_probe_rejects_program_parent_outside_gate_repository(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            fixture = self.make_fixture(
+                root,
+                make_probe=False,
+            )
+
+            outside_program = (
+                root
+                / "outside-program"
+                / "probe.py"
+            )
+
+            result = self.run_make_probe(
+                fixture,
+                program=outside_program,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            self.assertIn(
+                (
+                    "F2 probe program "
+                    "must be inside "
+                    "gate repository"
+                ),
+                result.stderr,
+            )
+
+    def test_generated_probe_creates_exact_marker_and_second_run_is_refused_by_o_excl(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            first = subprocess.run(
+                [
+                    sys.executable,
+                    str(
+                        fixture[
+                            "program"
+                        ]
+                    ),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(
+                first.returncode,
+                0,
+                first.stderr,
+            )
+
+            self.assertEqual(
+                fixture[
+                    "target"
+                ].read_text(
+                    encoding="utf-8"
+                ),
+                (
+                    "agmsg-g4-gate-f2:"
+                    f"{fixture['run_id']}\n"
+                ),
+            )
+
+            second = subprocess.run(
+                [
+                    sys.executable,
+                    str(
+                        fixture[
+                            "program"
+                        ]
+                    ),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(
+                second.returncode,
+                1,
+            )
+
+            self.assertIn(
+                "f2-probe: create failed:",
+                second.stderr,
+            )
+
+            self.assertEqual(
+                fixture[
+                    "target"
+                ].read_text(
+                    encoding="utf-8"
+                ),
+                (
+                    "agmsg-g4-gate-f2:"
+                    f"{fixture['run_id']}\n"
+                ),
+            )
+
+    def test_f2_proof_complete_fixture_passes_all_twelve_items_and_exits_zero(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            result = self.run_f2_proof(
+                fixture
+            )
+
+            self.assertEqual(
+                result.returncode,
+                0,
+                result.stderr,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                record["schemaVersion"],
+                1,
+            )
+
+            self.assertEqual(
+                record["runId"],
+                fixture["run_id"],
+            )
+
+            self.assertRegex(
+                record["observedAt"],
+                UTC_RE,
+            )
+
+            self.assertEqual(
+                record["gateRepo"],
+                ISOLATION.canonical(
+                    fixture["gate_repo"]
+                ),
+            )
+
+            self.assertEqual(
+                record["liveRepo"],
+                ISOLATION.canonical(
+                    fixture["live_repo"]
+                ),
+            )
+
+            self.assertEqual(
+                record["probeTarget"],
+                (
+                    ISOLATION
+                    .canonical_nonexistent(
+                        str(
+                            fixture[
+                                "target"
+                            ]
+                        )
+                    )
+                ),
+            )
+
+            self.assertTrue(
+                record["safe"]
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "pass",
+            )
+
+            self.assertEqual(
+                len(record["checks"]),
+                12,
+            )
+
+            self.assertEqual(
+                [
+                    item["number"]
+                    for item
+                    in record["checks"]
+                ],
+                list(
+                    range(1, 13)
+                ),
+            )
+
+            self.assertTrue(
+                all(
+                    item["verdict"]
+                    == "pass"
+                    for item
+                    in record["checks"]
+                )
+            )
+
+    def test_f2_proof_item1_unknown_makes_items3_and4_unknown_and_barrier_exits_two(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            args = self.parsed_f2_args(
+                fixture
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                self.clean_environment(),
+                clear=True,
+            ):
+                with mock.patch.object(
+                    ISOLATION,
+                    "canonical_nonexistent",
+                    side_effect=(
+                        FileNotFoundError(
+                            (
+                                "target identity "
+                                "unavailable"
+                            )
+                        )
+                    ),
+                ):
+                    status = (
+                        ISOLATION
+                        .command_f2_proof(
+                            args
+                        )
+                    )
+
+            self.assertEqual(
+                status,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "unknown",
+            )
+
+            self.assertFalse(
+                record["safe"]
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    1,
+                )["verdict"],
+                "unknown",
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    3,
+                )["verdict"],
+                "unknown",
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    4,
+                )["verdict"],
+                "unknown",
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    3,
+                )["detail"]["reason"],
+                (
+                    "target "
+                    "canonicalization "
+                    "unavailable"
+                ),
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    4,
+                )["detail"]["reason"],
+                (
+                    "target "
+                    "canonicalization "
+                    "unavailable"
+                ),
+            )
+
+    def test_f2_proof_item2_is_unknown_when_deepest_existing_ancestor_cannot_be_proved(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            args = self.parsed_f2_args(
+                fixture
+            )
+
+            canonical_target = (
+                ISOLATION
+                .canonical_nonexistent(
+                    str(
+                        fixture["target"]
+                    )
+                )
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                self.clean_environment(),
+                clear=True,
+            ):
+                with mock.patch.object(
+                    ISOLATION,
+                    "canonical_nonexistent",
+                    return_value=(
+                        canonical_target
+                    ),
+                ):
+                    with mock.patch.object(
+                        ISOLATION,
+                        (
+                            "longest_existing_"
+                            "ancestor"
+                        ),
+                        side_effect=(
+                            FileNotFoundError(
+                                (
+                                    "ancestor "
+                                    "unavailable"
+                                )
+                            )
+                        ),
+                    ):
+                        status = (
+                            ISOLATION
+                            .command_f2_proof(
+                                args
+                            )
+                        )
+
+            self.assertEqual(
+                status,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    1,
+                )["verdict"],
+                "pass",
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    2,
+                )["verdict"],
+                "unknown",
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "unknown",
+            )
+
+    def test_f2_proof_item3_fails_for_target_outside_gate_repository(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            fixture = self.make_fixture(
+                root
+            )
+
+            outside = (
+                root
+                / "outside"
+                / "marker"
+            )
+
+            outside.parent.mkdir()
+
+            fixture[
+                "target"
+            ] = outside
+
+            manifest = (
+                ISOLATION.load_json(
+                    fixture["manifest"]
+                )
+            )
+
+            manifest[
+                "probeTarget"
+            ] = (
+                ISOLATION
+                .canonical_nonexistent(
+                    str(outside)
+                )
+            )
+
+            ISOLATION.write_json(
+                fixture["manifest"],
+                manifest,
+            )
+
+            result = self.run_f2_proof(
+                fixture
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    3,
+                )["verdict"],
+                "fail",
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "fail",
+            )
+
+            self.assertFalse(
+                record["safe"]
+            )
+
+    def test_f2_proof_item4_fails_when_target_is_inside_live_repository(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            fixture[
+                "live_repo"
+            ] = fixture[
+                "gate_repo"
+            ]
+
+            result = self.run_f2_proof(
+                fixture
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    3,
+                )["verdict"],
+                "pass",
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    4,
+                )["verdict"],
+                "fail",
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "fail",
+            )
+
+    def test_f2_proof_items5_and6_detect_repository_nesting(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            fixture = self.make_fixture(
+                root
+            )
+
+            fixture[
+                "live_repo"
+            ] = fixture[
+                "run_root"
+            ]
+
+            result = self.run_f2_proof(
+                fixture
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    5,
+                )["verdict"],
+                "fail",
+            )
+
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            nested_live = (
+                fixture[
+                    "gate_repo"
+                ]
+                / "nested-live"
+            )
+
+            nested_live.mkdir()
+
+            fixture[
+                "live_repo"
+            ] = nested_live
+
+            result = self.run_f2_proof(
+                fixture
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    6,
+                )["verdict"],
+                "fail",
+            )
+
+    def test_f2_proof_item7_fails_for_symlink_component_in_target_parent(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            fixture = self.make_fixture(
+                root,
+                make_probe=False,
+            )
+
+            real_parent = (
+                fixture[
+                    "gate_repo"
+                ]
+                / "real-parent"
+            )
+
+            real_parent.mkdir()
+
+            linked_parent = (
+                fixture[
+                    "gate_repo"
+                ]
+                / "linked-parent"
+            )
+
+            try:
+                linked_parent.symlink_to(
+                    real_parent,
+                    target_is_directory=True,
+                )
+            except OSError as exc:
+                self.skipTest(
+                    (
+                        "symlink "
+                        f"unavailable: {exc}"
+                    )
+                )
+
+            fixture[
+                "target"
+            ] = (
+                linked_parent
+                / "marker"
+            )
+
+            result = self.run_make_probe(
+                fixture
+            )
+
+            self.assertEqual(
+                result.returncode,
+                0,
+                result.stderr,
+            )
+
+            result = self.run_f2_proof(
+                fixture
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            item7 = self.check(
+                record,
+                7,
+            )
+
+            self.assertEqual(
+                item7["verdict"],
+                "fail",
+            )
+
+            self.assertIn(
+                str(
+                    linked_parent.absolute()
+                ),
+                item7[
+                    "detail"
+                ]["problems"],
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "fail",
+            )
+
+    def test_f2_proof_item8_fails_for_preexisting_target_and_records_mode_and_nlink(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            fixture[
+                "target"
+            ].write_text(
+                "already here\n",
+                encoding="utf-8",
+            )
+
+            result = self.run_f2_proof(
+                fixture
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            item8 = self.check(
+                record,
+                8,
+            )
+
+            self.assertEqual(
+                item8["verdict"],
+                "fail",
+            )
+
+            self.assertTrue(
+                item8[
+                    "detail"
+                ]["lexists"]
+            )
+
+            self.assertIn(
+                "mode",
+                item8["detail"],
+            )
+
+            self.assertIn(
+                "nlink",
+                item8["detail"],
+            )
+
+            self.assertGreaterEqual(
+                item8[
+                    "detail"
+                ]["nlink"],
+                1,
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "fail",
+            )
+
+    def test_f2_proof_item9_remote_failure_is_fail_but_safety_barrier_exits_two(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            add_remote = (
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(
+                            fixture[
+                                "gate_repo"
+                            ]
+                        ),
+                        "remote",
+                        "add",
+                        "origin",
+                        (
+                            "https://"
+                            "example.invalid/"
+                            "agmsg.git"
+                        ),
+                    ],
+                    stdout=(
+                        subprocess.PIPE
+                    ),
+                    stderr=(
+                        subprocess.PIPE
+                    ),
+                    text=True,
+                    check=False,
+                )
+            )
+
+            self.assertEqual(
+                add_remote.returncode,
+                0,
+                add_remote.stderr,
+            )
+
+            result = self.run_f2_proof(
+                fixture
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                self.check(
+                    record,
+                    9,
+                )["verdict"],
+                "fail",
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "fail",
+            )
+
+            self.assertFalse(
+                record["safe"]
+            )
+
+    def test_f2_proof_item10_fails_when_gate_credentials_exist(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            credentials = (
+                fixture[
+                    "gate_home"
+                ]
+                / ".git-credentials"
+            )
+
+            credentials.write_text(
+                (
+                    "https://"
+                    "example.invalid\n"
+                ),
+                encoding="utf-8",
+            )
+
+            result = self.run_f2_proof(
+                fixture
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            item10 = self.check(
+                record,
+                10,
+            )
+
+            self.assertEqual(
+                item10["verdict"],
+                "fail",
+            )
+
+            self.assertIn(
+                str(
+                    credentials.resolve()
+                ),
+                item10[
+                    "detail"
+                ]["found"],
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "fail",
+            )
+
+    def test_f2_proof_item11_fails_when_github_credential_environment_is_present(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            env = (
+                self.clean_environment()
+            )
+
+            env["GH_TOKEN"] = (
+                "not-a-real-secret-"
+                "test-value"
+            )
+
+            result = self.run_f2_proof(
+                fixture,
+                env=env,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            item11 = self.check(
+                record,
+                11,
+            )
+
+            self.assertEqual(
+                item11["verdict"],
+                "fail",
+            )
+
+            self.assertTrue(
+                item11[
+                    "detail"
+                ]["GH_TOKEN"]
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "fail",
+            )
+
+    def test_f2_proof_item12_malformed_manifest_forms_are_unknown_and_exit_two(
+        self,
+    ):
+        mutations = (
+            "invalid-json",
+            "missing-allowed-command",
+            "bad-argv",
+        )
+
+        for mutation in mutations:
+            with self.subTest(
+                mutation=mutation
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = (
+                        self.make_fixture(
+                            Path(temp)
+                        )
+                    )
+
+                    if mutation == "invalid-json":
+                        fixture[
+                            "manifest"
+                        ].write_text(
+                            "{not-json\n",
+                            encoding="utf-8",
+                        )
+
+                    elif (
+                        mutation
+                        == "missing-allowed-command"
+                    ):
+                        manifest = (
+                            ISOLATION
+                            .load_json(
+                                fixture[
+                                    "manifest"
+                                ]
+                            )
+                        )
+
+                        manifest.pop(
+                            "allowedCommand"
+                        )
+
+                        ISOLATION.write_json(
+                            fixture[
+                                "manifest"
+                            ],
+                            manifest,
+                        )
+
+                    else:
+                        manifest = (
+                            ISOLATION
+                            .load_json(
+                                fixture[
+                                    "manifest"
+                                ]
+                            )
+                        )
+
+                        manifest[
+                            "allowedCommand"
+                        ]["argv"] = [
+                            "only-one-element"
+                        ]
+
+                        ISOLATION.write_json(
+                            fixture[
+                                "manifest"
+                            ],
+                            manifest,
+                        )
+
+                    result = (
+                        self.run_f2_proof(
+                            fixture
+                        )
+                    )
+
+                    self.assertEqual(
+                        result.returncode,
+                        2,
+                    )
+
+                    record = (
+                        ISOLATION
+                        .load_json(
+                            fixture[
+                                "output"
+                            ]
+                        )
+                    )
+
+                    item12 = (
+                        self.check(
+                            record,
+                            12,
+                        )
+                    )
+
+                    self.assertEqual(
+                        item12[
+                            "verdict"
+                        ],
+                        "unknown",
+                    )
+
+                    self.assertEqual(
+                        record[
+                            "verdict"
+                        ],
+                        "unknown",
+                    )
+
+                    self.assertFalse(
+                        record["safe"]
+                    )
+
+                    self.assertIn(
+                        "error",
+                        item12["detail"],
+                    )
+
+    def test_f2_proof_item12_program_digest_mismatch_is_definite_fail(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            manifest = (
+                ISOLATION.load_json(
+                    fixture["manifest"]
+                )
+            )
+
+            manifest[
+                "probeProgramSha256"
+            ] = "0" * 64
+
+            ISOLATION.write_json(
+                fixture["manifest"],
+                manifest,
+            )
+
+            result = self.run_f2_proof(
+                fixture
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            item12 = self.check(
+                record,
+                12,
+            )
+
+            self.assertEqual(
+                item12["verdict"],
+                "fail",
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "fail",
+            )
+
+            self.assertFalse(
+                record["safe"]
+            )
+
+            self.assertNotEqual(
+                item12[
+                    "detail"
+                ]["programSha256"],
+                manifest[
+                    "probeProgramSha256"
+                ],
+            )
+
+    def test_f2_proof_base_canonicalization_failure_writes_unknown_without_checks(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            fixture = self.make_fixture(
+                root
+            )
+
+            fixture[
+                "gate_repo"
+            ] = (
+                root
+                / "missing-gate-repo"
+            )
+
+            result = self.run_f2_proof(
+                fixture
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            record = (
+                ISOLATION.load_json(
+                    fixture["output"]
+                )
+            )
+
+            self.assertEqual(
+                record["schemaVersion"],
+                1,
+            )
+
+            self.assertEqual(
+                record["runId"],
+                fixture["run_id"],
+            )
+
+            self.assertFalse(
+                record["safe"]
+            )
+
+            self.assertEqual(
+                record["verdict"],
+                "unknown",
+            )
+
+            self.assertEqual(
+                record["checks"],
+                [],
+            )
+
+            self.assertIn(
+                (
+                    "base canonicalization "
+                    "unavailable"
+                ),
+                record["reason"],
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
