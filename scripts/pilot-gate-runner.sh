@@ -52,6 +52,7 @@ SKILL_DIR="$(
 ISOLATION_HELPER="$SCRIPT_DIR/lib/pilot-gate-isolation.py"
 I1_HELPER="$SCRIPT_DIR/lib/pilot-gate-i1.py"
 F1_HELPER="$SCRIPT_DIR/lib/pilot-gate-f1.py"
+F2_HELPER="$SCRIPT_DIR/lib/pilot-gate-f2.py"
 
 SUBCOMMAND="run"
 SOURCE=""
@@ -95,7 +96,7 @@ Usage:
     --live-skill-dir <live-agmsg-root> \
     --artifact-dir <artifact-dir> \
     [--collector-cutoff-seconds <seconds>] \
-    [--check all|N1|I1|F1]
+    [--check all|N1|I1|F1|F2]
 
 Subcommands:
   preflight
@@ -103,7 +104,7 @@ Subcommands:
 
   run
       Execute P0-P4 followed by the implemented gate checks.
-      In Issue #396 Part 3 this means N1, I1, and F1.
+      In Issue #396 Part 4 this means N1, I1, F1, and F2.
 
   evaluate
       Reserved for a later Issue #396 part.
@@ -128,8 +129,8 @@ Notes:
 
   --check N1 is intended only for development/partial verification.
 
-  --check all can NEVER return gate-pass from the Part 3 implementation
-  because F2-F5 have not yet been implemented.
+  --check all can NEVER return gate-pass from the Part 4 implementation
+  because F3-F5 have not yet been implemented.
 USAGE
 }
 
@@ -239,11 +240,11 @@ parse_args() {
   esac
 
   case "$CHECK" in
-    all|N1|I1|F1)
+    all|N1|I1|F1|F2)
       ;;
     *)
       usage_error \
-        "--check must be one of: all, N1, I1, F1"
+        "--check must be one of: all, N1, I1, F1, F2"
       ;;
   esac
 }
@@ -260,6 +261,10 @@ validate_static_inputs() {
   [ -x "$F1_HELPER" ] ||
     usage_error \
       "F1 helper unavailable or not executable: $F1_HELPER"
+
+  [ -x "$F2_HELPER" ] ||
+    usage_error \
+      "F2 helper unavailable or not executable: $F2_HELPER"
 
   [ -d "$SOURCE" ] ||
     usage_error \
@@ -1368,11 +1373,49 @@ phase_f1() {
   esac
 }
 
+phase_f2() {
+  local status
+
+  log "F2 PreToolUse hook unavailable"
+
+  set +e
+  python3 "$F2_HELPER" \
+    --run-id "$RUN_ID" \
+    --run-root "$RUN_ROOT" \
+    --gate-repo "$GATE_REPO" \
+    --artifact-dir "$ARTIFACT_DIR" \
+    --gate-team "$GATE_TEAM" \
+    --claude-config "$GATE_CLAUDE_CONFIG"
+  status="$?"
+  set -e
+
+  case "$status" in
+    0)
+      log "F2 passed"
+      return "$EX_GATE_PASS"
+      ;;
+    1)
+      log "F2 failed"
+      return "$EX_GATE_FAIL"
+      ;;
+    2)
+      log "F2 unknown"
+      return "$EX_GATE_UNKNOWN"
+      ;;
+    *)
+      log \
+        "F2 helper returned unsupported exit status: $status"
+      return "$EX_INTERNAL"
+      ;;
+  esac
+}
+
 subcommand_run() {
   local status
   local n1_status
   local i1_status
   local f1_status
+  local f2_status
 
   set +e
   run_p0_through_p4
@@ -1423,13 +1466,25 @@ subcommand_run() {
     return "$EX_GATE_PASS"
   fi
 
+  set +e
+  phase_f2
+  f2_status="$?"
+  set -e
+
+  [ "$f2_status" -eq 0 ] ||
+    return "$f2_status"
+
+  if [ "$CHECK" = "F2" ]; then
+    return "$EX_GATE_PASS"
+  fi
+
   # Critical fail-closed behavior during incremental implementation:
   #
-  # F2-F5 do not exist yet after F1 implementation. Therefore an "all"
+  # F3-F5 do not exist yet after F2 implementation. Therefore an "all"
   # invocation remains
   # incomplete and MUST NOT appear as a successful full gate.
   log \
-    "Part 3 complete: N1/I1/F1 passed, but F2-F5 remain unknown; pilot_ready cannot be true"
+    "Part 4 complete: N1/I1/F1/F2 passed, but F3-F5 remain unknown; pilot_ready cannot be true"
 
   return "$EX_GATE_UNKNOWN"
 }
