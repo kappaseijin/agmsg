@@ -119,7 +119,15 @@ def main() -> int:
     if operation == "comment":
         if set(options) != {"--repo", "--body-file"}:
             die("issue comment requires exactly --repo and --body-file")
+
         body_path = pathlib.Path(options["--body-file"])
+
+        # Check the lexical path before resolve().  Once resolve() follows a
+        # symlink, is_symlink() on the resolved path can no longer prove that
+        # the caller supplied a non-symlink path.
+        if body_path.is_symlink():
+            die("body file must be regular non-symlink file")
+
         try:
             body_real = body_path.resolve(strict=True)
         except OSError as exc:
@@ -129,7 +137,7 @@ def main() -> int:
             body_real.relative_to(allowed_root)
         except ValueError:
             die("body file outside gate broker state root")
-        if not body_real.is_file() or body_real.is_symlink():
+        if not body_real.is_file():
             die("body file must be regular non-symlink file")
         body = body_real.read_text(encoding="utf-8")
         if len(body.encode("utf-8")) > 4096:
