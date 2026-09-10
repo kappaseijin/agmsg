@@ -5033,5 +5033,1039 @@ class PilotGateIsolationN1BindingTests(unittest.TestCase):
             )
 
 
+class PilotGateIsolationN1ProcessAndTranscriptTests(unittest.TestCase):
+    SESSION_ID = "123e4567-e89b-42d3-a456-426614174000"
+    OTHER_SESSION_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+    def run_cli(
+        self,
+        *args: str,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                str(HELPER),
+                *args,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+
+    def write_command(
+        self,
+        root: Path,
+        text: str,
+    ) -> Path:
+        path = root / "command.txt"
+
+        path.write_text(
+            text,
+            encoding="utf-8",
+        )
+
+        return path
+
+    def make_settings(
+        self,
+        root: Path,
+        name: str = "settings.json",
+    ) -> Path:
+        path = root / name
+
+        path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        path.write_text(
+            "{}\n",
+            encoding="utf-8",
+        )
+
+        return path
+
+    def validate_process_argv(
+        self,
+        command_file: Path,
+        *,
+        mode: str,
+        session_id: str,
+        settings: Path,
+    ) -> list[str]:
+        return [
+            "validate-process-command",
+            "--command-file",
+            str(command_file),
+            "--mode",
+            mode,
+            "--session-id",
+            session_id,
+            "--settings",
+            str(settings),
+        ]
+
+    def write_transcript(
+        self,
+        path: Path,
+        records: list[object],
+    ) -> None:
+        path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        with open(
+            path,
+            "w",
+            encoding="utf-8",
+            newline="\n",
+        ) as fh:
+            for record in records:
+                if isinstance(
+                    record,
+                    str,
+                ):
+                    fh.write(record)
+
+                else:
+                    fh.write(
+                        json.dumps(
+                            record
+                        )
+                    )
+
+                fh.write("\n")
+
+    def test_find_option_value_handles_present_missing_and_trailing_option(
+        self,
+    ):
+        self.assertEqual(
+            ISOLATION.find_option_value(
+                [
+                    "claude",
+                    "--settings",
+                    "/tmp/settings.json",
+                    "--session-id",
+                    self.SESSION_ID,
+                ],
+                "--settings",
+            ),
+            "/tmp/settings.json",
+        )
+
+        self.assertIsNone(
+            ISOLATION.find_option_value(
+                [
+                    "claude",
+                    "--session-id",
+                    self.SESSION_ID,
+                ],
+                "--settings",
+            )
+        )
+
+        self.assertIsNone(
+            ISOLATION.find_option_value(
+                [
+                    "claude",
+                    "--settings",
+                ],
+                "--settings",
+            )
+        )
+
+    def test_validate_process_command_unreadable_empty_and_unparseable_are_unknown(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            settings = self.make_settings(
+                root
+            )
+
+            missing = (
+                root
+                / "missing-command.txt"
+            )
+
+            result = self.run_cli(
+                *self.validate_process_argv(
+                    missing,
+                    mode="fresh",
+                    session_id=self.SESSION_ID,
+                    settings=settings,
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            self.assertIn(
+                "process command unreadable:",
+                result.stderr,
+            )
+
+            empty = self.write_command(
+                root,
+                "   \n\t",
+            )
+
+            result = self.run_cli(
+                *self.validate_process_argv(
+                    empty,
+                    mode="fresh",
+                    session_id=self.SESSION_ID,
+                    settings=settings,
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            malformed = self.write_command(
+                root,
+                "claude --settings 'unterminated",
+            )
+
+            result = self.run_cli(
+                *self.validate_process_argv(
+                    malformed,
+                    mode="fresh",
+                    session_id=self.SESSION_ID,
+                    settings=settings,
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+    def test_validate_process_command_defensively_rejects_empty_split_result(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            settings = self.make_settings(
+                root
+            )
+
+            command_file = (
+                self.write_command(
+                    root,
+                    "syntactically-present",
+                )
+            )
+
+            args = (
+                ISOLATION
+                .build_parser()
+                .parse_args(
+                    self.validate_process_argv(
+                        command_file,
+                        mode="fresh",
+                        session_id=self.SESSION_ID,
+                        settings=settings,
+                    )
+                )
+            )
+
+            with mock.patch.object(
+                ISOLATION.shlex,
+                "split",
+                return_value=[],
+            ):
+                status = (
+                    ISOLATION
+                    .command_validate_process_command(
+                        args
+                    )
+                )
+
+            self.assertEqual(
+                status,
+                2,
+            )
+
+    def test_validate_process_command_fresh_accepts_matching_session_and_later_matching_settings(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            settings = self.make_settings(
+                root,
+                "settings dir/settings.json",
+            )
+
+            missing_settings = (
+                root
+                / "missing"
+                / "settings.json"
+            )
+
+            command = " ".join(
+                [
+                    "claude",
+                    "--settings",
+                    ISOLATION.shlex.quote(
+                        str(
+                            missing_settings
+                        )
+                    ),
+                    "--settings",
+                    ISOLATION.shlex.quote(
+                        str(settings)
+                    ),
+                    "--session-id",
+                    self.SESSION_ID,
+                ]
+            )
+
+            command_file = (
+                self.write_command(
+                    root,
+                    command,
+                )
+            )
+
+            result = self.run_cli(
+                *self.validate_process_argv(
+                    command_file,
+                    mode="fresh",
+                    session_id=self.SESSION_ID,
+                    settings=settings,
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                0,
+                result.stderr,
+            )
+
+    def test_validate_process_command_resume_accepts_matching_resume_and_settings(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            settings = self.make_settings(
+                root
+            )
+
+            command = " ".join(
+                [
+                    "claude",
+                    "--settings",
+                    ISOLATION.shlex.quote(
+                        str(settings)
+                    ),
+                    "--resume",
+                    self.SESSION_ID,
+                ]
+            )
+
+            command_file = (
+                self.write_command(
+                    root,
+                    command,
+                )
+            )
+
+            result = self.run_cli(
+                *self.validate_process_argv(
+                    command_file,
+                    mode="resume",
+                    session_id=self.SESSION_ID,
+                    settings=settings,
+                )
+            )
+
+            self.assertEqual(
+                result.returncode,
+                0,
+                result.stderr,
+            )
+
+    def test_validate_process_command_fresh_rejects_wrong_session_resume_mixture_and_settings_mismatch(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            settings = self.make_settings(
+                root
+            )
+
+            other_settings = (
+                self.make_settings(
+                    root,
+                    "other-settings.json",
+                )
+            )
+
+            cases = {
+                "wrong-session": [
+                    "claude",
+                    "--settings",
+                    str(settings),
+                    "--session-id",
+                    self.OTHER_SESSION_ID,
+                ],
+                "resume-mixed": [
+                    "claude",
+                    "--settings",
+                    str(settings),
+                    "--session-id",
+                    self.SESSION_ID,
+                    "--resume",
+                    self.SESSION_ID,
+                ],
+                "settings-mismatch": [
+                    "claude",
+                    "--settings",
+                    str(other_settings),
+                    "--session-id",
+                    self.SESSION_ID,
+                ],
+            }
+
+            for name, argv in cases.items():
+                with self.subTest(
+                    name=name
+                ):
+                    command_file = (
+                        self.write_command(
+                            root,
+                            " ".join(
+                                ISOLATION
+                                .shlex
+                                .quote(word)
+                                for word
+                                in argv
+                            ),
+                        )
+                    )
+
+                    result = (
+                        self.run_cli(
+                            *self
+                            .validate_process_argv(
+                                command_file,
+                                mode="fresh",
+                                session_id=(
+                                    self.SESSION_ID
+                                ),
+                                settings=settings,
+                            )
+                        )
+                    )
+
+                    self.assertEqual(
+                        result.returncode,
+                        1,
+                        result.stderr,
+                    )
+
+    def test_validate_process_command_resume_rejects_wrong_session_fresh_mixture_and_settings_mismatch(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            settings = self.make_settings(
+                root
+            )
+
+            other_settings = (
+                self.make_settings(
+                    root,
+                    "other-settings.json",
+                )
+            )
+
+            cases = {
+                "wrong-resume-session": [
+                    "claude",
+                    "--settings",
+                    str(settings),
+                    "--resume",
+                    self.OTHER_SESSION_ID,
+                ],
+                "fresh-mixed": [
+                    "claude",
+                    "--settings",
+                    str(settings),
+                    "--resume",
+                    self.SESSION_ID,
+                    "--session-id",
+                    self.SESSION_ID,
+                ],
+                "settings-mismatch": [
+                    "claude",
+                    "--settings",
+                    str(other_settings),
+                    "--resume",
+                    self.SESSION_ID,
+                ],
+            }
+
+            for name, argv in cases.items():
+                with self.subTest(
+                    name=name
+                ):
+                    command_file = (
+                        self.write_command(
+                            root,
+                            " ".join(
+                                ISOLATION
+                                .shlex
+                                .quote(word)
+                                for word
+                                in argv
+                            ),
+                        )
+                    )
+
+                    result = (
+                        self.run_cli(
+                            *self
+                            .validate_process_argv(
+                                command_file,
+                                mode="resume",
+                                session_id=(
+                                    self.SESSION_ID
+                                ),
+                                settings=settings,
+                            )
+                        )
+                    )
+
+                    self.assertEqual(
+                        result.returncode,
+                        1,
+                        result.stderr,
+                    )
+
+    def test_json_tree_contains_session_supports_all_identity_key_variants_and_nested_structures(
+        self,
+    ):
+        for key in (
+            "sessionId",
+            "session_id",
+            "sessionID",
+        ):
+            with self.subTest(
+                key=key
+            ):
+                self.assertTrue(
+                    ISOLATION
+                    .json_tree_contains_session(
+                        {
+                            key:
+                                self.SESSION_ID,
+                        },
+                        self.SESSION_ID,
+                    )
+                )
+
+        nested = {
+            "outer": [
+                {
+                    "middle": {
+                        "items": [
+                            {
+                                "session_id":
+                                    self.SESSION_ID,
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+
+        self.assertTrue(
+            ISOLATION
+            .json_tree_contains_session(
+                nested,
+                self.SESSION_ID,
+            )
+        )
+
+        self.assertFalse(
+            ISOLATION
+            .json_tree_contains_session(
+                {
+                    "sessionId":
+                        self.OTHER_SESSION_ID,
+                    "nested": {
+                        "unrelated":
+                            self.SESSION_ID,
+                    },
+                },
+                self.SESSION_ID,
+            )
+        )
+
+        self.assertFalse(
+            ISOLATION
+            .json_tree_contains_session(
+                (
+                    "sessionId="
+                    + self.SESSION_ID
+                ),
+                self.SESSION_ID,
+            )
+        )
+
+        self.assertFalse(
+            ISOLATION
+            .json_tree_contains_session(
+                42,
+                self.SESSION_ID,
+            )
+        )
+
+    def test_transcript_has_session_skips_blank_and_bad_json_and_finds_later_match(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            transcript = (
+                root
+                / "transcript.jsonl"
+            )
+
+            transcript.write_text(
+                "\n"
+                "{not-json}\n"
+                + json.dumps(
+                    {
+                        "message": {
+                            "sessionID":
+                                self.SESSION_ID,
+                        }
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertTrue(
+                ISOLATION
+                .transcript_has_session(
+                    transcript,
+                    self.SESSION_ID,
+                )
+            )
+
+    def test_transcript_has_session_returns_false_for_no_match_all_bad_missing_and_invalid_utf8(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            no_match = (
+                root
+                / "no-match.jsonl"
+            )
+
+            no_match.write_text(
+                json.dumps(
+                    {
+                        "sessionId":
+                            self.OTHER_SESSION_ID,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertFalse(
+                ISOLATION
+                .transcript_has_session(
+                    no_match,
+                    self.SESSION_ID,
+                )
+            )
+
+            bad = (
+                root
+                / "bad.jsonl"
+            )
+
+            bad.write_text(
+                "{bad}\n"
+                "not-json\n"
+                "\n",
+                encoding="utf-8",
+            )
+
+            self.assertFalse(
+                ISOLATION
+                .transcript_has_session(
+                    bad,
+                    self.SESSION_ID,
+                )
+            )
+
+            self.assertFalse(
+                ISOLATION
+                .transcript_has_session(
+                    root
+                    / "missing.jsonl",
+                    self.SESSION_ID,
+                )
+            )
+
+            invalid_utf8 = (
+                root
+                / "invalid-utf8.jsonl"
+            )
+
+            invalid_utf8.write_bytes(
+                b'{"sessionId":"'
+                + self.SESSION_ID.encode(
+                    "ascii"
+                )
+                + b'"}\n'
+                + b"\xff\xfe\n"
+            )
+
+            self.assertFalse(
+                ISOLATION
+                .transcript_has_session(
+                    invalid_utf8,
+                    self.SESSION_ID,
+                )
+            )
+
+    def test_find_transcript_rejects_invalid_uuid_before_config_directory_check(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            result = self.run_cli(
+                "find-transcript",
+                "--claude-config",
+                str(
+                    root
+                    / "definitely-missing"
+                ),
+                "--session-id",
+                "not-a-uuid",
+            )
+
+            # If directory validation ran first,
+            # this would be exit 1 instead.
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+    def test_find_transcript_returns_one_when_config_is_not_directory_or_no_match_exists(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            missing = (
+                root
+                / "missing"
+            )
+
+            result = self.run_cli(
+                "find-transcript",
+                "--claude-config",
+                str(missing),
+                "--session-id",
+                self.SESSION_ID,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                1,
+            )
+
+            config = (
+                root
+                / "claude"
+            )
+
+            config.mkdir()
+
+            self.write_transcript(
+                config
+                / "unrelated.jsonl",
+                [
+                    {
+                        "sessionId":
+                            self.OTHER_SESSION_ID,
+                    }
+                ],
+            )
+
+            result = self.run_cli(
+                "find-transcript",
+                "--claude-config",
+                str(config),
+                "--session-id",
+                self.SESSION_ID,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                1,
+            )
+
+    def test_find_transcript_finds_single_nested_match_even_when_filename_has_no_session_id(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            config = (
+                root
+                / "claude"
+            )
+
+            transcript = (
+                config
+                / "projects"
+                / "project-a"
+                / "conversation.jsonl"
+            )
+
+            self.write_transcript(
+                transcript,
+                [
+                    {
+                        "message": {
+                            "metadata": {
+                                "session_id":
+                                    self.SESSION_ID,
+                            }
+                        }
+                    }
+                ],
+            )
+
+            result = self.run_cli(
+                "find-transcript",
+                "--claude-config",
+                str(config),
+                "--session-id",
+                self.SESSION_ID,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                0,
+                result.stderr,
+            )
+
+            self.assertEqual(
+                result.stdout.strip(),
+                str(transcript),
+            )
+
+    def test_find_transcript_filename_fast_candidate_still_requires_content_identity(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            config = (
+                root
+                / "claude"
+            )
+
+            transcript = (
+                config
+                / (
+                    self.SESSION_ID
+                    + ".jsonl"
+                )
+            )
+
+            self.write_transcript(
+                transcript,
+                [
+                    {
+                        "sessionId":
+                            self.OTHER_SESSION_ID,
+                    }
+                ],
+            )
+
+            result = self.run_cli(
+                "find-transcript",
+                "--claude-config",
+                str(config),
+                "--session-id",
+                self.SESSION_ID,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                1,
+            )
+
+    def test_find_transcript_ignores_symlink_jsonl_candidate(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            config = (
+                root
+                / "claude"
+            )
+
+            config.mkdir()
+
+            real = (
+                root
+                / "outside-real.jsonl"
+            )
+
+            self.write_transcript(
+                real,
+                [
+                    {
+                        "sessionId":
+                            self.SESSION_ID,
+                    }
+                ],
+            )
+
+            link = (
+                config
+                / "linked.jsonl"
+            )
+
+            try:
+                link.symlink_to(
+                    real
+                )
+            except OSError as exc:
+                self.skipTest(
+                    "symlink unavailable: "
+                    f"{exc}"
+                )
+
+            result = self.run_cli(
+                "find-transcript",
+                "--claude-config",
+                str(config),
+                "--session-id",
+                self.SESSION_ID,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                1,
+            )
+
+    def test_find_transcript_multiple_distinct_resolved_matches_are_unknown_and_listed(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            config = (
+                root
+                / "claude"
+            )
+
+            config.mkdir()
+
+            first = (
+                config
+                / "first.jsonl"
+            )
+
+            second = (
+                config
+                / "second.jsonl"
+            )
+
+            self.write_transcript(
+                first,
+                [
+                    {
+                        "sessionId":
+                            self.SESSION_ID,
+                    }
+                ],
+            )
+
+            # Hard links share the inode but resolve() still yields two
+            # different pathnames. command_find_transcript de-duplicates by
+            # resolved pathname, not inode identity, so both remain matches.
+            try:
+                os.link(
+                    first,
+                    second,
+                )
+            except OSError as exc:
+                self.skipTest(
+                    "hard link unavailable: "
+                    f"{exc}"
+                )
+
+            result = self.run_cli(
+                "find-transcript",
+                "--claude-config",
+                str(config),
+                "--session-id",
+                self.SESSION_ID,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                2,
+            )
+
+            self.assertEqual(
+                result.stdout,
+                "",
+            )
+
+            self.assertIn(
+                (
+                    "multiple native "
+                    "transcripts found "
+                    "for session "
+                    + self.SESSION_ID
+                ),
+                result.stderr,
+            )
+
+            self.assertIn(
+                str(first),
+                result.stderr,
+            )
+
+            self.assertIn(
+                str(second),
+                result.stderr,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
