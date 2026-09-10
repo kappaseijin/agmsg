@@ -1264,5 +1264,1068 @@ class PilotGateF3RoundA(unittest.TestCase):
             )
 
 
+
+class PilotGateF3RoundB(unittest.TestCase):
+    TOOL_ID = "tool-123"
+
+    class WalkI1:
+        @staticmethod
+        def walk_json(value):
+            if isinstance(value, dict):
+                yield value
+                for child in value.values():
+                    yield from PilotGateF3RoundB.WalkI1.walk_json(
+                        child
+                    )
+            elif isinstance(value, list):
+                for child in value:
+                    yield from PilotGateF3RoundB.WalkI1.walk_json(
+                        child
+                    )
+
+        @staticmethod
+        def json_content_text(value):
+            if isinstance(value, str):
+                return value
+            if isinstance(value, dict):
+                text = value.get("text")
+                return text if isinstance(text, str) else ""
+            if isinstance(value, list):
+                parts = []
+                for item in value:
+                    if isinstance(item, str):
+                        parts.append(item)
+                    elif isinstance(item, dict):
+                        text = item.get("text")
+                        if isinstance(text, str):
+                            parts.append(text)
+                return "\n".join(parts)
+            return ""
+
+    def make_collector_fixture(
+        self,
+        root: Path,
+        generation=7,
+    ):
+        root = root.resolve()
+
+        repo = root / "repo"
+        collector = (
+            repo
+            / "scripts"
+            / "pilot-collector.sh"
+        )
+        collector.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        collector.write_text(
+            "#!/bin/sh\nexit 0\n",
+            encoding="utf-8",
+        )
+        collector.chmod(0o700)
+
+        binding = root / "binding.json"
+        binding.write_text(
+            json.dumps(
+                {"generation": generation}
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        claude_config = root / "claude"
+        claude_config.mkdir()
+
+        state_dir = root / "collector-state"
+        artifact = root / "artifact"
+
+        return (
+            collector,
+            binding,
+            claude_config,
+            state_dir,
+            artifact,
+        )
+
+    def make_collector_i1(self):
+        i1 = mock.Mock()
+        i1.run.side_effect = [
+            mock.Mock(
+                returncode=3,
+                stdout="discover-out",
+                stderr="discover-err",
+            ),
+            mock.Mock(
+                returncode=4,
+                stdout="scan-out",
+                stderr="scan-err",
+            ),
+        ]
+        return i1
+
+    def test_collector_observation_sets_copied_environment_runs_discover_then_scan_and_writes_artifacts(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            (
+                collector,
+                binding,
+                claude_config,
+                state_dir,
+                artifact,
+            ) = self.make_collector_fixture(
+                root
+            )
+
+            i1 = self.make_collector_i1()
+            env = {
+                "ORIGINAL": "yes",
+            }
+
+            result = F3.collector_observation(
+                i1,
+                collector,
+                binding,
+                claude_config,
+                state_dir,
+                self.TOOL_ID,
+                env,
+                artifact,
+            )
+
+            self.assertTrue(
+                state_dir.is_dir()
+            )
+            self.assertEqual(
+                env,
+                {
+                    "ORIGINAL": "yes",
+                },
+            )
+            self.assertEqual(
+                i1.run.call_count,
+                2,
+            )
+
+            discover_call, scan_call = (
+                i1.run.call_args_list
+            )
+
+            self.assertEqual(
+                discover_call.args[0],
+                [
+                    str(collector),
+                    "discover",
+                ],
+            )
+            self.assertEqual(
+                scan_call.args[0],
+                [
+                    str(collector),
+                    "scan",
+                ],
+            )
+
+            for call in (
+                discover_call,
+                scan_call,
+            ):
+                self.assertEqual(
+                    call.kwargs["cwd"],
+                    collector.parent.parent,
+                )
+
+                cenv = call.kwargs["env"]
+
+                self.assertEqual(
+                    cenv["ORIGINAL"],
+                    "yes",
+                )
+                self.assertEqual(
+                    cenv[
+                        "AGMSG_PM_BINDING_FILE"
+                    ],
+                    str(binding),
+                )
+                self.assertEqual(
+                    cenv[
+                        "AGMSG_PM_COLLECTOR_STATE_DIR"
+                    ],
+                    str(state_dir),
+                )
+                self.assertEqual(
+                    cenv[
+                        "CLAUDE_CONFIG_DIR"
+                    ],
+                    str(claude_config),
+                )
+
+            self.assertEqual(
+                F3.read_json(
+                    artifact
+                    / "collector-discover.json"
+                ),
+                {
+                    "exitStatus": 3,
+                    "stdout": "discover-out",
+                    "stderr": "discover-err",
+                },
+            )
+            self.assertEqual(
+                F3.read_json(
+                    artifact
+                    / "collector-scan.json"
+                ),
+                {
+                    "exitStatus": 4,
+                    "stdout": "scan-out",
+                    "stderr": "scan-err",
+                },
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "unknown",
+            )
+            self.assertEqual(
+                result["reason"],
+                "collector_observation_missing",
+            )
+            self.assertEqual(
+                result["matches"],
+                [],
+            )
+
+    def test_collector_observation_uses_binding_generation_and_identifies_exact_match(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            (
+                collector,
+                binding,
+                claude_config,
+                state_dir,
+                artifact,
+            ) = self.make_collector_fixture(
+                root,
+                generation="9",
+            )
+
+            i1 = self.make_collector_i1()
+            state_dir.mkdir()
+
+            ledger = (
+                state_dir
+                / "generation-9.observations.jsonl"
+            )
+            expected = {
+                "toolUseId": self.TOOL_ID,
+                "completionState": "success",
+            }
+
+            ledger.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "toolUseId":
+                                    "other",
+                                "completionState":
+                                    "failure",
+                            }
+                        ),
+                        json.dumps(expected),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            result = F3.collector_observation(
+                i1,
+                collector,
+                binding,
+                claude_config,
+                state_dir,
+                self.TOOL_ID,
+                {},
+                artifact,
+            )
+
+            self.assertEqual(
+                result,
+                {
+                    "verdict": "pass",
+                    "reason":
+                        "collector_observation_identified",
+                    "discoverExit": 3,
+                    "scanExit": 4,
+                    "observation": expected,
+                },
+            )
+
+    def test_collector_observation_invalid_ledger_returns_immediate_unknown_and_discards_partial_matches(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            (
+                collector,
+                binding,
+                claude_config,
+                state_dir,
+                artifact,
+            ) = self.make_collector_fixture(
+                root
+            )
+
+            i1 = self.make_collector_i1()
+            state_dir.mkdir()
+
+            ledger = (
+                state_dir
+                / "generation-7.observations.jsonl"
+            )
+            ledger.write_text(
+                json.dumps(
+                    {
+                        "toolUseId":
+                            self.TOOL_ID,
+                        "completionState":
+                            "success",
+                    }
+                )
+                + "\n{bad-json\n",
+                encoding="utf-8",
+            )
+
+            result = F3.collector_observation(
+                i1,
+                collector,
+                binding,
+                claude_config,
+                state_dir,
+                self.TOOL_ID,
+                {},
+                artifact,
+            )
+
+            self.assertEqual(
+                result,
+                {
+                    "verdict": "unknown",
+                    "reason":
+                        (
+                            "collector_ledger_unreadable:"
+                            "JSONDecodeError"
+                        ),
+                    "discoverExit": 3,
+                    "scanExit": 4,
+                },
+            )
+            self.assertNotIn(
+                "matches",
+                result,
+            )
+
+    def test_collector_observation_zero_multiple_and_symlink_ledger_are_unknown(
+        self,
+    ):
+        for (
+            mode,
+            expected_reason,
+            expected_count,
+        ) in (
+            (
+                "zero",
+                "collector_observation_missing",
+                0,
+            ),
+            (
+                "multiple",
+                "collector_observation_ambiguous",
+                2,
+            ),
+            (
+                "symlink",
+                "collector_observation_missing",
+                0,
+            ),
+        ):
+            with self.subTest(mode=mode):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp).resolve()
+                    (
+                        collector,
+                        binding,
+                        claude_config,
+                        state_dir,
+                        artifact,
+                    ) = (
+                        self.make_collector_fixture(
+                            root
+                        )
+                    )
+
+                    i1 = (
+                        self.make_collector_i1()
+                    )
+                    state_dir.mkdir()
+
+                    ledger = (
+                        state_dir
+                        / (
+                            "generation-7."
+                            "observations.jsonl"
+                        )
+                    )
+
+                    if mode == "multiple":
+                        ledger.write_text(
+                            "".join(
+                                json.dumps(
+                                    {
+                                        "toolUseId":
+                                            self.TOOL_ID,
+                                        "n": n,
+                                    }
+                                )
+                                + "\n"
+                                for n in range(2)
+                            ),
+                            encoding="utf-8",
+                        )
+                    elif mode == "symlink":
+                        target = (
+                            root
+                            / "real-ledger.jsonl"
+                        )
+                        target.write_text(
+                            json.dumps(
+                                {
+                                    "toolUseId":
+                                        self.TOOL_ID
+                                }
+                            )
+                            + "\n",
+                            encoding="utf-8",
+                        )
+                        try:
+                            ledger.symlink_to(
+                                target
+                            )
+                        except OSError as exc:
+                            self.skipTest(
+                                (
+                                    "symlink "
+                                    f"unavailable: {exc}"
+                                )
+                            )
+
+                    result = (
+                        F3.collector_observation(
+                            i1,
+                            collector,
+                            binding,
+                            claude_config,
+                            state_dir,
+                            self.TOOL_ID,
+                            {},
+                            artifact,
+                        )
+                    )
+
+                    self.assertEqual(
+                        result["verdict"],
+                        "unknown",
+                    )
+                    self.assertEqual(
+                        result["reason"],
+                        expected_reason,
+                    )
+                    self.assertEqual(
+                        len(result["matches"]),
+                        expected_count,
+                    )
+
+    def test_binding_profile_check_none_and_unreadable_are_unknown(
+        self,
+    ):
+        payload = b'{"profile":true}\n'
+        native = mock.Mock()
+        native.binding = None
+
+        self.assertEqual(
+            F3.binding_profile_check(
+                native,
+                payload,
+            ),
+            F3.assertion(
+                "binding-profile-digest",
+                None,
+                "binding unavailable",
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            native.binding = (
+                root
+                / "missing-binding.json"
+            )
+
+            result = (
+                F3.binding_profile_check(
+                    native,
+                    payload,
+                )
+            )
+
+            self.assertEqual(
+                result["name"],
+                "binding-profile-digest",
+            )
+            self.assertEqual(
+                result["verdict"],
+                "unknown",
+            )
+            self.assertTrue(
+                result["detail"]
+            )
+
+    def test_binding_profile_check_pass_fail_and_detail(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            binding = root / "binding.json"
+            payload = b'{"profile":"value"}\n'
+            expected = F3.digest_bytes(
+                payload
+            )
+
+            native = mock.Mock(
+                binding=binding
+            )
+
+            for actual, verdict in (
+                (
+                    expected,
+                    "pass",
+                ),
+                (
+                    "sha256:wrong",
+                    "fail",
+                ),
+            ):
+                with self.subTest(
+                    verdict=verdict
+                ):
+                    binding.write_text(
+                        json.dumps(
+                            {
+                                "profileDigest":
+                                    actual
+                            }
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+
+                    result = (
+                        F3.binding_profile_check(
+                            native,
+                            payload,
+                        )
+                    )
+
+                    self.assertEqual(
+                        result["verdict"],
+                        verdict,
+                    )
+                    self.assertEqual(
+                        result["detail"],
+                        {
+                            "actual": actual,
+                            "expected":
+                                expected,
+                            "binding":
+                                str(binding),
+                        },
+                    )
+
+    def test_transcript_result_missing_and_invalid_utf8_are_unknown(
+        self,
+    ):
+        i1 = self.WalkI1()
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            ok, detail = (
+                F3.transcript_result(
+                    i1,
+                    root / "missing.jsonl",
+                    self.TOOL_ID,
+                )
+            )
+            self.assertIsNone(ok)
+            self.assertTrue(detail)
+
+            invalid = (
+                root
+                / "invalid.jsonl"
+            )
+            invalid.write_bytes(
+                b'{"x":"\xff"}\n'
+            )
+
+            ok, detail = (
+                F3.transcript_result(
+                    i1,
+                    invalid,
+                    self.TOOL_ID,
+                )
+            )
+            self.assertIsNone(ok)
+            self.assertTrue(detail)
+
+    def test_transcript_result_skips_bad_json_and_requires_exactly_one_match(
+        self,
+    ):
+        i1 = self.WalkI1()
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            transcript = (
+                root
+                / "transcript.jsonl"
+            )
+
+            transcript.write_text(
+                "{bad-json\n"
+                + json.dumps(
+                    {
+                        "type": "other"
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                F3.transcript_result(
+                    i1,
+                    transcript,
+                    self.TOOL_ID,
+                ),
+                (
+                    None,
+                    {
+                        "resultCount": 0
+                    },
+                ),
+            )
+
+            node = {
+                "type": "tool_result",
+                "tool_use_id":
+                    self.TOOL_ID,
+                "is_error": False,
+                "content": "ok",
+            }
+
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "nodes": [
+                            node,
+                            node,
+                        ]
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                F3.transcript_result(
+                    i1,
+                    transcript,
+                    self.TOOL_ID,
+                ),
+                (
+                    None,
+                    {
+                        "resultCount": 2
+                    },
+                ),
+            )
+
+    def test_transcript_result_nonbool_is_error_is_unknown(
+        self,
+    ):
+        i1 = self.WalkI1()
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            transcript = (
+                root
+                / "transcript.jsonl"
+            )
+
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "type":
+                            "tool_result",
+                        "tool_use_id":
+                            self.TOOL_ID,
+                        "is_error":
+                            "false",
+                        "content":
+                            "ignored",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                F3.transcript_result(
+                    i1,
+                    transcript,
+                    self.TOOL_ID,
+                ),
+                (
+                    None,
+                    {
+                        "isError": "false"
+                    },
+                ),
+            )
+
+    def test_transcript_result_inverts_boolean_is_error_and_extracts_content(
+        self,
+    ):
+        i1 = self.WalkI1()
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            transcript = (
+                root
+                / "transcript.jsonl"
+            )
+
+            for (
+                raw_error,
+                expected_success,
+            ) in (
+                (
+                    False,
+                    True,
+                ),
+                (
+                    True,
+                    False,
+                ),
+            ):
+                with self.subTest(
+                    raw_error=raw_error
+                ):
+                    transcript.write_text(
+                        json.dumps(
+                            {
+                                "outer": [
+                                    {
+                                        "type":
+                                            "tool_result",
+                                        "tool_use_id":
+                                            self.TOOL_ID,
+                                        "is_error":
+                                            raw_error,
+                                        "content": [
+                                            {
+                                                "text":
+                                                    "line-1"
+                                            },
+                                            "line-2",
+                                        ],
+                                    }
+                                ]
+                            }
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+
+                    result = (
+                        F3.transcript_result(
+                            i1,
+                            transcript,
+                            self.TOOL_ID,
+                        )
+                    )
+
+                    self.assertEqual(
+                        result,
+                        (
+                            expected_success,
+                            {
+                                "isError":
+                                    raw_error,
+                                "content":
+                                    "line-1\nline-2",
+                            },
+                        ),
+                    )
+
+    def test_classify_collector_nonpass_verdicts_map_unknown_and_fail(
+        self,
+    ):
+        unknown = {
+            "verdict": "unknown",
+            "reason": "missing",
+        }
+        failed = {
+            "verdict": "fail",
+            "reason": "broken",
+        }
+        other = {
+            "verdict": "anything-else",
+        }
+
+        self.assertEqual(
+            F3.classify_collector(
+                unknown,
+                self.TOOL_ID,
+            ),
+            (
+                None,
+                unknown,
+            ),
+        )
+        self.assertEqual(
+            F3.classify_collector(
+                failed,
+                self.TOOL_ID,
+            ),
+            (
+                False,
+                failed,
+            ),
+        )
+        self.assertEqual(
+            F3.classify_collector(
+                other,
+                self.TOOL_ID,
+            ),
+            (
+                False,
+                other,
+            ),
+        )
+
+    def test_classify_collector_pass_requires_dict_same_tool_and_success_state(
+        self,
+    ):
+        non_dict = {
+            "verdict": "pass",
+            "observation": "bad",
+        }
+        self.assertEqual(
+            F3.classify_collector(
+                non_dict,
+                self.TOOL_ID,
+            ),
+            (
+                None,
+                non_dict,
+            ),
+        )
+
+        wrong_tool = {
+            "verdict": "pass",
+            "observation": {
+                "toolUseId": "other",
+                "completionState":
+                    "success",
+            },
+        }
+        self.assertEqual(
+            F3.classify_collector(
+                wrong_tool,
+                self.TOOL_ID,
+            ),
+            (
+                False,
+                wrong_tool["observation"],
+            ),
+        )
+
+        wrong_state = {
+            "verdict": "pass",
+            "observation": {
+                "toolUseId":
+                    self.TOOL_ID,
+                "completionState":
+                    "failure",
+            },
+        }
+        self.assertEqual(
+            F3.classify_collector(
+                wrong_state,
+                self.TOOL_ID,
+            ),
+            (
+                False,
+                wrong_state[
+                    "observation"
+                ],
+            ),
+        )
+
+        good = {
+            "verdict": "pass",
+            "observation": {
+                "toolUseId":
+                    self.TOOL_ID,
+                "completionState":
+                    "success",
+            },
+        }
+        self.assertEqual(
+            F3.classify_collector(
+                good,
+                self.TOOL_ID,
+            ),
+            (
+                True,
+                good["observation"],
+            ),
+        )
+
+    def test_prepare_observe_owner_builds_paths_request_id_config_request_and_command(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            gate_repo = (
+                Path(temp).resolve()
+                / "repo"
+            )
+            gate_repo.mkdir()
+
+            case = "control"
+            run_id = "run-123"
+            team = "agmsg-team"
+            generation = 7
+
+            request_id = (
+                "f3-"
+                + case
+                + "-"
+                + hashlib.sha256(
+                    run_id.encode("utf-8")
+                ).hexdigest()[:16]
+            )
+
+            i1 = mock.Mock()
+            request_value = {
+                "request": "fixture",
+            }
+            command = "broker-command"
+
+            i1.make_request.return_value = (
+                request_value
+            )
+            i1.exact_broker_command.return_value = (
+                command
+            )
+
+            (
+                config,
+                request,
+                actual_command,
+            ) = F3.prepare_observe_owner(
+                i1,
+                gate_repo,
+                case,
+                run_id,
+                team,
+                generation,
+            )
+
+            root = (
+                gate_repo
+                / ".agmsg-gate"
+                / "f3"
+                / case
+            )
+            expected_config = (
+                root
+                / "run-config.json"
+            )
+            expected_request = (
+                root
+                / "observe-owner.json"
+            )
+
+            self.assertTrue(
+                root.is_dir()
+            )
+            self.assertEqual(
+                config,
+                expected_config,
+            )
+            self.assertEqual(
+                request,
+                expected_request,
+            )
+            self.assertEqual(
+                actual_command,
+                command,
+            )
+
+            i1.atomic_json.assert_called_once_with(
+                expected_config,
+                {
+                    "schemaVersion": 1,
+                    "runId": run_id,
+                    "worker":
+                        F3.F3_WORKER,
+                    "testIssueNumber":
+                        F3.F3_ISSUE,
+                    "repo":
+                        F3.F3_REPO,
+                },
+            )
+
+            i1.make_request.assert_called_once_with(
+                run_id,
+                request_id,
+                "observe-owner",
+                team,
+                generation,
+            )
+
+            i1.write_request.assert_called_once_with(
+                expected_request,
+                request_value,
+            )
+
+            i1.exact_broker_command.assert_called_once_with(
+                (
+                    gate_repo
+                    / "scripts"
+                    / "p2-consumer-broker.sh"
+                ),
+                expected_config,
+                "observe-owner",
+                expected_request,
+            )
+
 if __name__ == "__main__":
     unittest.main()
