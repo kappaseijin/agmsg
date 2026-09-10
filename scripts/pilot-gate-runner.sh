@@ -50,6 +50,7 @@ SKILL_DIR="$(
 )"
 
 ISOLATION_HELPER="$SCRIPT_DIR/lib/pilot-gate-isolation.py"
+I1_HELPER="$SCRIPT_DIR/lib/pilot-gate-i1.py"
 
 SUBCOMMAND="run"
 SOURCE=""
@@ -93,7 +94,7 @@ Usage:
     --live-skill-dir <live-agmsg-root> \
     --artifact-dir <artifact-dir> \
     [--collector-cutoff-seconds <seconds>] \
-    [--check all|N1]
+    [--check all|N1|I1]
 
 Subcommands:
   preflight
@@ -101,7 +102,7 @@ Subcommands:
 
   run
       Execute P0-P4 followed by the implemented gate checks.
-      In Issue #396 Part 1 this means N1 only.
+      In Issue #396 Part 2 this means N1 and I1.
 
   evaluate
       Reserved for a later Issue #396 part.
@@ -126,8 +127,8 @@ Notes:
 
   --check N1 is intended only for development/partial verification.
 
-  --check all can NEVER return gate-pass from the Part 1 implementation
-  because I1/F1-F5 have not yet been implemented.
+  --check all can NEVER return gate-pass from the Part 2 implementation
+  because F1-F5 have not yet been implemented.
 USAGE
 }
 
@@ -237,11 +238,11 @@ parse_args() {
   esac
 
   case "$CHECK" in
-    all|N1)
+    all|N1|I1)
       ;;
     *)
       usage_error \
-        "--check must be one of: all, N1"
+        "--check must be one of: all, N1, I1"
       ;;
   esac
 }
@@ -250,6 +251,10 @@ validate_static_inputs() {
   [ -x "$ISOLATION_HELPER" ] ||
     usage_error \
       "isolation helper unavailable or not executable: $ISOLATION_HELPER"
+
+  [ -x "$I1_HELPER" ] ||
+    usage_error \
+      "I1 helper unavailable or not executable: $I1_HELPER"
 
   [ -d "$SOURCE" ] ||
     usage_error \
@@ -1225,6 +1230,65 @@ phase_n1() {
   esac
 }
 
+phase_i1() {
+  local status
+
+  log "I1 five consumer operations + identity isolation"
+
+  #
+  # I1_HELPER owns the I1 artifact subtree:
+  #
+  #   $ARTIFACT_DIR/I1/
+  #
+  # It MUST execute the consumer operations through:
+  #
+  #   native Claude
+  #     -> actual PreToolUse
+  #     -> actual pilot guard
+  #     -> actual p2-consumer-broker.sh
+  #     -> dependency
+  #
+  # A broker-direct observation alone is therefore insufficient for pass.
+  #
+  set +e
+  python3 "$I1_HELPER" \
+    --run-id "$RUN_ID" \
+    --run-root "$RUN_ROOT" \
+    --gate-repo "$GATE_REPO" \
+    --artifact-dir "$ARTIFACT_DIR" \
+    --gate-team "$GATE_TEAM" \
+    --claude-config "$GATE_CLAUDE_CONFIG"
+  status="$?"
+  set -e
+
+  case "$status" in
+    0)
+      log "I1 passed"
+      return "$EX_GATE_PASS"
+      ;;
+
+    1)
+      log "I1 failed"
+      return "$EX_GATE_FAIL"
+      ;;
+
+    2)
+      log "I1 unknown"
+      return "$EX_GATE_UNKNOWN"
+      ;;
+
+    *)
+      #
+      # An undocumented helper exit code is a harness defect, not an I1
+      # semantic fail/unknown observation.
+      #
+      log \
+        "I1 helper returned unsupported exit status: $status"
+      return "$EX_INTERNAL"
+      ;;
+  esac
+}
+
 run_p0_through_p4() {
   local status
 
@@ -1265,6 +1329,7 @@ subcommand_preflight() {
 subcommand_run() {
   local status
   local n1_status
+  local i1_status
 
   set +e
   run_p0_through_p4
@@ -1282,16 +1347,33 @@ subcommand_run() {
   [ "$n1_status" -eq 0 ] ||
     return "$n1_status"
 
+  #
+  # N1 is a prerequisite for I1. Even --check I1 therefore executes N1 first,
+  # because I1 requires the native pilot binding/session established by the
+  # preceding native integration path.
+  #
   if [ "$CHECK" = "N1" ]; then
+    return "$EX_GATE_PASS"
+  fi
+
+  set +e
+  phase_i1
+  i1_status="$?"
+  set -e
+
+  [ "$i1_status" -eq 0 ] ||
+    return "$i1_status"
+
+  if [ "$CHECK" = "I1" ]; then
     return "$EX_GATE_PASS"
   fi
 
   # Critical fail-closed behavior during incremental implementation:
   #
-  # I1 and F1-F5 do not exist yet in Part 1. Therefore an "all" invocation is
-  # necessarily incomplete and MUST NOT appear as a successful full gate.
+  # F1-F5 do not exist yet in Part 2. Therefore an "all" invocation remains
+  # incomplete and MUST NOT appear as a successful full gate.
   log \
-    "Part 1 complete: N1 passed, but I1/F1-F5 remain unknown; pilot_ready cannot be true"
+    "Part 2 complete: N1/I1 passed, but F1-F5 remain unknown; pilot_ready cannot be true"
 
   return "$EX_GATE_UNKNOWN"
 }
