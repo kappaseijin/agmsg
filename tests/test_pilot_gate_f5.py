@@ -806,5 +806,378 @@ class PilotGateF5RoundA(unittest.TestCase):
                 self.assertFalse(result.exists())
 
 
+
+class PilotGateF5RoundB(unittest.TestCase):
+    """GateWatcher against real short-lived shell processes."""
+
+    READY = 0.3
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name).resolve()
+        self.repo = self.root / "repo"
+        (self.repo / "scripts").mkdir(parents=True)
+        self.watchers = []
+        patcher = mock.patch.object(F5, "WATCH_READY_SECONDS", self.READY)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def tearDown(self):
+        for watcher in self.watchers:
+            proc = watcher.proc
+            if proc is not None and proc.poll() is None:
+                try:
+                    os.killpg(proc.pid, F5.signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                proc.wait(timeout=5)
+            if proc is not None:
+                for stream in (proc.stdout, proc.stderr):
+                    if stream is not None:
+                        stream.close()
+        self._tmp.cleanup()
+
+    def script(self, body: str, name: str = "watch.sh") -> Path:
+        path = self.repo / "scripts" / name
+        path.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+        path.chmod(0o700)
+        return path
+
+    def wait_file(self, path: Path, timeout: float = 10.0) -> str:
+        deadline = F5.time.monotonic() + timeout
+        while F5.time.monotonic() < deadline:
+            if path.exists():
+                text = path.read_text()
+                if text.endswith("\n"):
+                    return text
+            F5.time.sleep(0.02)
+        self.fail(f"fixture never wrote {path}")
+
+    def watcher(self, script: Path, *, env=None, artifact=None):
+        watcher = F5.GateWatcher(
+            watch_script=script,
+            project=self.root / "project",
+            recipient="gate_recipient",
+            session_id="sess-1",
+            env=env if env is not None else {"PATH": os.environ["PATH"]},
+            artifact=artifact or (self.root / "art" / "watcher"),
+        )
+        self.watchers.append(watcher)
+        return watcher
+
+    def test_init_copies_env_and_starts_empty(self):
+        env = {"PATH": os.environ["PATH"], "A": "1"}
+        watcher = self.watcher(self.script("exit 0\n"), env=env)
+        env["A"] = "changed"
+        self.assertEqual(watcher.env["A"], "1")
+        self.assertIsNone(watcher.proc)
+        self.assertEqual(watcher.stdout_text(), "")
+        self.assertEqual(watcher.stderr_text(), "")
+        self.assertFalse(watcher.is_running())
+        self.assertIsNone(watcher.wait_for_token("TOK", 0.1))
+        watcher.pump(0)  # no process: no-op
+        watcher.stop()  # no process: no-op, writes nothing
+        self.assertFalse((self.root / "art" / "watcher").exists())
+
+    def test_start_launches_argv_with_env_cwd_and_records_start_json(self):
+        script = self.script(
+            'echo "ARGS:$*"\n'
+            'echo "INTERVAL:$AGMSG_WATCH_INTERVAL"\n'
+            'echo "CWD:$(pwd -P)"\n'
+            'echo "ERR-LINE" >&2\n'
+            "echo BOOT-DONE\n"
+            "exec sleep 30\n"
+        )
+        artifact = self.root / "art" / "watcher"
+        env = {"PATH": os.environ["PATH"], "AGMSG_WATCH_INTERVAL": "99"}
+        watcher = self.watcher(script, env=env, artifact=artifact)
+        watcher.start()
+        # Synchronize on output instead of assuming it arrived within
+        # the ready window (process start latency varies under load).
+        self.assertIs(watcher.wait_for_token("BOOT-DONE", 10), True)
+        deadline = F5.time.monotonic() + 10
+        while not watcher.stderr and F5.time.monotonic() < deadline:
+            watcher.pump(0.1)
+        watcher.persist()
+
+        self.assertTrue(watcher.is_running())
+        # The caller's env is not mutated by the interval override.
+        self.assertEqual(watcher.env["AGMSG_WATCH_INTERVAL"], "99")
+        out = watcher.stdout_text()
+        project = self.root / "project"
+        self.assertIn(
+            f"ARGS:sess-1 {project} claude-code gate_recipient", out
+        )
+        self.assertIn("INTERVAL:1\n", out)
+        self.assertIn(f"CWD:{self.repo}\n", out)
+        self.assertNotIn("ERR-LINE", out)
+        self.assertEqual(watcher.stderr_text(), "ERR-LINE\n")
+
+        self.assertEqual(
+            json.loads((artifact / "start.json").read_text()),
+            {
+                "schemaVersion": 1,
+                "argv": [
+                    str(script), "sess-1", str(project), "claude-code",
+                    "gate_recipient",
+                ],
+                "project": str(project),
+                "recipient": "gate_recipient",
+                "sessionId": "sess-1",
+            },
+        )
+        self.assertEqual(
+            (artifact / "stdout.raw").read_bytes(), watcher.stdout
+        )
+        self.assertEqual(
+            (artifact / "stderr.raw").read_bytes(), b"ERR-LINE\n"
+        )
+
+    def test_start_waits_for_ready_window(self):
+        watcher = self.watcher(self.script("exec sleep 30\n"))
+        started = F5.time.monotonic()
+        watcher.start()
+        self.assertGreaterEqual(F5.time.monotonic() - started, self.READY)
+
+    def test_start_twice_is_rejected(self):
+        watcher = self.watcher(self.script("exec sleep 30\n"))
+        watcher.start()
+        with self.assertRaisesRegex(RuntimeError, "watcher already started"):
+            watcher.start()
+
+    def test_start_fails_when_watcher_exits_during_startup(self):
+        artifact = self.root / "art" / "watcher"
+        watcher = self.watcher(
+            self.script('echo "boot"\necho "bad" >&2\nexit 3\n'),
+            artifact=artifact,
+        )
+        # The first exec of a freshly written script is occasionally
+        # slow (observed ~0.37s), so a 0.3s window races the exit.
+        # start() raises as soon as it sees the exit, so a long window
+        # costs nothing when the code is correct.
+        with mock.patch.object(
+            F5, "WATCH_READY_SECONDS", 15.0
+        ), self.assertRaisesRegex(
+            RuntimeError, "gate watcher exited during startup"
+        ):
+            watcher.start()
+        self.assertEqual(watcher.proc.returncode, 3)
+        self.assertEqual((artifact / "stdout.raw").read_bytes(), b"boot\n")
+        self.assertEqual((artifact / "stderr.raw").read_bytes(), b"bad\n")
+
+    def test_wait_for_token_true_when_token_arrives(self):
+        artifact = self.root / "art" / "watcher"
+        watcher = self.watcher(
+            self.script(
+                "sleep 0.5\necho 'event AGMSG_TOK here'\nexec sleep 30\n"
+            ),
+            artifact=artifact,
+        )
+        watcher.start()
+        self.assertIs(watcher.wait_for_token("AGMSG_TOK", 10), True)
+        self.assertIn(
+            b"AGMSG_TOK", (artifact / "stdout.raw").read_bytes()
+        )
+
+    def test_wait_for_token_ignores_token_on_stderr(self):
+        watcher = self.watcher(
+            self.script("echo AGMSG_TOK >&2\nexec sleep 30\n")
+        )
+        watcher.start()
+        deadline = F5.time.monotonic() + 10
+        while not watcher.stderr and F5.time.monotonic() < deadline:
+            watcher.pump(0.1)
+        # Positive control: the token really was emitted (on stderr).
+        self.assertIn("AGMSG_TOK", watcher.stderr_text())
+        self.assertIs(watcher.wait_for_token("AGMSG_TOK", 0.5), False)
+
+    def test_wait_for_token_false_promptly_when_process_exits(self):
+        watcher = self.watcher(
+            self.script("sleep 0.6\necho other\nexit 0\n")
+        )
+        watcher.start()
+        started = F5.time.monotonic()
+        self.assertIs(watcher.wait_for_token("AGMSG_TOK", 15), False)
+        # Exit is detected long before the 15s deadline.
+        self.assertLess(F5.time.monotonic() - started, 5)
+        self.assertIn("other", watcher.stdout_text())
+
+    def test_wait_for_token_false_at_deadline_while_running(self):
+        watcher = self.watcher(self.script("exec sleep 30\n"))
+        watcher.start()
+        started = F5.time.monotonic()
+        self.assertIs(watcher.wait_for_token("AGMSG_TOK", 0.6), False)
+        elapsed = F5.time.monotonic() - started
+        self.assertGreaterEqual(elapsed, 0.6)
+        self.assertLess(elapsed, 5)
+        self.assertTrue(watcher.is_running())
+
+    def test_wait_for_token_true_when_token_already_buffered(self):
+        watcher = self.watcher(
+            self.script("echo AGMSG_TOK\nexec sleep 30\n")
+        )
+        watcher.start()
+        deadline = F5.time.monotonic() + 10
+        while (
+            "AGMSG_TOK" not in watcher.stdout_text()
+            and F5.time.monotonic() < deadline
+        ):
+            watcher.pump(0.1)
+        self.assertIn("AGMSG_TOK", watcher.stdout_text())
+        # With a zero timeout the loop body never runs: the answer must
+        # come from the already-collected buffer.
+        self.assertIs(watcher.wait_for_token("AGMSG_TOK", 0.0), True)
+
+    def test_settle_keeps_collecting_for_duration_and_persists(self):
+        artifact = self.root / "art" / "watcher"
+        watcher = self.watcher(
+            self.script(
+                "echo first\nsleep 0.4\necho second\nexec sleep 30\n"
+            ),
+            artifact=artifact,
+        )
+        watcher.start()
+        self.assertIs(watcher.wait_for_token("first", 10), True)
+        started = F5.time.monotonic()
+        watcher.settle(1.2)
+        self.assertGreaterEqual(F5.time.monotonic() - started, 1.2)
+        self.assertEqual(watcher.stdout_text(), "first\nsecond\n")
+        self.assertEqual(
+            (artifact / "stdout.raw").read_bytes(), b"first\nsecond\n"
+        )
+
+    def test_stop_terminates_whole_process_group_and_records_stop_json(self):
+        child_pid_file = self.root / "child.pid"
+        artifact = self.root / "art" / "watcher"
+        watcher = self.watcher(
+            self.script(
+                f"sleep 30 &\necho $! > '{child_pid_file}'\nwait\n"
+            ),
+            artifact=artifact,
+        )
+        watcher.start()
+        child_pid = int(self.wait_file(child_pid_file))
+        pid = watcher.proc.pid
+
+        watcher.stop()
+
+        self.assertFalse(watcher.is_running())
+        self.assertEqual(watcher.proc.returncode, -F5.signal.SIGTERM)
+        self.assertEqual(
+            json.loads((artifact / "stop.json").read_text()),
+            {
+                "schemaVersion": 1,
+                "pid": pid,
+                "exitStatus": -F5.signal.SIGTERM,
+                "runningAfterStop": False,
+            },
+        )
+        # The background child in the watcher's own session is gone too.
+        deadline = F5.time.monotonic() + 5
+        while F5.time.monotonic() < deadline:
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                break
+            F5.time.sleep(0.05)
+        else:
+            self.fail("watcher child survived stop()")
+
+    def test_stop_does_not_signal_processes_outside_its_group(self):
+        outsider = F5.subprocess.Popen(
+            ["sleep", "30"], start_new_session=True
+        )
+        try:
+            watcher = self.watcher(self.script("exec sleep 30\n"))
+            watcher.start()
+            watcher.stop()
+            self.assertIsNone(outsider.poll())
+        finally:
+            outsider.kill()
+            outsider.wait(timeout=5)
+
+    def test_stop_escalates_to_sigkill_when_sigterm_ignored(self):
+        watcher = self.watcher(
+            self.script(
+                "trap '' TERM\n"
+                f"echo armed > '{self.root / 'armed'}'\n"
+                "while :; do sleep 0.1; done\n"
+            )
+        )
+        watcher.start()
+        self.wait_file(self.root / "armed")
+        started = F5.time.monotonic()
+        watcher.stop()
+        self.assertFalse(watcher.is_running())
+        self.assertEqual(watcher.proc.returncode, -F5.signal.SIGKILL)
+        # One 3s grace period before SIGKILL, well under the hang guard.
+        self.assertLess(F5.time.monotonic() - started, 8)
+
+    def test_stop_after_exit_does_not_signal_and_records_status(self):
+        artifact = self.root / "art" / "watcher"
+        watcher = self.watcher(self.script("exec sleep 30\n"), artifact=artifact)
+        watcher.start()
+        os.killpg(watcher.proc.pid, F5.signal.SIGKILL)
+        watcher.proc.wait(timeout=5)
+        with mock.patch.object(F5.os, "killpg") as killpg:
+            watcher.stop()
+        killpg.assert_not_called()
+        self.assertEqual(
+            json.loads((artifact / "stop.json").read_text())["exitStatus"],
+            -F5.signal.SIGKILL,
+        )
+
+    def test_stop_tolerates_process_already_gone_at_signal_time(self):
+        watcher = self.watcher(self.script("exec sleep 30\n"))
+        watcher.start()
+        real_killpg = F5.os.killpg
+
+        def vanish(pid, sig):
+            real_killpg(pid, F5.signal.SIGKILL)
+            raise ProcessLookupError
+
+        with mock.patch.object(F5.os, "killpg", side_effect=vanish):
+            watcher.stop()
+        self.assertFalse(watcher.is_running())
+
+    def test_pump_returns_quietly_on_select_error(self):
+        watcher = self.watcher(self.script("exec sleep 30\n"))
+        watcher.start()
+        with mock.patch.object(F5.select, "select", side_effect=OSError):
+            watcher.pump(0.1)
+        with mock.patch.object(F5.select, "select", side_effect=ValueError):
+            watcher.pump(0.1)
+
+    def test_pump_skips_stream_read_errors(self):
+        watcher = self.watcher(
+            self.script("echo data\nexec sleep 30\n")
+        )
+        watcher.start()
+        self.assertIs(watcher.wait_for_token("data", 10), True)
+        before = bytes(watcher.stdout)
+        with mock.patch.object(
+            F5.select, "select",
+            return_value=([watcher.proc.stdout], [], []),
+        ), mock.patch.object(F5.os, "read", side_effect=OSError):
+            watcher.pump(0)
+        self.assertEqual(bytes(watcher.stdout), before)
+
+    def test_text_decoding_replaces_invalid_utf8(self):
+        watcher = self.watcher(self.script("exit 0\n"))
+        watcher.stdout.extend(b"ok \xff\n")
+        watcher.stderr.extend("é".encode() + b"\xfe")
+        self.assertEqual(watcher.stdout_text(), "ok �\n")
+        self.assertEqual(watcher.stderr_text(), "é�")
+
+    def test_persist_creates_artifact_directory(self):
+        artifact = self.root / "deep" / "art"
+        watcher = self.watcher(self.script("exit 0\n"), artifact=artifact)
+        watcher.stdout.extend(b"o")
+        watcher.stderr.extend(b"e")
+        watcher.persist()
+        self.assertEqual((artifact / "stdout.raw").read_bytes(), b"o")
+        self.assertEqual((artifact / "stderr.raw").read_bytes(), b"e")
+
+
 if __name__ == "__main__":
     unittest.main()
