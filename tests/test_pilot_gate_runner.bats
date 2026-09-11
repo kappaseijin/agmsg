@@ -1100,7 +1100,9 @@ PY
 @test "#405: load_existing_run rejects missing, broken or foreign state with 64" {
   run load_existing_run
   [ "$status" -eq 64 ]
-  [[ "$output" == *"no existing run"* ]]
+  # Guarded: a bare non-last [[ ]] is not enforced on bash 3.2 (#670).
+  [[ "$output" == *"no existing run"* ]] ||
+    { echo "unexpected output: $output" >&2; return 1; }
 
   printf '{broken\n' > "$UNIT_ARTIFACT/part1-state.json"
   run load_existing_run
