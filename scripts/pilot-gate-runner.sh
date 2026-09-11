@@ -322,6 +322,15 @@ validate_static_inputs() {
     usage_error \
       "source pilot-collector.sh not found"
 
+  # The pilot profile routes every tool through the pilot guard (#404).
+  [ -f "$SOURCE/scripts/lib/pilot-profile.js" ] ||
+    usage_error \
+      "source scripts/lib/pilot-profile.js not found"
+
+  [ -f "$SOURCE/scripts/pm-pilot-pretool-guard" ] ||
+    usage_error \
+      "source scripts/pm-pilot-pretool-guard not found"
+
   git -C "$SOURCE" rev-parse --is-inside-work-tree \
     >/dev/null 2>&1 ||
     usage_error \
@@ -535,7 +544,88 @@ PY
   log "existing run-id=$RUN_ID"
 }
 
+# Write <gate repo>/.claude/settings.local.json with scripts/lib/pilot-profile.js
+# from the disposable copy, pointing at the copy's pm-pilot-pretool-guard. An
+# empty profile would let N1/F2 run without the guard (#397, #404), so any
+# failure here stops the run instead of falling back to one.
+write_pilot_profile() {
+  local profile_js="$GATE_REPO/scripts/lib/pilot-profile.js"
+  local guard="$GATE_REPO/scripts/pm-pilot-pretool-guard"
+  local posttool="$GATE_REPO/scripts/pm-posttool-record"
+  local log="$ARTIFACT_DIR/P2-pilot-profile.log"
+
+  node "$profile_js" \
+    --project "$GATE_REPO" \
+    --guard "$guard" \
+    --posttool "$posttool" \
+    > "$log" 2>&1 ||
+    internal_error \
+      "cannot write pilot profile (see $log)"
+
+  [ -f "$GATE_REPO/.claude/settings.local.json" ] ||
+    internal_error \
+      "pilot profile was not written"
+}
+
+# Every AGMSG_PM_* variable names live PM state (binding, decision log,
+# executions log, claim file, ...). A pilot inherits whatever the gate
+# process carries, so a gate started from a live PM session would make the
+# pilot write the live PM's logs (#415). The launcher clears and re-sets them;
+# the runner clears them as well, before anything is started.
+scrub_agmsg_pm_environment() {
+  local name
+
+  for name in $(compgen -v); do
+    case "$name" in
+      AGMSG_PM_*)
+        unset "$name"
+        ;;
+    esac
+  done
+}
+
+# P3 records that the gate environment carries no AGMSG_PM_* at all, and
+# refuses to continue if one is present.
+check_agmsg_pm_environment() {
+  local name
+  local present=()
+
+  for name in $(compgen -v); do
+    case "$name" in
+      AGMSG_PM_*)
+        present+=("$name")
+        ;;
+    esac
+  done
+
+  python3 - "$ARTIFACT_DIR/P3-agmsg-pm-environment.json" \
+    "${present[@]+"${present[@]}"}" <<'PY' ||
+import json
+import sys
+
+output, names = sys.argv[1], sorted(sys.argv[2:])
+with open(output, "w", encoding="utf-8") as fh:
+    json.dump(
+        {
+            "schemaVersion": 1,
+            "check": "gate-environment-has-no-AGMSG_PM",
+            "present": names,
+            "verdict": "pass" if not names else "fail",
+        },
+        fh,
+        indent=2,
+        sort_keys=True,
+    )
+    fh.write("\n")
+PY
+    internal_error \
+      "cannot record the AGMSG_PM environment check"
+
+  [ "${#present[@]}" -eq 0 ]
+}
+
 export_isolated_environment() {
+  scrub_agmsg_pm_environment
   export HOME="$GATE_HOME"
   export XDG_CONFIG_HOME="$GATE_XDG_CONFIG"
   export XDG_CACHE_HOME="$GATE_XDG_CACHE"
@@ -690,19 +780,10 @@ phase_p2_isolation_setup() {
         "cannot remove disposable repository remote: $remote"
   done
 
-  # N1 needs an actual profile because G4-A digests it before exec.
-  #
-  # Part 1 does not run F2 itself yet, so no fault hook is installed here.
-  # Later parts can derive control/fault profiles from this gate-owned copy.
-  mkdir -p "$GATE_REPO/.claude" ||
-    internal_error \
-      "cannot create disposable Claude profile directory"
-
-  cat > "$GATE_REPO/.claude/settings.local.json" <<'JSON'
-{
-  "hooks": {}
-}
-JSON
+  # N1 needs an actual profile because G4-A digests it before exec, and
+  # every tool the pilot uses must go through the pilot guard (#404).
+  # F2/F3 derive their control/fault profiles from this gate-owned copy.
+  write_pilot_profile
 
   # The gate team must exist only in the disposable skill root.
   #
@@ -728,6 +809,12 @@ phase_p3_isolation_preflight() {
   local status
 
   log "P3 isolation preflight"
+
+  if ! check_agmsg_pm_environment; then
+    log \
+      "P3 isolation preflight: AGMSG_PM_* present in the gate environment; aborting before N1"
+    return "$EX_GATE_UNKNOWN"
+  fi
 
   status=0
   python3 "$ISOLATION_HELPER" preflight \
@@ -2155,12 +2242,14 @@ main() {
   parse_args "$@"
 
   require_command python3
+  require_command node
   require_command git
   require_command mktemp
   require_command ps
 
   validate_static_inputs
   scrub_github_credentials
+  scrub_agmsg_pm_environment
   identify_native_claude
 
   case "$SUBCOMMAND" in
