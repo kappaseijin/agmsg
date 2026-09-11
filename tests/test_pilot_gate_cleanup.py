@@ -593,5 +593,623 @@ class PilotGateCleanupRoundA(SignalGuardedCase):
         self.assertIn((700, CL.signal.SIGKILL), kills)
         self.assertFalse((artifact / "processes-after.json").exists())
 
+
+def write_config(gate_repo: Path, directory: str, value) -> Path:
+    path = gate_repo / "teams" / directory / "config.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(value, str):
+        path.write_text(value, encoding="utf-8")
+    else:
+        path.write_text(json.dumps(value), encoding="utf-8")
+    return path
+
+
+def make_claims_db(path: Path, claims) -> Path:
+    """claims: (legacy_id, team, owner, event_uuid) rows."""
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE messages (id TEXT PRIMARY KEY, team TEXT);
+            CREATE TABLE message_claims (message_id TEXT, owner TEXT);
+            CREATE TABLE events (
+              id TEXT, legacy_id TEXT, type TEXT, team TEXT
+            );
+            """
+        )
+        for legacy_id, team, owner, event_uuid in claims:
+            connection.execute(
+                "INSERT INTO messages VALUES (?, ?)", (legacy_id, team)
+            )
+            connection.execute(
+                "INSERT INTO message_claims VALUES (?, ?)",
+                (legacy_id, owner),
+            )
+            if event_uuid is not ...:
+                connection.execute(
+                    "INSERT INTO events VALUES (?, ?, 'message_sent', ?)",
+                    (event_uuid, legacy_id, team),
+                )
+        connection.commit()
+    finally:
+        connection.close()
+    return path
+
+
+def delete_claim(db: Path, legacy_id: str) -> None:
+    connection = sqlite3.connect(db)
+    try:
+        connection.execute(
+            "DELETE FROM message_claims WHERE message_id = ?", (legacy_id,)
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+class PilotGateCleanupRoundB(SignalGuardedCase):
+    """Registrations, bindings, claims, snapshots and safe removal."""
+
+    def setUp(self):
+        super().setUp()
+        self.run_root = self.root / "run"
+        self.gate_repo = self.run_root / "repo"
+        (self.gate_repo / "teams").mkdir(parents=True)
+        (self.gate_repo / "scripts").mkdir()
+        self.artifact = self.root / "evidence"
+
+    # --- registration_rows -----------------------------------------------
+
+    def test_registration_rows_collects_run_scoped_registrations(self):
+        inside = str(self.run_root / "proj")
+        write_config(self.gate_repo, "g", {
+            "name": "gate",
+            "agents": {
+                "legacy": {"type": "claude-code", "project": inside},
+                "multi": {
+                    "registrations": [
+                        {"type": "codex", "project": inside + "2"},
+                        {"type": "claude-code",
+                         "project": str(self.root / "live")},
+                        {"type": "", "project": inside},
+                        {"type": "codex"},
+                        {"type": 5, "project": inside},
+                    ],
+                },
+            },
+        })
+        rows, errors = CL.registration_rows(self.gate_repo, self.run_root)
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            sorted(rows, key=lambda r: (r["agent"], r["type"])),
+            [
+                {"team": "gate", "agent": "legacy", "project": inside,
+                 "type": "claude-code"},
+                {"team": "gate", "agent": "multi",
+                 "project": inside + "2", "type": "codex"},
+            ],
+        )
+
+    def test_registration_rows_reports_every_parse_error_kind(self):
+        write_config(self.gate_repo, "broken", "{not json")
+        write_config(self.gate_repo, "list", "[1]")
+        write_config(self.gate_repo, "noname", {"agents": {}})
+        write_config(self.gate_repo, "noagents", {"name": "x", "agents": []})
+        write_config(self.gate_repo, "badagent", {
+            "name": "y", "agents": {"a": "not-a-dict"},
+        })
+        write_config(self.gate_repo, "badreg", {
+            "name": "z", "agents": {"a": {"registrations": ["nope"]}},
+        })
+        rows, errors = CL.registration_rows(self.gate_repo, self.run_root)
+        self.assertEqual(rows, [])
+        teams = self.gate_repo / "teams"
+        self.assertEqual(
+            sorted(errors),
+            sorted([
+                f"{teams / 'broken' / 'config.json'}:JSONDecodeError",
+                f"{teams / 'list' / 'config.json'}:root_not_object",
+                f"{teams / 'noname' / 'config.json'}:schema_unidentified",
+                f"{teams / 'noagents' / 'config.json'}:schema_unidentified",
+                f"{teams / 'badagent' / 'config.json'}:"
+                "agent_schema_unidentified",
+                f"{teams / 'badreg' / 'config.json'}:a:registration_invalid",
+            ]),
+        )
+
+    def test_registration_rows_skips_symlinked_config_and_missing_teams(self):
+        outside = self.root / "outside.json"
+        outside.write_text(json.dumps({
+            "name": "evil",
+            "agents": {"a": {"type": "codex",
+                             "project": str(self.run_root / "p")}},
+        }))
+        (self.gate_repo / "teams" / "link").mkdir()
+        (self.gate_repo / "teams" / "link" / "config.json").symlink_to(outside)
+        self.assertEqual(
+            CL.registration_rows(self.gate_repo, self.run_root), ([], [])
+        )
+        self.assertEqual(
+            CL.registration_rows(self.root / "no-repo", self.run_root),
+            ([], []),
+        )
+
+    # --- binding_sessions / disposable_teams -----------------------------
+
+    def test_binding_sessions_maps_complete_bindings_only(self):
+        bindings = self.gate_repo / "run" / "pilot" / "gen1" / "bindings"
+        bindings.mkdir(parents=True)
+        good = {"team": "t", "agent": "a",
+                "project": str(self.run_root / "p"), "sessionId": "s1"}
+        (bindings / "good.json").write_text(json.dumps(good))
+        (bindings / "partial.json").write_text(
+            json.dumps({**good, "sessionId": ""})
+        )
+        (bindings / "list.json").write_text("[]")
+        (bindings / "broken.json").write_text("{")
+        (bindings / "link.json").symlink_to(bindings / "good.json")
+        self.assertEqual(
+            CL.binding_sessions(self.gate_repo),
+            {("t", "a", str(self.run_root / "p")): "s1"},
+        )
+        self.assertEqual(CL.binding_sessions(self.root / "none"), {})
+
+    def test_disposable_teams_always_includes_gate_team_sorted_unique(self):
+        self.assertEqual(CL.disposable_teams([], "gate"), ["gate"])
+        self.assertEqual(
+            CL.disposable_teams(
+                [{"team": "b"}, {"team": "gate"}, {"team": "a"},
+                 {"team": "b"}],
+                "gate",
+            ),
+            ["a", "b", "gate"],
+        )
+
+    # --- release_message_claims ------------------------------------------
+
+    def claims_fixture(self, claims_by_team, *, release_ok=None):
+        provider = self.gate_repo / "scripts" / "p2-provider.sh"
+        provider.write_text("#!/bin/sh\n")
+        dbs = {}
+        for team, claims in claims_by_team.items():
+            dbs[team] = make_claims_db(self.root / f"{team}.db", claims)
+        i1 = mock.Mock()
+        i1.storage_db.side_effect = (
+            lambda gate_repo, team, env: dbs.get(team, self.root / "none.db")
+        )
+
+        def handler(label, argv, *, cwd=None, env=None):
+            _, verb, team, message_uuid, owner = argv
+            ok = release_ok(message_uuid) if release_ok else True
+            if ok is None:
+                return None
+            if ok:
+                legacy = message_uuid.replace("uuid-", "")
+                delete_claim(dbs[team], legacy)
+                return completed()
+            return completed(returncode=1)
+
+        return i1, FakeRecorder(handler), provider, dbs
+
+    def release(self, i1, recorder, teams):
+        return CL.release_message_claims(
+            i1=i1,
+            gate_repo=self.gate_repo,
+            teams=teams,
+            env={"E": "1"},
+            recorder=recorder,
+            artifact=self.artifact,
+        )
+
+    def test_release_message_claims_releases_each_claim_and_verifies(self):
+        i1, recorder, provider, _ = self.claims_fixture({
+            "gate": [("m1", "gate", "owner-a", "uuid-m1"),
+                     ("m2", "gate", "owner-b", "uuid-m2")],
+            "other": [("m3", "other", "owner-c", "uuid-m3")],
+        })
+        status, claims = self.release(i1, recorder, ["gate", "other"])
+        self.assertEqual(status, "pass")
+        self.assertEqual(
+            [c["legacyId"] for c in claims], ["m1", "m2", "m3"]
+        )
+        self.assertEqual(
+            [call["argv"] for call in recorder.calls],
+            [
+                [str(provider), "message-release", "gate", "uuid-m1",
+                 "owner-a"],
+                [str(provider), "message-release", "gate", "uuid-m2",
+                 "owner-b"],
+                [str(provider), "message-release", "other", "uuid-m3",
+                 "owner-c"],
+            ],
+        )
+        self.assertEqual(
+            [call["label"] for call in recorder.calls],
+            ["message-release-000", "message-release-001",
+             "message-release-002"],
+        )
+        for call in recorder.calls:
+            self.assertEqual(call["cwd"], self.gate_repo)
+            self.assertEqual(call["env"], {"E": "1"})
+        before = json.loads((self.artifact / "claims-before.json").read_text())
+        self.assertEqual(len(before["claims"]), 3)
+        after = json.loads((self.artifact / "claims-after.json").read_text())
+        self.assertEqual(after["remaining"], [])
+        self.assertEqual(after["releaseFailures"], [])
+
+    def test_release_message_claims_only_touches_listed_teams(self):
+        # One storage file shared by the gate team and a live team: only
+        # the listed team's claims may be read, released or verified.
+        shared = make_claims_db(
+            self.root / "shared.db",
+            [("m1", "gate", "o", "uuid-m1"), ("m9", "live", "o", "uuid-m9")],
+        )
+        (self.gate_repo / "scripts" / "p2-provider.sh").write_text("#!/bin/sh\n")
+        i1 = mock.Mock()
+        i1.storage_db.return_value = shared
+
+        def handler(label, argv, *, cwd=None, env=None):
+            delete_claim(shared, argv[3].replace("uuid-", ""))
+            return completed()
+
+        recorder = FakeRecorder(handler)
+        status, claims = self.release(i1, recorder, ["gate"])
+        self.assertEqual(status, "pass")
+        self.assertEqual([c["team"] for c in claims], ["gate"])
+        self.assertEqual([call["argv"][2] for call in recorder.calls], ["gate"])
+        connection = sqlite3.connect(shared)
+        try:
+            remaining = connection.execute(
+                "SELECT message_id FROM message_claims"
+            ).fetchall()
+        finally:
+            connection.close()
+        self.assertEqual(remaining, [("m9",)])
+
+    def test_release_message_claims_fail_when_release_fails_or_claim_stays(self):
+        i1, recorder, _, _ = self.claims_fixture(
+            {"gate": [("m1", "gate", "o", "uuid-m1"),
+                      ("m2", "gate", "o", "uuid-m2")]},
+            release_ok=lambda uuid: uuid != "uuid-m2",
+        )
+        status, _ = self.release(i1, recorder, ["gate"])
+        self.assertEqual(status, "fail")
+        after = json.loads((self.artifact / "claims-after.json").read_text())
+        self.assertEqual([r["legacyId"] for r in after["remaining"]], ["m2"])
+        self.assertEqual(
+            [f["legacyId"] for f in after["releaseFailures"]], ["m2"]
+        )
+
+    def test_release_message_claims_release_failure_alone_is_fail(self):
+        # The provider reports failure although the claim did go away:
+        # the failed command must still fail the step on its own, not
+        # only through the "remaining" re-check.
+        i1, recorder, _, dbs = self.claims_fixture(
+            {"gate": [("m1", "gate", "o", "uuid-m1")]}
+        )
+
+        def released_but_failed(label, argv, *, cwd=None, env=None):
+            delete_claim(dbs["gate"], "m1")
+            return completed(returncode=1)
+
+        recorder.handler = released_but_failed
+        status, _ = self.release(i1, recorder, ["gate"])
+        self.assertEqual(status, "fail")
+        after = json.loads((self.artifact / "claims-after.json").read_text())
+        self.assertEqual(after["remaining"], [])
+        self.assertEqual(
+            [f["legacyId"] for f in after["releaseFailures"]], ["m1"]
+        )
+
+    def test_release_message_claims_timeout_counts_as_release_failure(self):
+        i1, recorder, _, _ = self.claims_fixture(
+            {"gate": [("m1", "gate", "o", "uuid-m1")]},
+            release_ok=lambda uuid: None,
+        )
+        status, _ = self.release(i1, recorder, ["gate"])
+        self.assertEqual(status, "fail")
+
+    def test_release_message_claims_fail_when_provider_reports_ok_but_claim_remains(self):
+        i1, recorder, _, _ = self.claims_fixture(
+            {"gate": [("m1", "gate", "o", "uuid-m1")]}
+        )
+        recorder.handler = lambda *a, **k: completed()
+        status, _ = self.release(i1, recorder, ["gate"])
+        self.assertEqual(status, "fail")
+
+    def test_release_message_claims_unknown_on_read_errors(self):
+        i1, recorder, _, _ = self.claims_fixture(
+            {"gate": [("m1", "gate", "o", "uuid-m1")]}
+        )
+        base = i1.storage_db.side_effect
+
+        def storage(gate_repo, team, env):
+            if team == "broken":
+                raise RuntimeError("no storage")
+            return base(gate_repo, team, env)
+
+        i1.storage_db.side_effect = storage
+        status, _ = self.release(i1, recorder, ["gate", "broken"])
+        self.assertEqual(status, "unknown")
+        before = json.loads((self.artifact / "claims-before.json").read_text())
+        self.assertEqual(before["readErrors"], ["broken:storage:RuntimeError"])
+        after = json.loads((self.artifact / "claims-after.json").read_text())
+        self.assertEqual(after["verifyErrors"], ["broken:storage:RuntimeError"])
+
+    def test_release_message_claims_unknown_on_unreadable_db(self):
+        i1, recorder, _, _ = self.claims_fixture({})
+        bad = self.root / "bad.db"
+        bad.write_text("not a database")
+        i1.storage_db.side_effect = lambda *a: bad
+        status, claims = self.release(i1, recorder, ["gate"])
+        self.assertEqual((status, claims), ("unknown", []))
+        before = json.loads((self.artifact / "claims-before.json").read_text())
+        self.assertTrue(before["readErrors"][0].startswith("gate:claims:"))
+
+    def test_release_message_claims_unidentified_row_is_unknown_not_released(self):
+        i1, recorder, _, _ = self.claims_fixture({
+            "gate": [("m1", "gate", "", "uuid-m1")],
+        })
+        status, claims = self.release(i1, recorder, ["gate"])
+        # The claim is neither releasable (no owner) nor gone.
+        self.assertEqual(status, "fail")
+        self.assertEqual(claims, [])
+        self.assertEqual(recorder.calls, [])
+        before = json.loads((self.artifact / "claims-before.json").read_text())
+        self.assertEqual(before["readErrors"], ["gate:claim_row_unidentified:m1"])
+
+    def test_release_message_claims_missing_provider_is_unknown(self):
+        i1 = mock.Mock()
+        recorder = FakeRecorder()
+        status, claims = self.release(i1, recorder, ["gate"])
+        self.assertEqual((status, claims), ("unknown", []))
+        i1.storage_db.assert_not_called()
+        self.assertFalse(self.artifact.exists())
+
+    def test_release_message_claims_absent_db_is_pass_and_dedups(self):
+        i1, recorder, _, _ = self.claims_fixture({
+            "gate": [("m1", "gate", "o", "uuid-m1")],
+        })
+        status, claims = self.release(i1, recorder, ["gate", "gate", "nodb"])
+        self.assertEqual(status, "pass")
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(len(recorder.calls), 1)
+
+    # --- reset_registrations ---------------------------------------------
+
+    def reset_fixture(self, *, reset_ok=True):
+        inside = str(self.run_root / "proj")
+        config = write_config(self.gate_repo, "g1", {
+            "name": "gate-1",
+            "agents": {
+                "a": {"type": "claude-code", "project": inside},
+                "b": {"type": "codex", "project": inside},
+            },
+        })
+        write_config(self.gate_repo, "g2", {
+            "name": "gate-2",
+            "agents": {"a": {"type": "claude-code", "project": inside}},
+        })
+        write_config(self.gate_repo, "live", {
+            "name": "live",
+            "agents": {"x": {"type": "codex",
+                             "project": str(self.root / "live")}},
+        })
+
+        def handler(label, argv, *, cwd=None, env=None):
+            _, _, flag, project, kind, agent = argv
+            ok = reset_ok(agent) if callable(reset_ok) else reset_ok
+            if ok is None:
+                return None
+            if not ok:
+                return completed(returncode=1)
+            for path in (self.gate_repo / "teams").glob("*/config.json"):
+                try:
+                    value = json.loads(path.read_text())
+                except ValueError:
+                    continue
+                entry = value["agents"].get(agent)
+                if (entry and entry.get("project") == project
+                        and entry.get("type") == kind):
+                    del value["agents"][agent]
+                    path.write_text(json.dumps(value))
+            return completed()
+
+        return FakeRecorder(handler), inside
+
+    def reset(self, recorder):
+        return CL.reset_registrations(
+            gate_repo=self.gate_repo,
+            run_root=self.run_root,
+            recorder=recorder,
+            env={"E": "1"},
+            artifact=self.artifact,
+        )
+
+    def test_reset_registrations_resets_unique_tuples_without_session(self):
+        recorder, inside = self.reset_fixture()
+        status, rows = self.reset(recorder)
+        self.assertEqual(status, "pass")
+        self.assertEqual(len(rows), 3)
+        reset_script = str(self.gate_repo / "scripts" / "reset.sh")
+        self.assertEqual(
+            sorted(call["argv"] for call in recorder.calls),
+            sorted([
+                ["bash", reset_script, "--no-resolve", inside,
+                 "claude-code", "a"],
+                ["bash", reset_script, "--no-resolve", inside, "codex", "b"],
+            ]),
+        )
+        for call in recorder.calls:
+            self.assertEqual(len(call["argv"]), 6)  # no session id
+            self.assertEqual(call["cwd"], self.gate_repo)
+            self.assertEqual(
+                call["env"], {"E": "1", "AGMSG_RESOLVE_PROJECT": "0"}
+            )
+        after = json.loads(
+            (self.artifact / "registrations-after.json").read_text()
+        )
+        self.assertEqual(after["remaining"], [])
+        live = json.loads(
+            (self.gate_repo / "teams" / "live" / "config.json").read_text()
+        )
+        self.assertIn("x", live["agents"])
+
+    def test_reset_registrations_fail_on_reset_failure_or_remaining(self):
+        for ok in (False, None):
+            with self.subTest(ok=ok):
+                self._tmp.cleanup()
+                self.setUp()
+                recorder, _ = self.reset_fixture(
+                    reset_ok=lambda agent, ok=ok: ok if agent == "b" else True
+                )
+                status, _ = self.reset(recorder)
+                self.assertEqual(status, "fail")
+                after = json.loads(
+                    (self.artifact / "registrations-after.json").read_text()
+                )
+                self.assertEqual(
+                    [r["agent"] for r in after["resetFailures"]], ["b"]
+                )
+                self.assertEqual(
+                    [r["agent"] for r in after["remaining"]], ["b"]
+                )
+
+    def test_reset_registrations_fail_when_script_succeeds_but_row_remains(self):
+        recorder, _ = self.reset_fixture()
+        recorder.handler = lambda *a, **k: completed()
+        status, _ = self.reset(recorder)
+        self.assertEqual(status, "fail")
+
+    def test_reset_registrations_unknown_on_parse_errors(self):
+        recorder, _ = self.reset_fixture()
+        write_config(self.gate_repo, "broken", "{")
+        status, _ = self.reset(recorder)
+        self.assertEqual(status, "unknown")
+        before = json.loads(
+            (self.artifact / "registrations-before.json").read_text()
+        )
+        self.assertEqual(len(before["parseErrors"]), 1)
+
+    def test_reset_registrations_nothing_to_do_is_pass(self):
+        recorder = FakeRecorder()
+        status, rows = self.reset(recorder)
+        self.assertEqual((status, rows), ("pass", []))
+        self.assertEqual(recorder.calls, [])
+
+    # --- snapshots -------------------------------------------------------
+
+    def test_copy_file_fsync_copies_bytes_and_creates_parents(self):
+        source = self.root / "src.bin"
+        source.write_bytes(bytes(range(256)) * 5000)
+        target = self.root / "deep" / "dst.bin"
+        CL.copy_file_fsync(source, target)
+        self.assertEqual(target.read_bytes(), source.read_bytes())
+
+    def test_snapshot_tree_copies_regular_files_with_suffix_filter(self):
+        source = self.root / "src"
+        (source / "a" / "b").mkdir(parents=True)
+        (source / "top.jsonl").write_text("1")
+        (source / "a" / "b" / "deep.log").write_text("2")
+        (source / "a" / "skip.bin").write_text("3")
+        (source / "a" / "link.jsonl").symlink_to(source / "top.jsonl")
+        destination = self.root / "dst"
+
+        copied = CL.snapshot_tree(source, destination,
+                                  suffixes={".jsonl", ".log"})
+        self.assertEqual(
+            sorted(copied),
+            sorted([str(destination / "top.jsonl"),
+                    str(destination / "a" / "b" / "deep.log")]),
+        )
+        self.assertFalse((destination / "a" / "skip.bin").exists())
+        self.assertFalse((destination / "a" / "link.jsonl").exists())
+
+        everything = CL.snapshot_tree(source, self.root / "all")
+        self.assertEqual(len(everything), 3)
+        self.assertEqual(CL.snapshot_tree(self.root / "missing", destination),
+                         [])
+
+    def test_snapshot_evidence_copies_three_sources_and_records(self):
+        claude = self.run_root / "claude"
+        (self.gate_repo / "run" / "pilot" / "g").mkdir(parents=True)
+        (self.gate_repo / "run" / "pilot" / "g" / "b.json").write_text("{}")
+        (self.gate_repo / ".agmsg-gate" / "f5").mkdir(parents=True)
+        (self.gate_repo / ".agmsg-gate" / "f5" / "x.raw").write_text("x")
+        (claude / "projects").mkdir(parents=True)
+        (claude / "projects" / "t.jsonl").write_text("t")
+        (claude / "settings.json").write_text("{}")
+        artifact_dir = self.root / "artifacts"
+
+        record = CL.snapshot_evidence(
+            gate_repo=self.gate_repo,
+            claude_config=claude,
+            artifact_dir=artifact_dir,
+        )
+        pre = artifact_dir / "pre-cleanup"
+        self.assertEqual(record["copiedCount"], 3)
+        self.assertEqual(
+            sorted(record["files"]),
+            sorted([
+                str(pre / "run-pilot" / "g" / "b.json"),
+                str(pre / "agmsg-gate" / "f5" / "x.raw"),
+                str(pre / "claude-transcripts" / "projects" / "t.jsonl"),
+            ]),
+        )
+        self.assertFalse((pre / "claude-transcripts" / "settings.json").exists())
+        self.assertEqual(
+            json.loads((pre / "snapshot.json").read_text())["copiedCount"], 3
+        )
+
+    # --- remove_tree_safely ----------------------------------------------
+    # Every path here lives under this test's temporary directory, so a
+    # broken containment check cannot delete anything outside it.
+
+    def test_remove_tree_safely_refuses_outside_and_root(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "keep").write_text("k")
+        self.run_root.mkdir(exist_ok=True)
+        self.assertEqual(CL.remove_tree_safely(outside, self.run_root), "fail")
+        self.assertTrue((outside / "keep").exists())
+        self.assertEqual(
+            CL.remove_tree_safely(self.run_root, self.run_root), "fail"
+        )
+        self.assertTrue(self.run_root.exists())
+
+    def test_remove_tree_safely_removes_dir_file_and_missing_is_pass(self):
+        target = self.run_root / "xdg" / "config"
+        (target / "sub").mkdir(parents=True)
+        (target / "sub" / "f").write_text("f")
+        self.assertEqual(CL.remove_tree_safely(target, self.run_root), "pass")
+        self.assertFalse(target.exists())
+        self.assertTrue((self.run_root / "xdg").exists())
+
+        single = self.run_root / "file"
+        single.write_text("x")
+        self.assertEqual(CL.remove_tree_safely(single, self.run_root), "pass")
+        self.assertFalse(single.exists())
+
+        self.assertEqual(
+            CL.remove_tree_safely(self.run_root / "absent", self.run_root),
+            "pass",
+        )
+
+    # Symlink handling (stop, keep, report) is covered by
+    # tests/test_pilot_gate_cleanup_containment.py (Issue #400).
+
+    def test_remove_tree_safely_reports_os_errors_as_fail(self):
+        target = self.run_root / "home"
+        target.mkdir(parents=True)
+        with mock.patch.object(CL.shutil, "rmtree", side_effect=OSError):
+            self.assertEqual(CL.remove_tree_safely(target, self.run_root),
+                             "fail")
+        self.assertTrue(target.exists())
+
+        with mock.patch.object(CL.shutil, "rmtree"):  # silently no-op
+            self.assertEqual(CL.remove_tree_safely(target, self.run_root),
+                             "fail")
+
+
 if __name__ == "__main__":
     unittest.main()
