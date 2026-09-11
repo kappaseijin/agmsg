@@ -75,7 +75,7 @@ scripts/pilot-launcher.sh (G4-A)
 pilot profile / PreToolUse
   |
   v
-scripts/pm-pretool-guard
+scripts/pm-pilot-pretool-guard (G4-D, #404)
   |
   v
 scripts/p2-consumer-broker.sh (G4-B)
@@ -92,7 +92,9 @@ scripts/pilot-collector.sh (G4-C)
 
 gate harness はこれらの外側から、filesystem / profile / environment / process lifecycle / dependency availability / delivery condition を操作して fault を注入する。
 
-**実測確認済み**: `scripts/pilot-launcher.sh` は実際に `--team` / `--project` / `--fresh` / `--resume` フラグを持つ（79, 86, 93, 102行目）。`scripts/pm-pretool-guard` は実在する。本設計はこれら実物のCLI/ファイルを前提にしている。
+**実測確認済み**: `scripts/pilot-launcher.sh` は実際に `--team` / `--project` / `--fresh` / `--resume` フラグを持つ（79, 86, 93, 102行目）。本設計はこれら実物のCLIを前提にしている。
+
+**訂正（Issue #404）**: pilot 経路の guard は `scripts/pm-pilot-pretool-guard` である。この文書の初版は、上の図と本段落に現行 PM 用 guard（§8 の live PM 負の対照が対象とするファイル）の名前を書き、「実在する」と記していた。実在を確かめたのは現行 PM の guard であり、pilot guard は本 runbook の作成時点で存在しなかった（#397 で判明）。pilot guard の契約は `2026-09-11T133016_issue-404-pilot-pretool-guard-contract.md` が定める。§8 の記述は現行 PM の guard を指しており、正しいため変更しない。
 
 ## 4. gate の最上位安全原則
 
