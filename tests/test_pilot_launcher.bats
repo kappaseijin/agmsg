@@ -622,8 +622,10 @@ assert_resume_rejected_without_new_launch() {
   grep -q "^AGMSG_PM_EXECUTIONS_FILE=$(bindings_dir)/1.executions.jsonl\$" "$env_log"
   grep -q "^AGMSG_PM_DECISIONS_FILE=$(bindings_dir)/1.decisions.jsonl\$" "$env_log"
 
-  [ -f "$(bindings_dir)/1.executions.jsonl" ] && [ ! -L "$(bindings_dir)/1.executions.jsonl" ]
-  [ -f "$(bindings_dir)/1.decisions.jsonl" ] && [ ! -L "$(bindings_dir)/1.decisions.jsonl" ]
+  [ -f "$(bindings_dir)/1.executions.jsonl" ]
+  [ ! -L "$(bindings_dir)/1.executions.jsonl" ]
+  [ -f "$(bindings_dir)/1.decisions.jsonl" ]
+  [ ! -L "$(bindings_dir)/1.decisions.jsonl" ]
 }
 
 @test "pilot launcher: a pre-planted run log for the new generation fails closed before exec" {
