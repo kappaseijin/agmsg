@@ -121,6 +121,11 @@ EOF
 exit 1
 EOF
 
+  # #404: the source must carry the pilot profile writer and pilot guard.
+  mkdir -p "$UNIT_SOURCE/scripts/lib"
+  : > "$UNIT_SOURCE/scripts/lib/pilot-profile.js"
+  printf '#!/bin/sh\nexit 2\n' > "$UNIT_SOURCE/scripts/pm-pilot-pretool-guard"
+
   git -C "$UNIT_SOURCE" init -q
   git -C "$UNIT_SOURCE" config user.email \
     "pilot-gate-runner-test@example.invalid"
@@ -1163,3 +1168,94 @@ PY
   [ "$status" -eq 70 ]
   [[ "$output" == *"unexpected internal status=5"* ]]
 }
+
+# --- #404: the runner writes the pilot profile through pilot-profile.js -----
+
+@test "validate_static_inputs requires the pilot profile writer and pilot guard" {
+  local relative
+
+  for relative in scripts/lib/pilot-profile.js scripts/pm-pilot-pretool-guard
+  do
+    mv "$UNIT_SOURCE/$relative" "$UNIT_SOURCE/$relative.away"
+
+    run validate_static_inputs
+
+    mv "$UNIT_SOURCE/$relative.away" "$UNIT_SOURCE/$relative"
+
+    [ "$status" -eq 64 ]
+    case "$output" in
+      *"source $relative not found"*) ;;
+      *) echo "unexpected output: $output" >&2; return 1 ;;
+    esac
+  done
+}
+
+make_profile_gate_repo() {
+  GATE_REPO="$TEST_ROOT/gate-repo"
+  mkdir -p "$GATE_REPO/scripts/lib"
+  cp "$SCRIPTS/lib/pilot-profile.js" "$GATE_REPO/scripts/lib/pilot-profile.js"
+  printf '#!/bin/sh\nexit 2\n' > "$GATE_REPO/scripts/pm-pilot-pretool-guard"
+  chmod +x "$GATE_REPO/scripts/pm-pilot-pretool-guard"
+}
+
+@test "write_pilot_profile routes every tool through the copy's pilot guard" {
+  command -v node >/dev/null || skip "node not installed"
+  make_profile_gate_repo
+
+  write_pilot_profile
+
+  local profile="$GATE_REPO/.claude/settings.local.json"
+  [ -f "$profile" ]
+  run python3 -c '
+import json, sys
+profile, guard = json.load(open(sys.argv[1])), sys.argv[2]
+entries = profile["hooks"]["PreToolUse"]
+assert len(entries) == 1, entries
+assert entries[0]["matcher"] == "*", entries
+assert [h["command"] for h in entries[0]["hooks"]] == [guard], entries
+assert set(profile["hooks"]) == {"PreToolUse"}, profile
+print("ok")
+' "$profile" "$GATE_REPO/scripts/pm-pilot-pretool-guard"
+  [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
+  [ "$output" = "ok" ]
+}
+
+@test "write_pilot_profile stops the run instead of leaving an empty profile" {
+  command -v node >/dev/null || skip "node not installed"
+  make_profile_gate_repo
+
+  local variant
+  for variant in missing symlink not-executable
+  do
+    rm -rf "$GATE_REPO/.claude"
+    rm -f "$GATE_REPO/scripts/pm-pilot-pretool-guard"
+    case "$variant" in
+      missing)
+        ;;
+      symlink)
+        printf '#!/bin/sh\nexit 2\n' > "$TEST_ROOT/real-guard"
+        chmod +x "$TEST_ROOT/real-guard"
+        ln -s "$TEST_ROOT/real-guard" "$GATE_REPO/scripts/pm-pilot-pretool-guard"
+        ;;
+      not-executable)
+        printf '#!/bin/sh\nexit 2\n' > "$GATE_REPO/scripts/pm-pilot-pretool-guard"
+        chmod -x "$GATE_REPO/scripts/pm-pilot-pretool-guard"
+        ;;
+    esac
+
+    run write_pilot_profile
+
+    [ "$status" -eq 70 ] || { echo "$variant: status=$status $output" >&2; return 1; }
+    [ ! -e "$GATE_REPO/.claude/settings.local.json" ] ||
+      { echo "$variant: a profile was left behind" >&2; return 1; }
+    grep -q "pilot-profile:" "$ARTIFACT_DIR/P2-pilot-profile.log" ||
+      { echo "$variant: no pilot-profile diagnostic" >&2; return 1; }
+  done
+}
+
+@test "the runner no longer writes an empty hooks profile" {
+  # The profile that let N1/F2 bypass the guard (#397).
+  run grep -n '"hooks": {}' "$RUNNER"
+  [ "$status" -eq 1 ]
+}
+
