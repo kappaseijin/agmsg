@@ -95,15 +95,20 @@ hook JSON を stdin から読む。
 | `hook_event_name` がある場合は `PreToolUse` である | `hook_event_invalid` |
 
 guard が読む環境変数は次のとおりである。**未設定・空・制御文字を含む値は deny とする。**
+値はすべて launcher が設定する（§9.1）。
 
 | 変数 | 用途 |
 | --- | --- |
 | `AGMSG_PM_PILOT_SESSION_ID` | `session_id` との一致 |
-| `AGMSG_PM_BINDING_FILE` | binding の読取り（session-identity.js も読む） |
+| `AGMSG_PM_BINDING_FILE` | binding の読取り（session-identity.js も読む）。記録先の検査（段 0）の基準 |
 | `AGMSG_PM_GUARD_PATH` | 自分のパスとの一致 |
 | `AGMSG_PM_BROKER_PATH` | broker パスとの一致 |
-| `AGMSG_PM_DECISIONS_FILE` | 決定記録の出力先（§8） |
+| `AGMSG_PM_DECISIONS_FILE` | 決定記録の出力先（§8）。置き場所を段 0 で検査する |
+| `AGMSG_PM_EXECUTIONS_FILE` | guard は書かない。PostToolUse handler（`pm-posttool-record`）の出力先であり、置き場所を段 0 で検査する |
 | `AGMSG_PM_TEAM`、`AGMSG_PM_AGENT`、`AGMSG_PM_TYPE`、`AGMSG_PM_PROCESS_PID`、`AGMSG_PM_PROCESS_GENERATION`、`AGMSG_PM_PROCESS_START`、`AGMSG_PM_TEAMS_DIR`、`AGMSG_PM_CLAIM_FILE` | session-identity.js へそのまま渡す |
+
+変数の欠落・不正を表す reason は `env_<name>_invalid` とする。`<name>` は変数名から `AGMSG_PM_` を除いて小文字にしたものである（例: `env_binding_file_invalid`）。
+reason 名の細部は実装の裁量とする（errata 2）。
 
 ## 6. 判定の順序と規則
 
@@ -112,15 +117,16 @@ guard が読む環境変数は次のとおりである。**未設定・空・制
 
 | 段 | 検査 | 失敗時の reason |
 | --- | --- | --- |
+| 0 | 記録先の置き場所（§8.1）。`AGMSG_PM_DECISIONS_FILE` と `AGMSG_PM_EXECUTIONS_FILE` が pilot seat の `logs/` 直下にあり、symlink でない。**違反時は決定記録を書かない**（stderr のみ） | `decision_log_unconfigured` / `decision_log_outside_seat` / `executions_log_outside_seat` |
 | 1 | 入力（§5） | §5 の各 reason |
 | 2 | `tool_name === 'Bash'` | `tool_not_allowed` |
 | 3 | command 文法（§7） | `command_not_in_pilot_contract` |
 | 4 | identity：`session-identity.js` が 2 秒以内に exit 0、stdout が `status=ok` の JSON | `session_identity_unavailable` / `session_identity_invalid` |
 | 5 | identity の `agent === PILOT_AGENT`、`type === PILOT_TYPE`、`sessionId === AGMSG_PM_PILOT_SESSION_ID === input.session_id` | `pilot_identity_mismatch` |
 | 6 | binding を再読取りし、`policyVersion === POLICY_VERSION`、`providerCommit === PROVIDER_COMMIT` | `binding_policy_mismatch` / `binding_provider_mismatch` |
-| 7 | guard 自身：`AGMSG_PM_GUARD_PATH === path.join(__dirname, 'pm-pilot-pretool-guard')`、その実体が `__filename` と同一、lstat で通常ファイルかつ symlink でない、`sha256File` が `binding.guardDigest` と一致 | `guard_path_mismatch` / `guard_digest_mismatch` |
+| 7 | guard 自身：`AGMSG_PM_GUARD_PATH` が絶対パスで basename が `pm-pilot-pretool-guard`、lexical パスが lstat で通常ファイルかつ symlink でない、その realpath が `__filename` の realpath と一致、`sha256File` が `binding.guardDigest` と一致（§6.3） | `guard_path_mismatch` / `guard_digest_mismatch` |
 | 8 | profile：`<binding.project>/.claude/settings.local.json` の `sha256File` が `binding.profileDigest` と一致 | `profile_digest_mismatch` |
-| 9 | broker：§7 の broker トークン `=== AGMSG_PM_BROKER_PATH === path.join(__dirname, 'p2-consumer-broker.sh')`、symlink でない、通常ファイル、実行可能、`sha256File` が `binding.brokerDigest` と一致 | `broker_path_mismatch` / `broker_digest_mismatch` |
+| 9 | broker：§7 の broker トークンが `AGMSG_PM_BROKER_PATH` と文字列で一致（どちらも lexical）、lexical パスが symlink でない通常ファイルで実行可能、その realpath が `path.join(realpath(__dirname), 'p2-consumer-broker.sh')` と一致、`sha256File` が `binding.brokerDigest` と一致（§6.3） | `broker_path_mismatch` / `broker_digest_mismatch` |
 | 10 | 引数パス（§7.3） | `argument_path_invalid` |
 | 11 | 決定記録の書込み（§8） | `decision_log_unavailable` |
 
@@ -141,6 +147,27 @@ guard が読む環境変数は次のとおりである。**未設定・空・制
 F2 control は、binding が正常な状態で probe の deny を確かめる（E8）。
 文法違反を identity の前で deny すると、identity helper が壊れていても probe は必ず deny される。**deny 側に倒れる順序である。**
 allow には全段の通過が要るので、順序によって allow が増えることはない。
+
+### 6.3 パスの比べ方（errata 1）
+
+**lexical なパス同士は文字列で比べる。`__filename` と `__dirname` との比較は realpath で行う。**
+
+Node は main module を symlink 解決して読み込むため、`__filename` と `__dirname` は canonical になる。
+macOS では `/tmp/x.js` が `/private/tmp/x.js` になる（PR #414 で実測）。
+一方、launcher は `SCRIPT_DIR` を lexical のまま export する（`pilot-launcher.sh:26-31`）。
+
+初版は段 7 と段 9 を `path.join(__dirname, ...)` との**文字列一致**としていた。この形では、`/tmp` や `/var` 配下で動かすと必ず deny になり、実行できない契約だった。
+
+訂正後の規則は次のとおりである。
+
+| 比べるもの | 方法 |
+| --- | --- |
+| lexical 同士（`AGMSG_PM_BROKER_PATH` と command の broker トークン） | 文字列一致 |
+| lexical パスそのもの | lstat で symlink でない通常ファイル |
+| lexical パスと guard 自身・broker の置き場所 | realpath 同士の一致 |
+
+symlink は lexical パスそのものの lstat で拒否する。祖先ディレクトリの symlink（`/tmp` → `/private/tmp`）は許す。
+これは `pilot-binding.js` のパス方針（同ファイル冒頭のコメント）と同じであり、fail-closed の性質は変わらない。
 
 ## 7. command 文法
 
@@ -195,6 +222,38 @@ guard の判定から shell が request を読むまでの間に request が差�
 - deny の記録に失敗しても deny は維持する
 - 入力が読めない段階の deny では、取得できない項目に `"unknown"` を入れる
 
+### 8.1 記録先は pilot seat の中に限る（errata 4）
+
+**live PM の記録先へ pilot の決定が混ざる経路を、guard の側でも塞ぐ。**
+
+pilot の起動経路では、`AGMSG_PM_DECISIONS_FILE` と `AGMSG_PM_EXECUTIONS_FILE` が live PM の環境から継承されうる（#415 に関する breaker 断定）。
+継承された値のまま動くと、pilot の決定と実行記録が live PM の log へ書かれる。
+
+記録先の基準ディレクトリは pilot seat の `logs/` とする。
+
+```text
+SEAT_DIR  = dirname(dirname(AGMSG_PM_BINDING_FILE))   # run/pilot/<team>__<agent>
+LOGS_DIR  = SEAT_DIR/logs
+```
+
+binding は `SEAT_DIR/bindings/` に置かれる（`pilot-launcher.sh:180-181`）。
+記録を `bindings/` に置かないのは、`bindings/` が不変の binding だけを持つディレクトリだからである。
+
+段 0 の条件は次のとおりである。
+
+| 対象 | 条件 |
+| --- | --- |
+| `LOGS_DIR` | lstat でディレクトリかつ symlink でない。`SEAT_DIR` も symlink でない |
+| `AGMSG_PM_DECISIONS_FILE` | 絶対パス。`realpath(dirname(file)) === realpath(LOGS_DIR)`。file が既に在るなら、lstat で通常ファイルかつ symlink でない |
+| `AGMSG_PM_EXECUTIONS_FILE` | 同上 |
+
+- 「配下」ではなく **`logs/` の直下と一致** させる。範囲を広く取る理由が無いためである
+- 段 0 で deny するときは**決定記録を書かない**。書こうとした先そのものが疑わしいからである。reason は stderr にだけ出す
+- 段 0 は入力の解析（段 1）より前に置く。どの段の deny でも記録を書くため、書く前に置き場所を確かめる必要がある
+- guard は `AGMSG_PM_EXECUTIONS_FILE` を書かない。それでも検査するのは、PostToolUse handler が同じ環境を受け取るからである。guard が deny すれば tool は実行されず、handler も書かない
+
+この段は launcher 側の環境契約（§9.1）と二重になる。launcher の契約が破られた場合に備えた、実行時の防御である。
+
 ## 9. profile との接続条件
 
 guard が働くのは、profile が guard を正しく呼んだ場合だけである。guard 側の前提を次に固定する。
@@ -205,10 +264,40 @@ guard が働くのは、profile が guard を正しく呼んだ場合だけで�
 | PreToolUse handler | ちょうど 1 個。`type: "command"`、`command` は guard の絶対パス、`args` なし | E9 |
 | matcher | **全 tool を対象にする**（`matcher` を省略するか `"*"`） | `"Bash"` にすると `Write` や `Edit` が guard を経由せずに通る。§6.1 の deny が効かない |
 | timeout | guard の最悪時間（identity の 2 秒と digest 計算）より長い値。目安は 10 秒 | 短いと F2b と同じ「timeout で通る」経路が通常時にも開く |
-| PostToolUse | F3 はちょうど 1 個の PostToolUse handler を要求する（`pilot-gate-f3.py:137-166`）。guard の契約外 | — |
+| PostToolUse handler | ちょうど 1 個。`type: "command"`、`command` は既存の `scripts/pm-posttool-record` の絶対パス、`args` なし。出力先は `AGMSG_PM_EXECUTIONS_FILE`（§8.1 の `LOGS_DIR` 直下） | F3 はちょうど 1 個の handler を要求する（`pilot-gate-f3.py:137-166`）。G4 設計 §6 は `executions.jsonl` を第二観測源として前提にしている（errata 3） |
 
 F2 の単体試験 fixture は `"matcher": "Bash"` を使っている（`tests/test_pilot_gate_f2.py:327-354`）。
 F2 は handler の数とパスしか検査しないので、matcher を `"*"` にしても F2 の判定は変わらない。
+
+**PostToolUse に新しい handler を作らない。** F3 は「PostToolUse を止めても collector は transcript から検出する」ことを示す。
+止める対象が `executions.jsonl` の書き手でなければ、F3 が止めるものと G4-C が照合するものが食い違う（#415 本文）。
+
+`pm-posttool-record` を使うのは、§3 の「既存 guard と共有しない」に反しない。共有を禁じたのは PreToolUse の許可 policy であり、`pm-posttool-record` は許可判定をしない記録器である。
+ただし、pilot のために `pm-posttool-record` を変更してはならない（G4 設計 §2）。
+
+### 9.1 launcher の環境契約（errata 5）
+
+**launcher は、継承した `AGMSG_PM_*` を接頭辞で全部 unset してから、必要な変数を全部 export する。**
+
+```text
+1  環境にある AGMSG_PM_ で始まる変数を、名前を列挙せずにすべて unset する
+2  SEAT_DIR/logs を作る（symlink でない実ディレクトリであることを確かめる）
+3  §5 の表の変数をすべて export する
+     AGMSG_PM_DECISIONS_FILE  = SEAT_DIR/logs/pretool-decisions.jsonl
+     AGMSG_PM_EXECUTIONS_FILE = SEAT_DIR/logs/executions.jsonl
+4  exec
+```
+
+**個別の変数を足していく方式を採らない。** これが設計判断の中心である。
+
+個別に上書きする方式では、launcher が知らない `AGMSG_PM_*` が継承されたまま残る。
+live PM 側に新しい変数が増えるたびに、pilot へ漏れる経路が一つ増える。しかも launcher の差分には現れないので、気づけない。
+
+全部消して全部設定する方式なら、pilot の環境にある `AGMSG_PM_*` は launcher が書いたものだけになる。
+launcher の export の一覧が、そのまま pilot の環境の完全な一覧になる。
+
+この契約により、harness は `AGMSG_PM_DECISIONS_FILE` を外から与えられなくなる。
+I1 と F2 は決定記録を `SEAT_DIR/logs/pretool-decisions.jsonl` から読むことになる（`pilot-gate-i1.py:405,433` の変更が要る）。harness の変更は #415 の範囲である（#415 本文の作業内容 4）。
 
 ## 10. 出力と exit code
 
@@ -241,6 +330,9 @@ F2 は handler の数とパスしか検査しないので、matcher を `"*"` �
 | 環境で deny | 各 `AGMSG_PM_*` の欠落、`AGMSG_PM_DECISIONS_FILE` の欠落、identity helper の失敗と timeout |
 | 入力で deny | 不正 JSON、1 MiB 超、必須フィールド欠落 |
 | 記録 | allow と deny の各行が §8 の schema を満たす。allow の記録失敗で deny に変わる |
+| 記録先（段 0） | `AGMSG_PM_DECISIONS_FILE` か `AGMSG_PM_EXECUTIONS_FILE` が `LOGS_DIR` の外、`LOGS_DIR` の下位ディレクトリ、symlink の file、symlink の `logs/` のいずれかなら deny し、**その file に 1 byte も書かない** |
+| パスの比べ方（§6.3） | guard と broker を `/tmp` 配下（macOS では symlink の祖先を持つ）に置いても allow になる。lexical パスそのものを symlink にすると deny になる |
+| launcher の環境（§9.1） | 名前の知られていない `AGMSG_PM_ZZ_UNKNOWN` を与えて起動しても、exec 後の環境に残らない。継承した `AGMSG_PM_DECISIONS_FILE` と `AGMSG_PM_EXECUTIONS_FILE` が `LOGS_DIR` 直下の値へ置き換わる |
 | 非共有 | guard が `pm-pretool-guard`、`pm-broker`、`session-identity.sh` を参照しないことを grep で確かめる。在ると分かっている語（`session-identity.js`）で正の対照を取る |
 | 既存不変 | 試験の前後で `scripts/pm-pretool-guard` の digest が一致する |
 
@@ -284,4 +376,28 @@ guard は形 B を許すので、harness 側が形 B を組み立てれば通る
 | 4 | 文法は空白区切りの固定トークンと入力リダイレクト 1 個に限る |
 | 5 | deny は exit 2 と deny JSON、allow は exit 0 と明示の allow JSON で返す。exit 0 で出力が空の経路は作らない |
 | 6 | 決定記録は必須とする。allow を記録できなければ deny に変える |
-| 7 | profile の matcher は全 tool を対象にする。profile の作成担当は未割当として報告する |
+| 7 | profile の matcher は全 tool を対象にする。profile の作成担当は未割当として報告する（その後 PR #414 が profile 生成を担当した） |
+| 8 | lexical 同士は文字列で、`__filename`・`__dirname` とは realpath で比べる（errata 1） |
+| 9 | 決定記録と実行記録の置き場所は pilot seat の `logs/` 直下に限り、guard が段 0 で検査する（errata 4） |
+| 10 | PostToolUse handler は既存の `pm-posttool-record` を使う（errata 3） |
+| 11 | launcher は `AGMSG_PM_*` を接頭辞で全部 unset してから全部 export する（errata 5） |
+
+## 14. Errata（2026-09-11T15:29:03+09:00）
+
+errata の出所は 3 種類ある。**混同しないよう、行ごとに出所を分けて書く。**
+
+| 出所の種類 | 該当 | 意味 |
+| --- | --- | --- |
+| 実装が先行した | 1、2 | PR #414 の実装が初版と異なり、breaker が「実装のほうが正しい」と判断した |
+| Issue の断定 | 3 | Issue #415 の「作業内容」に列挙された断定。**PR #414 には未実装である**（`scripts/lib/pilot-profile.js` の `renderProfile()` は `PostToolUse` を生成しない） |
+| breaker 断定の具体化 | 4、5 | breaker の断定（PM 経由、2026-09-11T15:27:38+09:00 の依頼）を本書が規則にした。本 PR の作成時点で、Issue #415 本文にこの規則は無かった。4 のうち「`SEAT_DIR/logs/` の直下と一致」という配置は本書での設計判断である。その後 PM が #415 本文の作業内容 3・4 に追記した |
+
+| # | 箇所 | 初版 | 訂正後 | 出所 |
+| --- | --- | --- | --- | --- |
+| 1 | §6 段 7・段 9、§6.3 | `path.join(__dirname, ...)` との文字列一致 | lexical 同士は文字列、`__filename`・`__dirname` とは realpath で比べる | 実装が先行（PR #414 head `5fdcdd0` の `checkGuard`・`checkBroker`）。Node は main module の `__filename` を realpath で解決する（`/tmp/x.js` → `/private/tmp/x.js`） |
+| 2 | §5 | 環境変数欠落時の reason 名が未定義 | `env_<name>_invalid`。細部は実装の裁量 | 実装が先行（PR #414 head `5fdcdd0` の `envText`） |
+| 3 | §9 | PostToolUse は guard の契約外 | 既存の `scripts/pm-posttool-record` を handler にする | Issue #415 の断定（作業内容 2）。根拠は G4 設計 §6。PR #414 には未実装 |
+| 4 | §6 段 0、§8.1 | 無し | 決定記録と実行記録の置き場所を pilot seat の `logs/` 直下に限る | breaker 断定「binding 配下、symlink でない」を具体化。`SEAT_DIR/logs/` 直下という配置は本書での設計判断 |
+| 5 | §9.1 | 無し | launcher は `AGMSG_PM_*` を接頭辞で全部 unset してから全部 export する | breaker 断定（PM 経由）。書き先の値は 4 に従う |
+
+**§12.1（profile 作成の未割当）は初版時点の報告として残す。** その後 PR #414 が profile 生成を担当した。
