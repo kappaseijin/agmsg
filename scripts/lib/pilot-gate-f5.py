@@ -102,6 +102,23 @@ def assertion(
     }
 
 
+def verdict_result(
+    verdict: str,
+) -> bool | None:
+    """Lift a phase verdict into an assertion result, keeping unknown.
+
+    "pass" -> True, "fail" -> False, anything else -> None (unknown).
+    Comparing with == "pass" would fold unknown into fail.
+    """
+    if verdict == "pass":
+        return True
+
+    if verdict == "fail":
+        return False
+
+    return None
+
+
 def verdict_from_assertions(
     checks: list[dict[str, Any]],
 ) -> str:
@@ -1889,11 +1906,10 @@ def run_f5(
         final_checks = [
             assertion(
                 "containment-pass",
-                (
+                verdict_result(
                     containment[
                         "verdict"
                     ]
-                    == "pass"
                 ),
                 containment[
                     "verdict"
@@ -1901,21 +1917,24 @@ def run_f5(
             ),
             assertion(
                 "control-delivered",
-                control_verdict
-                == "pass",
+                verdict_result(
+                    control_verdict
+                ),
                 control_verdict,
             ),
             assertion(
                 "fault-not-delivered",
-                fault_verdict
-                == "pass",
+                verdict_result(
+                    fault_verdict
+                ),
                 fault_verdict,
             ),
             assertion(
                 "recovery-delivered-"
                 "exactly-once",
-                recovery_verdict
-                == "pass",
+                verdict_result(
+                    recovery_verdict
+                ),
                 recovery_verdict,
             ),
             assertion(

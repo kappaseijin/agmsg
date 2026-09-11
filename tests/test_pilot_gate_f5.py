@@ -181,6 +181,13 @@ class PilotGateF5RoundA(unittest.TestCase):
         self.assertEqual(F5.assertion("n", 0, None)["verdict"], "unknown")
         self.assertEqual(F5.assertion("n", "yes", None)["verdict"], "unknown")
 
+    def test_verdict_result_keeps_unknown_distinct(self):
+        self.assertIs(F5.verdict_result("pass"), True)
+        self.assertIs(F5.verdict_result("fail"), False)
+        self.assertIsNone(F5.verdict_result("unknown"))
+        self.assertIsNone(F5.verdict_result(""))
+        self.assertIsNone(F5.verdict_result("PASS"))
+
     def test_verdict_from_assertions_priority_fail_unknown_pass(self):
         p = {"verdict": "pass"}
         u = {"verdict": "unknown"}
@@ -1863,14 +1870,11 @@ class PilotGateF5RoundC(unittest.TestCase):
         )
         self.assertEqual(self.read("result.json")["verdict"], "fail")
 
-    def test_recovery_unknown_is_reported_as_final_fail(self):
-        # CURRENT BEHAVIOUR, reported as a finding: unlike control and
-        # fault (which return 2 on "unknown"), recovery has no early
-        # return, and final_checks compare recovery_verdict == "pass",
-        # so an unknown recovery collapses into a final "fail" / rc 1.
-        # It never passes (safe side) but mislabels unknown as fail.
+    def test_recovery_unknown_maps_to_final_unknown_and_rc_2(self):
+        # Runbook contract: no fail + some unknown -> unknown; unknown
+        # must not be folded into fail.
         FakeWatcher.plan = {"recovery_observed": None}
-        self.assertEqual(self.run_f5(), 1)
+        self.assertEqual(self.run_f5(), 2)
         recovery = self.read("recovery", "result.json")
         self.assertEqual(recovery["verdict"], "unknown")
         self.assertEqual(
@@ -1878,13 +1882,32 @@ class PilotGateF5RoundC(unittest.TestCase):
             "unknown",
         )
         final = self.read("result.json")
-        self.assertEqual(final["verdict"], "fail")
+        self.assertEqual(final["verdict"], "unknown")
         self.assertEqual(
-            self.verdicts(final["checks"])[
-                "recovery-delivered-exactly-once"
-            ],
-            "fail",
+            self.verdicts(final["checks"]),
+            {
+                "containment-pass": "pass",
+                "control-delivered": "pass",
+                "fault-not-delivered": "pass",
+                "recovery-delivered-exactly-once": "unknown",
+                "control-and-fault-message-ids-distinct": "pass",
+            },
         )
+
+    def test_recovery_unknown_does_not_hide_a_final_fail(self):
+        # fail wins over unknown: identical ids must still fail even
+        # though recovery could not be observed.
+        FakeWatcher.plan = {"recovery_observed": None}
+        self.i1.message_ids["control"] = "msg-same"
+        self.i1.message_ids["fault"] = "msg-same"
+        self.assertEqual(self.run_f5(), 1)
+        final = self.read("result.json")
+        self.assertEqual(final["verdict"], "fail")
+        verdicts = self.verdicts(final["checks"])
+        self.assertEqual(verdicts["recovery-delivered-exactly-once"],
+                         "unknown")
+        self.assertEqual(verdicts["control-and-fault-message-ids-distinct"],
+                         "fail")
 
     def test_recovery_duplicate_storage_write_fails(self):
         def duplicate(watcher):
@@ -1953,9 +1976,7 @@ class PilotGateF5RoundC(unittest.TestCase):
                 fh.write("{not json\n")
 
         FakeWatcher.plan = {"recovery_start": corrupt}
-        # Recovery-level unknown collapses into a final fail; see
-        # test_recovery_unknown_is_reported_as_final_fail.
-        self.assertEqual(self.run_f5(), 1)
+        self.assertEqual(self.run_f5(), 2)
         self.assertEqual(
             self.recovery_checks()[
                 "all-provider-destinations-inside-disposable-team"
@@ -1965,7 +1986,7 @@ class PilotGateF5RoundC(unittest.TestCase):
         self.assertEqual(
             self.read("recovery", "result.json")["verdict"], "unknown"
         )
-        self.assertEqual(self.read("result.json")["verdict"], "fail")
+        self.assertEqual(self.read("result.json")["verdict"], "unknown")
 
     def test_identical_control_and_fault_message_ids_fail(self):
         self.i1.message_ids["fault"] = "msg-same"
