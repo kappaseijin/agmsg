@@ -1827,8 +1827,14 @@ def choose_exit_value(
 
 def semantic_candidates(
     directory: pathlib.Path,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], list[str]]:
+    """Normalized semantic files, and the ones that could not be read.
+
+    An unreadable file stays visible to the caller: it is part of the
+    set that was observed, only its content is unknown.
+    """
     result = {}
+    unreadable: list[str] = []
 
     keywords = (
         "deny",
@@ -1871,9 +1877,9 @@ def semantic_candidates(
                 )
             )
         except Exception:
-            continue
+            unreadable.append(relative)
 
-    return result
+    return result, sorted(unreadable)
 
 
 def compare_live_pm(
@@ -2017,44 +2023,65 @@ def compare_live_pm(
         }
     )
 
-    before_semantic = (
+    before_semantic, before_unreadable = (
         semantic_candidates(
             before
         )
     )
-    after_semantic = (
+    after_semantic, after_unreadable = (
         semantic_candidates(
             after
         )
     )
 
-    if (
-        not before_semantic
-        or not after_semantic
-    ):
-        semantic_verdict = (
-            "unknown"
-        )
-    else:
-        common = sorted(
-            set(before_semantic)
-            & set(after_semantic)
-        )
+    before_names = {
+        *before_semantic,
+        *before_unreadable,
+    }
+    after_names = {
+        *after_semantic,
+        *after_unreadable,
+    }
 
-        if not common:
-            semantic_verdict = (
-                "unknown"
-            )
-        else:
-            semantic_verdict = (
-                "pass"
-                if all(
-                    before_semantic[key]
-                    == after_semantic[key]
-                    for key in common
-                )
-                else "fail"
-            )
+    missing_after = sorted(
+        before_names - after_names
+    )
+    added_after = sorted(
+        after_names - before_names
+    )
+    unreadable = sorted(
+        {
+            *(f"before/{name}" for name in before_unreadable),
+            *(f"after/{name}" for name in after_unreadable),
+        }
+    )
+
+    # runbook §36: a semantic file that disappears or appears is a
+    # mutation (fail); comparing only the files both sides share would
+    # miss it. Nothing observed on either side cannot be compared.
+    if (
+        not before.is_dir()
+        or not after.is_dir()
+        or (not before_names and not after_names)
+    ):
+        semantic_verdict = "unknown"
+        semantic_reason = "semantic_artifact_missing"
+    elif missing_after or added_after:
+        semantic_verdict = "fail"
+        semantic_reason = "semantic_file_set_changed"
+    elif unreadable:
+        semantic_verdict = "unknown"
+        semantic_reason = "semantic_file_unreadable"
+    elif all(
+        before_semantic[key]
+        == after_semantic[key]
+        for key in before_semantic
+    ):
+        semantic_verdict = "pass"
+        semantic_reason = None
+    else:
+        semantic_verdict = "fail"
+        semantic_reason = "semantic_content_changed"
 
     checks.append(
         {
@@ -2062,10 +2089,18 @@ def compare_live_pm(
                 "deny-semantic-before-after",
             "verdict":
                 semantic_verdict,
+            "reason":
+                semantic_reason,
             "before":
                 before_semantic,
             "after":
                 after_semantic,
+            "missingAfter":
+                missing_after,
+            "addedAfter":
+                added_after,
+            "unreadable":
+                unreadable,
         }
     )
 
