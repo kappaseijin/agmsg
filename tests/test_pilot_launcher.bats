@@ -30,15 +30,10 @@ setup() {
   export OTHER_PROJ="$TEST_SKILL_DIR/other-project"
   mkdir -p "$OTHER_PROJ"
 
-  # G4-B is intentionally a separate PR. G4-A must fail closed if these
-  # future files do not exist, so this test suite installs minimal executable
-  # placeholders for tests which need to exercise the launcher beyond that
-  # boundary.
-  cat > "$SCRIPTS/pm-pilot-pretool-guard" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-  chmod +x "$SCRIPTS/pm-pilot-pretool-guard"
+  # The real pilot guard (#404) is copied with scripts/. G4-B is a separate
+  # PR, so this suite still installs a minimal executable broker placeholder
+  # for tests which need to exercise the launcher beyond that boundary.
+  [ -x "$SCRIPTS/pm-pilot-pretool-guard" ]
 
   cat > "$SCRIPTS/p2-consumer-broker.sh" <<'EOF'
 #!/usr/bin/env bash

@@ -1,0 +1,322 @@
+#!/usr/bin/env node
+
+/*
+ * Native Claude PreToolUse policy boundary for the G4 PM pilot (#404).
+ *
+ * Contract: docs/decisions/2026-09-11T133016_issue-404-pilot-pretool-guard-contract.md
+ *
+ * This file is pilot-only. It does not require, spawn, or read the current PM
+ * guard, the PM broker, or the shell identity wrapper. The only allowed tool is Bash
+ * running the fixed p2-consumer-broker contract with a single stdin
+ * redirection. Every other input is denied. Allow is explicit and must be
+ * recorded; deny is exit 2 plus a deny JSON.
+ */
+
+'use strict';
+
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const {spawnSync} = require('child_process');
+const {
+  POLICY_VERSION,
+  PILOT_AGENT,
+  PILOT_TYPE,
+  PROVIDER_COMMIT,
+  sha256File,
+} = require('./lib/pilot-binding');
+
+const GUARD_NAME = 'pm-pilot-pretool-guard';
+const MAX_INPUT_BYTES = 1024 * 1024;
+const IDENTITY_TIMEOUT_MS = 2000;
+const OPERATIONS = new Set(['receive', 'delegate', 'collect-result', 'issue-record', 'observe-owner']);
+const PATH_TOKEN = /^\/[A-Za-z0-9_./:-]+$/u;
+const CONTROL = /[\u0000-\u001f\u007f]/u;
+const IDENTITY_ENV = [
+  'AGMSG_PM_TEAM', 'AGMSG_PM_AGENT', 'AGMSG_PM_TYPE', 'AGMSG_PM_PROCESS_PID',
+  'AGMSG_PM_PROCESS_GENERATION', 'AGMSG_PM_PROCESS_START', 'AGMSG_PM_TEAMS_DIR',
+  'AGMSG_PM_CLAIM_FILE',
+];
+const GUARD_ENV = [
+  'AGMSG_PM_PILOT_SESSION_ID', 'AGMSG_PM_BINDING_FILE', 'AGMSG_PM_GUARD_PATH',
+  'AGMSG_PM_BROKER_PATH',
+];
+
+class Deny extends Error {}
+
+const deny = (reason) => {
+  throw new Deny(reason);
+};
+
+const sha256 = (value) => `sha256:${crypto.createHash('sha256').update(value).digest('hex')}`;
+
+const validText = (value) => typeof value === 'string' && value.length > 0 && !CONTROL.test(value);
+
+const envText = (name) => {
+  const value = process.env[name];
+  if (!validText(value)) deny(`env_${name.replace(/^AGMSG_PM_/u, '').toLowerCase()}_invalid`);
+  return value;
+};
+
+const writeResult = (decision, reason) => {
+  if (decision === 'allow') {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'allow',
+        permissionDecisionReason: `${POLICY_VERSION}: fixed broker contract`,
+      },
+    }) + '\n');
+    process.exit(0);
+  }
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: `${reason}; pilot accepts only the fixed p2-consumer-broker contract`,
+    },
+  }) + '\n');
+  process.stderr.write(`${GUARD_NAME}: deny ${reason}\n`);
+  process.exit(2);
+};
+
+// §8: an unconfigured decision log cannot record anything, so it is checked
+// before every other stage and reported only on stderr.
+const decisionsFile = () => {
+  const file = process.env.AGMSG_PM_DECISIONS_FILE;
+  if (!validText(file) || !path.isAbsolute(file)) return null;
+  return file;
+};
+
+const appendDecision = (file, input, decision, reason) => {
+  const known = (field) => (input && validText(input[field]) ? input[field] : 'unknown');
+  const generation = process.env.AGMSG_PM_PROCESS_GENERATION;
+  const toolInput = input && input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {};
+  const record = {
+    schemaVersion: 1,
+    observedAt: new Date().toISOString(),
+    guard: GUARD_NAME,
+    policyVersion: POLICY_VERSION,
+    sessionId: known('session_id'),
+    generation: validText(generation) ? generation : 'unknown',
+    toolUseId: known('tool_use_id'),
+    tool: known('tool_name'),
+    inputDigest: sha256(JSON.stringify(toolInput)),
+    decision,
+    reason: reason || null,
+  };
+  fs.appendFileSync(file, JSON.stringify(record) + '\n', {encoding: 'utf8', flag: 'a'});
+};
+
+// Stage 1 (§5).
+const readInput = () => {
+  let raw;
+  try {
+    raw = fs.readFileSync(0);
+  } catch (_) {
+    deny('hook_input_unreadable');
+  }
+  if (raw.length > MAX_INPUT_BYTES) deny('hook_input_too_large');
+  let input;
+  try {
+    input = JSON.parse(raw.toString('utf8'));
+  } catch (_) {
+    deny('hook_input_invalid');
+  }
+  if (!input || typeof input !== 'object' || Array.isArray(input)) deny('hook_input_invalid');
+  return {raw, input};
+};
+
+const checkInput = (input) => {
+  for (const field of ['session_id', 'cwd', 'tool_name', 'tool_use_id']) {
+    if (!validText(input[field])) deny(`${field}_invalid`);
+  }
+  if (!input.tool_input || typeof input.tool_input !== 'object' || Array.isArray(input.tool_input)) {
+    deny('tool_input_invalid');
+  }
+  if (input.hook_event_name !== undefined && input.hook_event_name !== 'PreToolUse') deny('hook_event_invalid');
+  for (const name of [...GUARD_ENV, ...IDENTITY_ENV]) envText(name);
+};
+
+const pathToken = (token) => PATH_TOKEN.test(token) &&
+  !token.includes('//') && !token.includes('/./') && !token.includes('/../') &&
+  !token.endsWith('/.') && !token.endsWith('/..');
+
+// Stage 3 (§7.1, §7.2). Returns the tokens of form A or form B.
+const parseCommand = (toolInput) => {
+  const command = toolInput.command;
+  const invalid = () => deny('command_not_in_pilot_contract');
+  if (typeof command !== 'string' || command.length === 0) invalid();
+  if (command !== command.trim() || /[\n\r]/u.test(command)) invalid();
+  const parts = command.split(' ');
+  if (parts.some((part) => part.length === 0)) invalid();
+  if (parts.length === 6) {
+    const [broker, configFlag, config, operation, redirect, request] = parts;
+    if (configFlag !== '--config' || redirect !== '<' || !OPERATIONS.has(operation)) invalid();
+    if (![broker, config, request].every(pathToken)) invalid();
+    return {broker, config, request, ghConfigDir: null};
+  }
+  if (parts.length === 8) {
+    const [broker, configFlag, config, ghFlag, ghConfigDir, operation, redirect, request] = parts;
+    if (configFlag !== '--config' || ghFlag !== '--gh-config-dir' || operation !== 'issue-record' ||
+        redirect !== '<') invalid();
+    if (![broker, config, ghConfigDir, request].every(pathToken)) invalid();
+    return {broker, config, request, ghConfigDir};
+  }
+  return invalid();
+};
+
+// Stage 4 (§6). session-identity.js is spawned directly, never through the
+// shell wrapper used by the current PM guard.
+const identity = (raw) => {
+  const result = spawnSync(process.execPath, [path.join(__dirname, 'session-identity.js')], {
+    input: raw,
+    encoding: 'utf8',
+    timeout: IDENTITY_TIMEOUT_MS,
+    env: process.env,
+  });
+  if (result.error || result.status !== 0 || result.signal) deny('session_identity_unavailable');
+  let value;
+  try {
+    value = JSON.parse(result.stdout || '');
+  } catch (_) {
+    deny('session_identity_invalid');
+  }
+  if (!value || typeof value !== 'object' || value.status !== 'ok') deny('session_identity_invalid');
+  return value;
+};
+
+const readBinding = () => {
+  let value;
+  try {
+    value = JSON.parse(fs.readFileSync(process.env.AGMSG_PM_BINDING_FILE, 'utf8'));
+  } catch (_) {
+    deny('binding_unreadable');
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) deny('binding_unreadable');
+  return value;
+};
+
+const digestOf = (file, reason) => {
+  try {
+    return sha256File(file);
+  } catch (_) {
+    return deny(reason);
+  }
+};
+
+const realpath = (file, reason) => {
+  try {
+    return fs.realpathSync.native(file);
+  } catch (_) {
+    return deny(reason);
+  }
+};
+
+const lstat = (file, reason) => {
+  try {
+    return fs.lstatSync(file);
+  } catch (_) {
+    return deny(reason);
+  }
+};
+
+const insideProject = (real, project) => real.startsWith(project.endsWith(path.sep) ? project : project + path.sep);
+
+// Node resolves the main module through symlinks, so __dirname is canonical
+// while the launcher exports lexical paths (/tmp vs /private/tmp on macOS).
+// Paths are therefore compared by their canonical target, and the lexical
+// path itself must not be a symlink.
+const checkGuard = (binding) => {
+  const guardPath = process.env.AGMSG_PM_GUARD_PATH;
+  if (!path.isAbsolute(guardPath) || path.basename(guardPath) !== GUARD_NAME) deny('guard_path_mismatch');
+  const stat = lstat(guardPath, 'guard_path_mismatch');
+  if (stat.isSymbolicLink() || !stat.isFile()) deny('guard_path_mismatch');
+  const self = realpath(__filename, 'guard_path_mismatch');
+  if (realpath(guardPath, 'guard_path_mismatch') !== self ||
+      self !== path.join(realpath(__dirname, 'guard_path_mismatch'), GUARD_NAME)) deny('guard_path_mismatch');
+  if (digestOf(guardPath, 'guard_digest_mismatch') !== binding.guardDigest) deny('guard_digest_mismatch');
+};
+
+const checkProfile = (binding) => {
+  if (!validText(binding.project) || !path.isAbsolute(binding.project)) deny('profile_digest_mismatch');
+  const profile = path.join(binding.project, '.claude', 'settings.local.json');
+  if (digestOf(profile, 'profile_digest_mismatch') !== binding.profileDigest) deny('profile_digest_mismatch');
+};
+
+const checkBroker = (binding, broker) => {
+  if (broker !== process.env.AGMSG_PM_BROKER_PATH) deny('broker_path_mismatch');
+  const expected = path.join(realpath(__dirname, 'broker_path_mismatch'), 'p2-consumer-broker.sh');
+  const stat = lstat(broker, 'broker_path_mismatch');
+  if (stat.isSymbolicLink() || !stat.isFile()) deny('broker_path_mismatch');
+  if (realpath(broker, 'broker_path_mismatch') !== expected) deny('broker_path_mismatch');
+  if (process.platform !== 'win32' && !(stat.mode & 0o111)) deny('broker_path_mismatch');
+  if (digestOf(broker, 'broker_digest_mismatch') !== binding.brokerDigest) deny('broker_digest_mismatch');
+};
+
+// Stage 10 (§7.3). The request content is the broker's responsibility.
+const checkArguments = (binding, command) => {
+  const project = realpath(binding.project, 'argument_path_invalid');
+  const check = (token, directory) => {
+    const stat = lstat(token, 'argument_path_invalid');
+    if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile())) deny('argument_path_invalid');
+    if (!insideProject(realpath(token, 'argument_path_invalid'), project)) deny('argument_path_invalid');
+  };
+  check(command.config, false);
+  check(command.request, false);
+  if (command.ghConfigDir !== null) check(command.ghConfigDir, true);
+};
+
+const evaluate = (raw, input) => {
+  checkInput(input);
+  if (input.tool_name !== 'Bash') deny('tool_not_allowed');
+  const command = parseCommand(input.tool_input);
+  const value = identity(raw);
+  const sessionId = process.env.AGMSG_PM_PILOT_SESSION_ID;
+  if (value.agent !== PILOT_AGENT || value.type !== PILOT_TYPE ||
+      value.sessionId !== sessionId || sessionId !== input.session_id) deny('pilot_identity_mismatch');
+  const binding = readBinding();
+  if (binding.policyVersion !== POLICY_VERSION) deny('binding_policy_mismatch');
+  if (binding.providerCommit !== PROVIDER_COMMIT) deny('binding_provider_mismatch');
+  checkGuard(binding);
+  checkProfile(binding);
+  checkBroker(binding, command.broker);
+  checkArguments(binding, command);
+};
+
+const main = () => {
+  const file = decisionsFile();
+  if (file === null) writeResult('deny', 'decision_log_unconfigured');
+
+  let input = null;
+  let reason = null;
+  try {
+    const parsed = readInput();
+    input = parsed.input;
+    evaluate(parsed.raw, input);
+  } catch (error) {
+    reason = error instanceof Deny ? error.message : 'guard_internal_error';
+  }
+
+  if (reason === null) {
+    try {
+      appendDecision(file, input, 'allow', null);
+    } catch (_) {
+      // An unrecorded allow is unknown to the harness; turn it into deny.
+      reason = 'decision_log_unavailable';
+    }
+    if (reason === null) writeResult('allow', null);
+  }
+  try {
+    appendDecision(file, input, 'deny', reason);
+  } catch (_) {
+    // The deny stands even when it cannot be recorded.
+  }
+  writeResult('deny', reason);
+};
+
+try {
+  main();
+} catch (_) {
+  writeResult('deny', 'guard_internal_error');
+}
