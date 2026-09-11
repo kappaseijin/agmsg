@@ -1856,5 +1856,1054 @@ class PilotGateF4RoundC(unittest.TestCase):
             places=7,
         )
 
+
+class PilotGateF4RoundD(unittest.TestCase):
+    RUN_ID = "round-d-run"
+    TEAM = "agmsg-g4gate-round-d"
+
+    def make_fixture(
+        self,
+        root: Path,
+        *,
+        gate_inside=True,
+        executable_collector=True,
+        cutoff=10,
+        margin=2,
+        poll_interval=0.25,
+    ):
+        root = root.resolve()
+
+        run_root = root / "run-root"
+        run_root.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        gate_repo = (
+            run_root / "repo"
+            if gate_inside
+            else root / "outside-repo"
+        )
+        gate_repo.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        claude_config = (
+            run_root
+            / "claude"
+        )
+        claude_config.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        collector = (
+            gate_repo
+            / "scripts"
+            / "pilot-collector.sh"
+        )
+        collector.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        collector.write_text(
+            "#!/bin/sh\nexit 0\n",
+            encoding="utf-8",
+        )
+        collector.chmod(
+            0o700
+            if executable_collector
+            else 0o600
+        )
+
+        binding = (
+            gate_repo
+            / "binding.json"
+        )
+        binding.write_text(
+            "{}\n",
+            encoding="utf-8",
+        )
+
+        artifact_dir = (
+            root
+            / "artifacts"
+        )
+        artifact_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        args = F4.argparse.Namespace(
+            gate_repo=str(gate_repo),
+            run_root=str(run_root),
+            claude_config=str(
+                claude_config
+            ),
+            artifact_dir=str(
+                artifact_dir
+            ),
+            run_id=self.RUN_ID,
+            gate_team=self.TEAM,
+            cutoff_seconds=cutoff,
+            margin_seconds=margin,
+            poll_interval_seconds=
+                poll_interval,
+        )
+
+        return {
+            "root": root,
+            "run_root": run_root,
+            "gate_repo": gate_repo,
+            "claude_config":
+                claude_config,
+            "collector": collector,
+            "binding": binding,
+            "artifact_dir":
+                artifact_dir,
+            "artifact":
+                artifact_dir / "F4",
+            "args": args,
+        }
+
+    def install_setup_stubs(
+        self,
+        fixture,
+        *,
+        discover_result=(
+            False,
+            {
+                "discover": "record",
+            },
+        ),
+        monotonic_origin=100.0,
+        wall_origin=(
+            "2026-09-11T"
+            "01:02:03.004Z"
+        ),
+        env=None,
+    ):
+        if env is None:
+            env = {
+                "COLLECTOR_ENV":
+                    "yes",
+            }
+
+        latest = mock.patch.object(
+            F4,
+            "latest_binding",
+            return_value=
+                fixture["binding"],
+        )
+        sanitized = mock.patch.object(
+            F4,
+            "sanitized_collector_env",
+            return_value=env,
+        )
+        collector = mock.patch.object(
+            F4,
+            "collector_call",
+            return_value=
+                discover_result,
+        )
+        monotonic = mock.patch.object(
+            F4.time,
+            "monotonic",
+            return_value=
+                monotonic_origin,
+        )
+        utc = mock.patch.object(
+            F4,
+            "utc_now",
+            return_value=
+                wall_origin,
+        )
+
+        return (
+            latest,
+            sanitized,
+            collector,
+            monotonic,
+            utc,
+        )
+
+    def test_gate_repo_outside_run_root_is_rejected_before_latest_binding(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp),
+                gate_inside=False,
+            )
+
+            with mock.patch.object(
+                F4,
+                "latest_binding",
+            ) as latest_mock:
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    (
+                        "gate repository "
+                        "escapes expected root"
+                    ),
+                ):
+                    F4.run_f4(
+                        fixture["args"]
+                    )
+
+            latest_mock.assert_not_called()
+
+    def test_nonexecutable_collector_is_rejected_before_timing_and_binding_setup(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp),
+                executable_collector=False,
+            )
+
+            with mock.patch.object(
+                F4,
+                "latest_binding",
+            ) as latest_mock:
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "not regular executable",
+                ):
+                    F4.run_f4(
+                        fixture["args"]
+                    )
+
+            latest_mock.assert_not_called()
+
+    def test_numeric_validation_errors_are_checked_in_source_order(
+        self,
+    ):
+        scenarios = (
+            (
+                {
+                    "cutoff":
+                        0,
+                    "margin":
+                        0,
+                    "poll_interval":
+                        0,
+                },
+                "cutoff must be positive",
+            ),
+            (
+                {
+                    "cutoff":
+                        10,
+                    "margin":
+                        0,
+                    "poll_interval":
+                        0,
+                },
+                "margin must be positive",
+            ),
+            (
+                {
+                    "cutoff":
+                        10,
+                    "margin":
+                        10,
+                    "poll_interval":
+                        0,
+                },
+                (
+                    "margin must be "
+                    "less than cutoff"
+                ),
+            ),
+            (
+                {
+                    "cutoff":
+                        10,
+                    "margin":
+                        2,
+                    "poll_interval":
+                        0,
+                },
+                (
+                    "poll interval "
+                    "must be positive"
+                ),
+            ),
+        )
+
+        for values, message in scenarios:
+            with self.subTest(
+                message=message
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = self.make_fixture(
+                        Path(temp),
+                        cutoff=
+                            values[
+                                "cutoff"
+                            ],
+                        margin=
+                            values[
+                                "margin"
+                            ],
+                        poll_interval=
+                            values[
+                                "poll_interval"
+                            ],
+                    )
+
+                    with mock.patch.object(
+                        F4,
+                        "latest_binding",
+                    ) as latest_mock:
+                        with self.assertRaisesRegex(
+                            ValueError,
+                            message,
+                        ):
+                            F4.run_f4(
+                                fixture[
+                                    "args"
+                                ]
+                            )
+
+                    latest_mock.assert_not_called()
+
+    def test_stale_calls_log_is_removed_and_config_json_records_exact_setup(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp),
+                cutoff=12,
+                margin=3,
+                poll_interval=0.4,
+            )
+
+            artifact = (
+                fixture["artifact"]
+            )
+            artifact.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            calls_log = (
+                artifact
+                / "collector-calls.jsonl"
+            )
+            calls_log.write_text(
+                "stale\n",
+                encoding="utf-8",
+            )
+
+            discover_record = {
+                "phase":
+                    "initial-discover",
+            }
+
+            patches = (
+                self.install_setup_stubs(
+                    fixture,
+                    discover_result=(
+                        False,
+                        discover_record,
+                    ),
+                    monotonic_origin=
+                        321.5,
+                    wall_origin=(
+                        "2026-09-11T"
+                        "02:03:04.005Z"
+                    ),
+                    env={
+                        "TEST_ENV":
+                            "gate"
+                    },
+                )
+            )
+
+            with (
+                patches[0] as latest_mock,
+                patches[1] as env_mock,
+                patches[2] as collector_mock,
+                patches[3],
+                patches[4],
+            ):
+                status = F4.run_f4(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                1,
+            )
+            self.assertFalse(
+                calls_log.exists()
+            )
+
+            config = F4.read_json(
+                artifact
+                / "config.json"
+            )
+
+            self.assertEqual(
+                config,
+                {
+                    "schemaVersion": 1,
+                    "check": "F4",
+                    "runId":
+                        self.RUN_ID,
+                    "gateTeam":
+                        self.TEAM,
+                    "binding":
+                        str(
+                            fixture[
+                                "binding"
+                            ]
+                        ),
+                    "collector":
+                        str(
+                            fixture[
+                                "collector"
+                            ]
+                        ),
+                    "cutoffSeconds":
+                        12.0,
+                    "marginSeconds":
+                        3.0,
+                    "pollIntervalSeconds":
+                        0.4,
+                    (
+                        "requiredPollingLoop"
+                        "Successes"
+                    ):
+                        F4.REQUIRED_POLL_SUCCESSES,
+                    "boundaryRule": {
+                        "withinCutoff":
+                            (
+                                "elapsed "
+                                "<= cutoff"
+                            ),
+                        "cutoffExceeded":
+                            (
+                                "elapsed "
+                                "> cutoff"
+                            ),
+                    },
+                    "startedAtWall":
+                        (
+                            "2026-09-11T"
+                            "02:03:04.005Z"
+                        ),
+                    "startedAtMonotonic":
+                        321.5,
+                },
+            )
+
+            latest_mock.assert_called_once_with(
+                fixture["gate_repo"],
+                self.TEAM,
+            )
+
+            env_mock.assert_called_once_with(
+                fixture["binding"],
+                artifact
+                / "collector-state",
+                fixture[
+                    "claude_config"
+                ],
+            )
+
+            collector_mock.assert_called_once_with(
+                fixture["collector"],
+                "discover",
+                cwd=
+                    fixture["gate_repo"],
+                env={
+                    "TEST_ENV":
+                        "gate"
+                },
+                artifact_log=
+                    calls_log,
+                phase=
+                    "initial-discover",
+                monotonic_origin=
+                    321.5,
+            )
+
+    def test_discover_false_returns_fail_one_and_never_constructs_poller(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            discover_record = {
+                "exitStatus": 1,
+                "collectorStatus":
+                    "failed",
+            }
+
+            patches = (
+                self.install_setup_stubs(
+                    fixture,
+                    discover_result=(
+                        False,
+                        discover_record,
+                    ),
+                )
+            )
+
+            with (
+                patches[0],
+                patches[1],
+                patches[2] as collector_mock,
+                patches[3],
+                patches[4],
+                mock.patch.object(
+                    F4,
+                    "AuditPollingLoop",
+                ) as poller_class,
+            ):
+                status = F4.run_f4(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                1,
+            )
+            poller_class.assert_not_called()
+
+            result = F4.read_json(
+                fixture["artifact"]
+                / "result.json"
+            )
+
+            self.assertEqual(
+                result,
+                {
+                    "schemaVersion": 1,
+                    "check": "F4",
+                    "runId":
+                        self.RUN_ID,
+                    "verdict":
+                        "fail",
+                    "reason":
+                        (
+                            "initial_"
+                            "discover_not_ok"
+                        ),
+                    "discover":
+                        discover_record,
+                },
+            )
+
+            self.assertEqual(
+                collector_mock.call_count,
+                1,
+            )
+
+    def test_discover_none_returns_unknown_two_and_never_constructs_poller(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            discover_record = {
+                "exitStatus": 2,
+                "collectorStatus":
+                    "unknown",
+            }
+
+            patches = (
+                self.install_setup_stubs(
+                    fixture,
+                    discover_result=(
+                        None,
+                        discover_record,
+                    ),
+                )
+            )
+
+            with (
+                patches[0],
+                patches[1],
+                patches[2],
+                patches[3],
+                patches[4],
+                mock.patch.object(
+                    F4,
+                    "AuditPollingLoop",
+                ) as poller_class,
+            ):
+                status = F4.run_f4(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                2,
+            )
+            poller_class.assert_not_called()
+
+            result = F4.read_json(
+                fixture["artifact"]
+                / "result.json"
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "unknown",
+            )
+            self.assertEqual(
+                result["reason"],
+                (
+                    "initial_"
+                    "discover_not_ok"
+                ),
+            )
+            self.assertEqual(
+                result["discover"],
+                discover_record,
+            )
+
+    def test_poller_is_constructed_with_exact_environment_and_required_success_count(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp),
+                poll_interval=0.75,
+            )
+
+            env = {
+                "COLLECTOR_ENV":
+                    "isolated",
+            }
+
+            patches = (
+                self.install_setup_stubs(
+                    fixture,
+                    discover_result=(
+                        True,
+                        {
+                            "discover":
+                                "ok"
+                        },
+                    ),
+                    monotonic_origin=
+                        700.0,
+                    env=env,
+                )
+            )
+
+            with (
+                patches[0],
+                patches[1],
+                patches[2],
+                patches[3],
+                patches[4],
+                mock.patch.object(
+                    F4,
+                    "AuditPollingLoop",
+                ) as poller_class,
+            ):
+                poller = (
+                    poller_class
+                    .return_value
+                )
+                poller.run_until_successes.return_value = (
+                    False
+                )
+                poller.scan_attempts = 1
+                poller.successful_scans = 0
+                poller.last_scan_record = {
+                    "scan": "failed"
+                }
+                poller.last_success_monotonic = (
+                    None
+                )
+                poller.last_success_wall = (
+                    None
+                )
+
+                status = F4.run_f4(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                1,
+            )
+
+            calls_log = (
+                fixture["artifact"]
+                / "collector-calls.jsonl"
+            )
+
+            poller_class.assert_called_once_with(
+                collector=
+                    fixture["collector"],
+                cwd=
+                    fixture["gate_repo"],
+                env=env,
+                artifact_log=
+                    calls_log,
+                poll_interval_seconds=
+                    0.75,
+                monotonic_origin=
+                    700.0,
+            )
+
+            poller.run_until_successes.assert_called_once_with(
+                F4.REQUIRED_POLL_SUCCESSES
+            )
+
+    def test_polling_false_returns_fail_with_polling_snapshot(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            patches = (
+                self.install_setup_stubs(
+                    fixture,
+                    discover_result=(
+                        True,
+                        {
+                            "discover":
+                                "ok"
+                        },
+                    ),
+                )
+            )
+
+            with (
+                patches[0],
+                patches[1],
+                patches[2],
+                patches[3],
+                patches[4],
+                mock.patch.object(
+                    F4,
+                    "AuditPollingLoop",
+                ) as poller_class,
+            ):
+                poller = (
+                    poller_class
+                    .return_value
+                )
+                poller.run_until_successes.return_value = (
+                    False
+                )
+                poller.scan_attempts = 3
+                poller.successful_scans = 1
+                poller.last_scan_record = {
+                    "phase":
+                        "polling-loop",
+                    "exitStatus":
+                        1,
+                }
+                poller.last_success_monotonic = (
+                    123.0
+                )
+                poller.last_success_wall = (
+                    "2026-09-11T"
+                    "03:00:00.000Z"
+                )
+
+                status = F4.run_f4(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                1,
+            )
+
+            result = F4.read_json(
+                fixture["artifact"]
+                / "result.json"
+            )
+
+            self.assertEqual(
+                result,
+                {
+                    "schemaVersion": 1,
+                    "check": "F4",
+                    "runId":
+                        self.RUN_ID,
+                    "verdict":
+                        "fail",
+                    "reason":
+                        (
+                            "polling_loop_"
+                            "not_established"
+                        ),
+                    "polling": {
+                        "scanAttempts":
+                            3,
+                        "successfulScans":
+                            1,
+                        "lastScan": {
+                            "phase":
+                                "polling-loop",
+                            "exitStatus":
+                                1,
+                        },
+                    },
+                },
+            )
+
+    def test_polling_none_returns_unknown_with_polling_snapshot(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            patches = (
+                self.install_setup_stubs(
+                    fixture,
+                    discover_result=(
+                        True,
+                        {
+                            "discover":
+                                "ok"
+                        },
+                    ),
+                )
+            )
+
+            with (
+                patches[0],
+                patches[1],
+                patches[2],
+                patches[3],
+                patches[4],
+                mock.patch.object(
+                    F4,
+                    "AuditPollingLoop",
+                ) as poller_class,
+            ):
+                poller = (
+                    poller_class
+                    .return_value
+                )
+                poller.run_until_successes.return_value = (
+                    None
+                )
+                poller.scan_attempts = 2
+                poller.successful_scans = 1
+                poller.last_scan_record = {
+                    "scan":
+                        "unknown"
+                }
+                poller.last_success_monotonic = (
+                    None
+                )
+                poller.last_success_wall = (
+                    None
+                )
+
+                status = F4.run_f4(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                2,
+            )
+
+            result = F4.read_json(
+                fixture["artifact"]
+                / "result.json"
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "unknown",
+            )
+            self.assertEqual(
+                result["reason"],
+                (
+                    "polling_loop_"
+                    "not_established"
+                ),
+            )
+            self.assertEqual(
+                result["polling"],
+                {
+                    "scanAttempts": 2,
+                    "successfulScans": 1,
+                    "lastScan": {
+                        "scan":
+                            "unknown"
+                    },
+                },
+            )
+
+    def test_polling_true_but_missing_last_success_monotonic_is_unknown(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            patches = (
+                self.install_setup_stubs(
+                    fixture,
+                    discover_result=(
+                        True,
+                        {
+                            "discover":
+                                "ok"
+                        },
+                    ),
+                )
+            )
+
+            with (
+                patches[0],
+                patches[1],
+                patches[2],
+                patches[3],
+                patches[4],
+                mock.patch.object(
+                    F4,
+                    "AuditPollingLoop",
+                ) as poller_class,
+            ):
+                poller = (
+                    poller_class
+                    .return_value
+                )
+                poller.run_until_successes.return_value = (
+                    True
+                )
+                poller.scan_attempts = 2
+                poller.successful_scans = 2
+                poller.last_scan_record = {
+                    "scan": "ok"
+                }
+                poller.last_success_monotonic = (
+                    None
+                )
+                poller.last_success_wall = (
+                    "2026-09-11T"
+                    "04:00:00.000Z"
+                )
+
+                status = F4.run_f4(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                2,
+            )
+
+            result = F4.read_json(
+                fixture["artifact"]
+                / "result.json"
+            )
+            self.assertEqual(
+                result["verdict"],
+                "unknown",
+            )
+            self.assertEqual(
+                result["reason"],
+                (
+                    "polling_loop_"
+                    "not_established"
+                ),
+            )
+
+    def test_polling_true_but_missing_last_success_wall_is_unknown(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            patches = (
+                self.install_setup_stubs(
+                    fixture,
+                    discover_result=(
+                        True,
+                        {
+                            "discover":
+                                "ok"
+                        },
+                    ),
+                )
+            )
+
+            with (
+                patches[0],
+                patches[1],
+                patches[2],
+                patches[3],
+                patches[4],
+                mock.patch.object(
+                    F4,
+                    "AuditPollingLoop",
+                ) as poller_class,
+            ):
+                poller = (
+                    poller_class
+                    .return_value
+                )
+                poller.run_until_successes.return_value = (
+                    True
+                )
+                poller.scan_attempts = 2
+                poller.successful_scans = 2
+                poller.last_scan_record = {
+                    "scan": "ok"
+                }
+                poller.last_success_monotonic = (
+                    444.0
+                )
+                poller.last_success_wall = (
+                    None
+                )
+
+                status = F4.run_f4(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                2,
+            )
+
+            result = F4.read_json(
+                fixture["artifact"]
+                / "result.json"
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "unknown",
+            )
+            self.assertEqual(
+                result["reason"],
+                (
+                    "polling_loop_"
+                    "not_established"
+                ),
+            )
+
 if __name__ == "__main__":
     unittest.main()
