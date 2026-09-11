@@ -682,5 +682,926 @@ class PilotGateF4RoundA(unittest.TestCase):
             self.assertTrue(selected.is_file())
 
 
+
+class PilotGateF4RoundB(unittest.TestCase):
+    def make_loop_fixture(self, root: Path, *, poll_interval=0.05):
+        root = root.resolve()
+        collector = root / "collector.sh"
+        collector.write_text(
+            "#!/bin/sh\nexit 0\n",
+            encoding="utf-8",
+        )
+        collector.chmod(0o700)
+        cwd = root / "cwd"
+        cwd.mkdir()
+        artifact_log = root / "collector-calls.jsonl"
+        return F4.AuditPollingLoop(
+            collector=collector,
+            cwd=cwd,
+            env={"TEST_ENV": "yes"},
+            artifact_log=artifact_log,
+            poll_interval_seconds=poll_interval,
+            monotonic_origin=10.0,
+        )
+
+    def write_collector(
+        self,
+        root: Path,
+        *,
+        stdout: str,
+        stderr: str = "",
+        exit_status: int = 0,
+    ) -> Path:
+        root = root.resolve()
+        script = root / "collector.sh"
+        lines = ["#!/bin/sh"]
+
+        if stdout:
+            lines.append(
+                "printf '%s\\n' "
+                + repr(stdout)
+            )
+
+        if stderr:
+            lines.append(
+                "printf '%s\\n' "
+                + repr(stderr)
+                + " >&2"
+            )
+
+        lines.append(
+            f"exit {exit_status}"
+        )
+
+        script.write_text(
+            "\n".join(lines) + "\n",
+            encoding="utf-8",
+        )
+        script.chmod(0o700)
+        return script
+
+    def read_jsonl(self, path: Path):
+        return [
+            json.loads(line)
+            for line in path.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        ]
+
+    def test_collector_call_timeout_returns_unknown_and_records_raw_timeout(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            collector = root / "collector.sh"
+            collector.write_text(
+                "#!/bin/sh\nsleep 60\n",
+                encoding="utf-8",
+            )
+            collector.chmod(0o700)
+            log = root / "calls.jsonl"
+
+            timeout = F4.subprocess.TimeoutExpired(
+                cmd=[
+                    str(collector),
+                    "scan",
+                ],
+                timeout=30,
+                output="partial-out",
+                stderr=b"byte-stderr",
+            )
+
+            with mock.patch.object(
+                F4.subprocess,
+                "run",
+                side_effect=timeout,
+            ) as run_mock, mock.patch.object(
+                F4.time,
+                "monotonic",
+                side_effect=[
+                    100.0,
+                    100.25,
+                ],
+            ), mock.patch.object(
+                F4,
+                "utc_now",
+                return_value=(
+                    "2026-09-11T"
+                    "00:00:00.000Z"
+                ),
+            ):
+                result, record = (
+                    F4.collector_call(
+                        collector,
+                        "scan",
+                        cwd=root,
+                        env={
+                            "PATH":
+                                os.environ.get(
+                                    "PATH",
+                                    "",
+                                )
+                        },
+                        artifact_log=log,
+                        phase="timeout-phase",
+                        monotonic_origin=90.0,
+                    )
+                )
+
+            self.assertIsNone(result)
+
+            self.assertEqual(
+                record,
+                {
+                    "schemaVersion": 1,
+                    "phase":
+                        "timeout-phase",
+                    "operation":
+                        "scan",
+                    "wallTimestamp":
+                        (
+                            "2026-09-11T"
+                            "00:00:00.000Z"
+                        ),
+                    (
+                        "monotonicElapsed"
+                        "FromF4Start"
+                    ):
+                        10.0,
+                    "durationMonotonic":
+                        0.25,
+                    "exitStatus":
+                        None,
+                    "collectorStatus":
+                        None,
+                    "reason":
+                        (
+                            "collector_"
+                            "process_timeout"
+                        ),
+                    "stdout":
+                        "partial-out",
+                    "stderr":
+                        "",
+                },
+            )
+
+            self.assertEqual(
+                self.read_jsonl(log),
+                [record],
+            )
+
+            _, kwargs = (
+                run_mock.call_args
+            )
+
+            self.assertEqual(
+                kwargs["timeout"],
+                30,
+            )
+            self.assertFalse(
+                kwargs["check"]
+            )
+            self.assertTrue(
+                kwargs["text"]
+            )
+            self.assertEqual(
+                kwargs["encoding"],
+                "utf-8",
+            )
+            self.assertEqual(
+                kwargs["errors"],
+                "replace",
+            )
+
+    def test_collector_call_real_process_ok_returns_true_and_records_outputs(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            collector = (
+                self.write_collector(
+                    root,
+                    stdout=(
+                        '{"collectorStatus":"ok",'
+                        '"reason":"ready"}'
+                    ),
+                    stderr=
+                        "collector-stderr",
+                    exit_status=0,
+                )
+            )
+
+            log = (
+                root
+                / "calls.jsonl"
+            )
+
+            result, record = (
+                F4.collector_call(
+                    collector,
+                    "discover",
+                    cwd=root,
+                    env=dict(os.environ),
+                    artifact_log=log,
+                    phase=
+                        "initial-discover",
+                    monotonic_origin=0.0,
+                )
+            )
+
+            self.assertIs(
+                result,
+                True,
+            )
+            self.assertEqual(
+                record["exitStatus"],
+                0,
+            )
+            self.assertEqual(
+                record[
+                    "collectorStatus"
+                ],
+                "ok",
+            )
+            self.assertEqual(
+                record["reason"],
+                "ready",
+            )
+            self.assertEqual(
+                record["stdout"],
+                (
+                    '{"collectorStatus":"ok",'
+                    '"reason":"ready"}\n'
+                ),
+            )
+            self.assertEqual(
+                record["stderr"],
+                "collector-stderr\n",
+            )
+            self.assertGreaterEqual(
+                record[
+                    "durationMonotonic"
+                ],
+                0.0,
+            )
+            self.assertGreaterEqual(
+                record[
+                    (
+                        "monotonicElapsed"
+                        "FromF4Start"
+                    )
+                ],
+                0.0,
+            )
+
+            self.assertEqual(
+                self.read_jsonl(log),
+                [record],
+            )
+
+    def test_collector_call_real_process_unknown_branches(
+        self,
+    ):
+        scenarios = (
+            (
+                "unknown-exit",
+                (
+                    '{"collectorStatus":"ok",'
+                    '"reason":"rc-2"}'
+                ),
+                2,
+                "ok",
+                "rc-2",
+            ),
+            (
+                "unknown-status",
+                (
+                    '{"collectorStatus":"unknown",'
+                    '"reason":"uncertain"}'
+                ),
+                0,
+                "unknown",
+                "uncertain",
+            ),
+            (
+                "audit-unavailable",
+                (
+                    '{"collectorStatus":'
+                    '"audit_unavailable",'
+                    '"reason":"missing"}'
+                ),
+                0,
+                "audit_unavailable",
+                "missing",
+            ),
+            (
+                "unparseable",
+                "not-json",
+                0,
+                None,
+                (
+                    "collector_response_"
+                    "unparseable"
+                ),
+            ),
+        )
+
+        for (
+            name,
+            stdout,
+            exit_status,
+            expected_status,
+            expected_reason,
+        ) in scenarios:
+            with self.subTest(
+                name=name
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = (
+                        Path(temp)
+                        .resolve()
+                    )
+
+                    collector = (
+                        self.write_collector(
+                            root,
+                            stdout=stdout,
+                            exit_status=
+                                exit_status,
+                        )
+                    )
+
+                    log = (
+                        root
+                        / "calls.jsonl"
+                    )
+
+                    result, record = (
+                        F4.collector_call(
+                            collector,
+                            "scan",
+                            cwd=root,
+                            env=
+                                dict(
+                                    os.environ
+                                ),
+                            artifact_log=
+                                log,
+                            phase=name,
+                            monotonic_origin=
+                                0.0,
+                        )
+                    )
+
+                    self.assertIsNone(
+                        result
+                    )
+                    self.assertEqual(
+                        record[
+                            "exitStatus"
+                        ],
+                        exit_status,
+                    )
+                    self.assertEqual(
+                        record[
+                            "collectorStatus"
+                        ],
+                        expected_status,
+                    )
+                    self.assertEqual(
+                        record[
+                            "reason"
+                        ],
+                        expected_reason,
+                    )
+                    self.assertEqual(
+                        self.read_jsonl(
+                            log
+                        ),
+                        [record],
+                    )
+
+    def test_collector_call_real_process_other_failure_returns_false(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            collector = (
+                self.write_collector(
+                    root,
+                    stdout=(
+                        '{"collectorStatus":'
+                        '"failed",'
+                        '"reason":"broken"}'
+                    ),
+                    exit_status=1,
+                )
+            )
+
+            log = (
+                root
+                / "calls.jsonl"
+            )
+
+            result, record = (
+                F4.collector_call(
+                    collector,
+                    "scan",
+                    cwd=root,
+                    env=dict(os.environ),
+                    artifact_log=log,
+                    phase=
+                        "hard-failure",
+                    monotonic_origin=0.0,
+                )
+            )
+
+            self.assertIs(
+                result,
+                False,
+            )
+            self.assertEqual(
+                record[
+                    "collectorStatus"
+                ],
+                "failed",
+            )
+            self.assertEqual(
+                record["reason"],
+                "broken",
+            )
+            self.assertEqual(
+                record["exitStatus"],
+                1,
+            )
+
+    def test_audit_polling_loop_init_preserves_arguments_and_zero_state(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            loop = (
+                self.make_loop_fixture(
+                    root,
+                    poll_interval=0.125,
+                )
+            )
+
+            self.assertEqual(
+                loop.collector,
+                root / "collector.sh",
+            )
+            self.assertEqual(
+                loop.cwd,
+                root / "cwd",
+            )
+            self.assertEqual(
+                loop.env,
+                {
+                    "TEST_ENV":
+                        "yes"
+                },
+            )
+            self.assertEqual(
+                loop.artifact_log,
+                (
+                    root
+                    / "collector-calls.jsonl"
+                ),
+            )
+            self.assertEqual(
+                loop.poll_interval_seconds,
+                0.125,
+            )
+            self.assertEqual(
+                loop.monotonic_origin,
+                10.0,
+            )
+            self.assertEqual(
+                loop.scan_attempts,
+                0,
+            )
+            self.assertEqual(
+                loop.successful_scans,
+                0,
+            )
+            self.assertIsNone(
+                loop.last_success_monotonic
+            )
+            self.assertIsNone(
+                loop.last_success_wall
+            )
+            self.assertIsNone(
+                loop.last_scan_record
+            )
+
+    def test_scan_once_success_updates_all_success_state_after_collector_returns(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            loop = (
+                self.make_loop_fixture(
+                    root
+                )
+            )
+
+            record = {
+                "record":
+                    "success"
+            }
+
+            with mock.patch.object(
+                F4,
+                "collector_call",
+                return_value=(
+                    True,
+                    record,
+                ),
+            ) as collector_mock, mock.patch.object(
+                F4.time,
+                "monotonic",
+                return_value=123.5,
+            ), mock.patch.object(
+                F4,
+                "utc_now",
+                return_value=(
+                    "2026-09-11T"
+                    "00:01:02.003Z"
+                ),
+            ):
+                result = (
+                    loop.scan_once(
+                        "phase-a"
+                    )
+                )
+
+            self.assertIs(
+                result,
+                True,
+            )
+            self.assertEqual(
+                loop.scan_attempts,
+                1,
+            )
+            self.assertEqual(
+                loop.successful_scans,
+                1,
+            )
+            self.assertEqual(
+                loop.last_success_monotonic,
+                123.5,
+            )
+            self.assertEqual(
+                loop.last_success_wall,
+                (
+                    "2026-09-11T"
+                    "00:01:02.003Z"
+                ),
+            )
+            self.assertIs(
+                loop.last_scan_record,
+                record,
+            )
+
+            collector_mock.assert_called_once_with(
+                loop.collector,
+                "scan",
+                cwd=loop.cwd,
+                env=loop.env,
+                artifact_log=
+                    loop.artifact_log,
+                phase="phase-a",
+                monotonic_origin=
+                    loop.monotonic_origin,
+            )
+
+    def test_scan_once_false_or_unknown_updates_attempt_and_record_but_not_success_state(
+        self,
+    ):
+        for result_value in (
+            False,
+            None,
+        ):
+            with self.subTest(
+                result=result_value
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = (
+                        Path(temp)
+                        .resolve()
+                    )
+
+                    loop = (
+                        self.make_loop_fixture(
+                            root
+                        )
+                    )
+
+                    record = {
+                        "result":
+                            result_value
+                    }
+
+                    with mock.patch.object(
+                        F4,
+                        "collector_call",
+                        return_value=(
+                            result_value,
+                            record,
+                        ),
+                    ), mock.patch.object(
+                        F4.time,
+                        "monotonic",
+                    ) as mono_mock, mock.patch.object(
+                        F4,
+                        "utc_now",
+                    ) as utc_mock:
+                        result = (
+                            loop.scan_once(
+                                "phase-b"
+                            )
+                        )
+
+                    self.assertIs(
+                        result,
+                        result_value,
+                    )
+                    self.assertEqual(
+                        loop.scan_attempts,
+                        1,
+                    )
+                    self.assertEqual(
+                        loop.successful_scans,
+                        0,
+                    )
+                    self.assertIs(
+                        loop.last_scan_record,
+                        record,
+                    )
+                    self.assertIsNone(
+                        loop.last_success_monotonic
+                    )
+                    self.assertIsNone(
+                        loop.last_success_wall
+                    )
+
+                    mono_mock.assert_not_called()
+                    utc_mock.assert_not_called()
+
+    def test_run_until_successes_rejects_nonpositive_required_count(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            loop = (
+                self.make_loop_fixture(
+                    root
+                )
+            )
+
+            for required in (
+                0,
+                -1,
+            ):
+                with self.subTest(
+                    required=required
+                ):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        (
+                            "required_successes "
+                            "must be positive"
+                        ),
+                    ):
+                        loop.run_until_successes(
+                            required
+                        )
+
+    def test_run_until_successes_returns_first_nontrue_result_after_one_scan(
+        self,
+    ):
+        for result_value in (
+            False,
+            None,
+        ):
+            with self.subTest(
+                result=result_value
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = (
+                        Path(temp)
+                        .resolve()
+                    )
+
+                    loop = (
+                        self.make_loop_fixture(
+                            root
+                        )
+                    )
+
+                    with mock.patch.object(
+                        loop,
+                        "scan_once",
+                        return_value=
+                            result_value,
+                    ) as scan_mock:
+                        result = (
+                            loop
+                            .run_until_successes(
+                                2
+                            )
+                        )
+
+                    self.assertIs(
+                        result,
+                        result_value,
+                    )
+
+                    scan_mock.assert_called_once_with(
+                        "polling-loop"
+                    )
+
+    def test_run_until_successes_stops_at_required_successes_and_sleeps_between_scans(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            loop = (
+                self.make_loop_fixture(
+                    root,
+                    poll_interval=0.05,
+                )
+            )
+
+            records = [
+                {
+                    "scan": 1
+                },
+                {
+                    "scan": 2
+                },
+            ]
+
+            with mock.patch.object(
+                F4,
+                "collector_call",
+                side_effect=[
+                    (
+                        True,
+                        records[0],
+                    ),
+                    (
+                        True,
+                        records[1],
+                    ),
+                ],
+            ) as collector_mock, mock.patch.object(
+                F4.time,
+                "monotonic",
+                side_effect=[
+                    10.00,
+                    10.01,
+                    10.02,
+                    10.05,
+                    10.06,
+                    10.07,
+                ],
+            ), mock.patch.object(
+                F4.time,
+                "sleep",
+            ) as sleep_mock, mock.patch.object(
+                F4,
+                "utc_now",
+                side_effect=[
+                    (
+                        "2026-09-11T"
+                        "00:00:01.000Z"
+                    ),
+                    (
+                        "2026-09-11T"
+                        "00:00:02.000Z"
+                    ),
+                ],
+            ):
+                result = (
+                    loop
+                    .run_until_successes(
+                        2
+                    )
+                )
+
+            self.assertIs(
+                result,
+                True,
+            )
+            self.assertEqual(
+                loop.scan_attempts,
+                2,
+            )
+            self.assertEqual(
+                loop.successful_scans,
+                2,
+            )
+            self.assertIs(
+                loop.last_scan_record,
+                records[1],
+            )
+            self.assertEqual(
+                loop.last_success_monotonic,
+                10.07,
+            )
+            self.assertEqual(
+                loop.last_success_wall,
+                (
+                    "2026-09-11T"
+                    "00:00:02.000Z"
+                ),
+            )
+            self.assertEqual(
+                collector_mock.call_count,
+                2,
+            )
+            self.assertEqual(
+                sleep_mock.call_count,
+                1,
+            )
+            self.assertAlmostEqual(
+                sleep_mock.call_args.args[
+                    0
+                ],
+                0.03,
+                places=7,
+            )
+
+    def test_run_until_successes_with_required_one_does_not_sleep_after_success(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+
+            loop = (
+                self.make_loop_fixture(
+                    root
+                )
+            )
+
+            with mock.patch.object(
+                F4,
+                "collector_call",
+                return_value=(
+                    True,
+                    {
+                        "scan": 1
+                    },
+                ),
+            ), mock.patch.object(
+                F4.time,
+                "monotonic",
+                side_effect=[
+                    20.0,
+                    20.1,
+                ],
+            ), mock.patch.object(
+                F4.time,
+                "sleep",
+            ) as sleep_mock, mock.patch.object(
+                F4,
+                "utc_now",
+                return_value=(
+                    "2026-09-11T"
+                    "00:00:03.000Z"
+                ),
+            ):
+                result = (
+                    loop
+                    .run_until_successes(
+                        1
+                    )
+                )
+
+            self.assertIs(
+                result,
+                True,
+            )
+            self.assertEqual(
+                loop.scan_attempts,
+                1,
+            )
+            self.assertEqual(
+                loop.successful_scans,
+                1,
+            )
+
+            sleep_mock.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()
