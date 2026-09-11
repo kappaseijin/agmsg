@@ -2611,7 +2611,9 @@ print(i1.exact_broker_command(broker, config, "issue-record", request, gh))
 PY
   )"
 
-  [[ "$command" == *" --gh-config-dir $GH_CONFIG_DIR_TEST issue-record < "* ]]
+  # Guarded: a bare non-last [[ ]] is not enforced on bash 3.2 (#670).
+  [[ "$command" == "$BROKER --config $CONFIG_FILE --gh-config-dir $GH_CONFIG_DIR_TEST issue-record < $request_file" ]] ||
+    { echo "unexpected command: $command" >&2; return 1; }
 
   run bash -c "$command"
 
