@@ -1211,5 +1211,277 @@ class PilotGateCleanupRoundB(SignalGuardedCase):
                              "fail")
 
 
+
+class PilotGateCleanupRoundC(SignalGuardedCase):
+    """cleanup_run: layout guard, idempotent recheck, step sequencing."""
+
+    TEAM = "agmsg-g4gate-c"
+
+    def setUp(self):
+        super().setUp()
+        self.run_root = self.root / "run"
+        self.gate_repo = self.run_root / "repo"
+        (self.gate_repo / "scripts").mkdir(parents=True)
+        (self.gate_repo / "teams").mkdir()
+        self.paths = {
+            "gate_home": self.run_root / "home",
+            "xdg_config": self.run_root / "xdg" / "config",
+            "xdg_cache": self.run_root / "xdg" / "cache",
+            "xdg_data": self.run_root / "xdg" / "data",
+            "xdg_state": self.run_root / "xdg" / "state",
+            "claude_config": self.run_root / "claude",
+        }
+        for path in self.paths.values():
+            path.mkdir(parents=True)
+        self.artifact_dir = self.root / "artifacts"
+        self.events = []
+
+    def args(self, **overrides):
+        values = {
+            "run_id": "run-c",
+            "run_root": str(self.run_root),
+            "gate_repo": str(self.gate_repo),
+            "artifact_dir": str(self.artifact_dir),
+            "gate_team": self.TEAM,
+            **{key: str(value) for key, value in self.paths.items()},
+        }
+        values.update(overrides)
+        return argparse.Namespace(**values)
+
+    def run_cleanup(self, *, terminate=("pass", []), table=(),
+                    claims=("pass", []), resets=("pass", []), **overrides):
+        i1 = mock.Mock()
+        i1.sanitize_env.return_value = {"SANITIZED": "1"}
+
+        def record(name, value):
+            def side_effect(*args, **kwargs):
+                self.events.append(name)
+                self.calls[name] = kwargs or args
+                return value
+            return side_effect
+
+        self.calls = {}
+        table_value = None if table is None else list(table)
+        with mock.patch.object(CL, "load_module", return_value=i1) as load, \
+                mock.patch.object(
+                    CL, "terminate_owned_processes",
+                    side_effect=record("terminate", terminate),
+                ), \
+                mock.patch.object(
+                    CL, "process_table",
+                    side_effect=record("process_table", table_value),
+                ), \
+                mock.patch.object(
+                    CL, "release_message_claims",
+                    side_effect=record("claims", claims),
+                ), \
+                mock.patch.object(
+                    CL, "reset_registrations",
+                    side_effect=record("resets", resets),
+                ):
+            rc = CL.cleanup_run(self.args(**overrides))
+        self.i1 = i1
+        self.load = load
+        path = self.artifact_dir / "cleanup.json"
+        cleanup = json.loads(path.read_text()) if path.exists() else None
+        return rc, cleanup
+
+    def verdicts(self, cleanup):
+        return {name: step["verdict"] for name, step in cleanup["steps"].items()}
+
+    # --- layout guard ----------------------------------------------------
+
+    def test_layout_violation_raises_before_touching_anything(self):
+        with self.assertRaisesRegex(RuntimeError, "artifact directory is inside"):
+            self.run_cleanup(artifact_dir=str(self.run_root / "art"))
+        for path in self.paths.values():
+            self.assertTrue(path.is_dir())
+        self.assertEqual(self.events, [])
+
+    def test_escaping_disposable_path_raises(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        with self.assertRaisesRegex(RuntimeError, "escapes run root"):
+            self.run_cleanup(xdg_state=str(outside))
+        self.assertTrue(outside.is_dir())
+
+    # --- idempotent recheck ----------------------------------------------
+
+    def remove_run_root(self):
+        import shutil as shutil_module
+        shutil_module.rmtree(self.run_root)
+
+    def test_absent_run_root_with_previous_pass_is_pass(self):
+        self.remove_run_root()
+        self.artifact_dir.mkdir()
+        (self.artifact_dir / "cleanup.json").write_text(
+            json.dumps({"status": "pass"})
+        )
+        rc, cleanup = self.run_cleanup()
+        self.assertEqual(rc, 0)
+        self.assertEqual(cleanup["status"], "pass")
+        self.assertIs(cleanup["idempotentRecheck"], True)
+        self.assertIs(cleanup["runRootAbsent"], True)
+        self.assertIs(cleanup["incomplete"], False)
+        self.assertEqual(cleanup["remainingPaths"], [])
+        self.assertEqual(cleanup["runId"], "run-c")
+        self.assertEqual(self.events, [])
+
+    def test_absent_run_root_without_previous_pass_is_unknown(self):
+        for previous in (None, "{broken", json.dumps([1]),
+                         json.dumps({"status": "unknown"}),
+                         json.dumps({"status": "fail"})):
+            with self.subTest(previous=previous):
+                self._tmp.cleanup()
+                self.setUp()
+                self.remove_run_root()
+                self.artifact_dir.mkdir()
+                if previous is not None:
+                    (self.artifact_dir / "cleanup.json").write_text(previous)
+                rc, cleanup = self.run_cleanup()
+                self.assertEqual(rc, 2)
+                self.assertEqual(cleanup["status"], "unknown")
+
+    # --- full run --------------------------------------------------------
+
+    def test_full_run_sequence_and_result(self):
+        (self.paths["claude_config"] / "t.jsonl").write_text("transcript")
+        stale = self.artifact_dir / "cleanup-commands" / "999-old"
+        stale.mkdir(parents=True)
+
+        rc, cleanup = self.run_cleanup()
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            self.events,
+            ["terminate", "claims", "resets", "process_table"],
+        )
+        self.assertEqual(cleanup["status"], "pass")
+        self.assertEqual(cleanup["runId"], "run-c")
+        self.assertEqual(cleanup["disposableTeams"], [self.TEAM])
+        self.assertIs(cleanup["incomplete"], False)
+        self.assertEqual(cleanup["remainingPaths"], [])
+        # cleanup.json is written with sorted keys, so only the set of
+        # steps is observable here; execution order is checked above.
+        self.assertEqual(
+            sorted(cleanup["steps"]),
+            sorted(["evidenceSnapshot", "processes", "claims", "registrations",
+             "claudeConfig", "gateHome", "xdgConfig", "xdgCache", "xdgData",
+             "xdgState", "repository", "transientGhStore",
+             "processVerification", "runRoot"]),
+        )
+        self.assertEqual(set(self.verdicts(cleanup).values()), {"pass"})
+        self.assertFalse(os.path.lexists(self.run_root))
+        # Evidence was captured before the claude config was removed.
+        self.assertEqual(
+            (self.artifact_dir / "pre-cleanup" / "claude-transcripts"
+             / "t.jsonl").read_text(),
+            "transcript",
+        )
+        self.assertFalse(stale.exists())
+        self.assertEqual(
+            self.load.call_args.args,
+            (CLEANUP_HELPER.parent / "pilot-gate-i1.py",
+             "pilot_gate_i1_cleanup"),
+        )
+
+    def test_full_run_wires_env_teams_and_recorder(self):
+        write_config(self.gate_repo, "gen2", {
+            "name": "pilot-gen-2",
+            "agents": {"a": {"type": "codex",
+                             "project": str(self.run_root / "p")}},
+        })
+        self.run_cleanup()
+        claims_kwargs = self.calls["claims"]
+        self.assertEqual(claims_kwargs["teams"], [self.TEAM, "pilot-gen-2"])
+        self.assertEqual(claims_kwargs["env"], {"SANITIZED": "1"})
+        self.assertEqual(claims_kwargs["gate_repo"], self.gate_repo)
+        self.assertIs(claims_kwargs["i1"], self.i1)
+        self.assertEqual(
+            claims_kwargs["artifact"], self.artifact_dir / "cleanup-evidence"
+        )
+        self.assertEqual(self.calls["resets"]["env"], {"SANITIZED": "1"})
+        self.assertEqual(self.calls["resets"]["run_root"], self.run_root)
+        recorder, run_root, evidence = self.calls["terminate"]
+        self.assertIsInstance(recorder, CL.CommandRecorder)
+        self.assertEqual(recorder.root, self.artifact_dir / "cleanup-commands")
+        self.assertEqual(run_root, self.run_root)
+        self.assertEqual(evidence, self.artifact_dir / "cleanup-evidence")
+
+    def test_step_verdicts_aggregate_to_exit_code(self):
+        cases = (
+            ({"terminate": ("fail", [{"pid": 5}])}, 1, "processes", "fail"),
+            ({"claims": ("unknown", [])}, 2, "claims", "unknown"),
+            ({"resets": ("fail", [{}])}, 1, "registrations", "fail"),
+            ({"table": None}, 2, "processVerification", "unknown"),
+        )
+        for overrides, rc_expected, step, verdict in cases:
+            with self.subTest(step=step):
+                self._tmp.cleanup()
+                self.setUp()
+                rc, cleanup = self.run_cleanup(**overrides)
+                self.assertEqual(rc, rc_expected)
+                self.assertEqual(cleanup["steps"][step]["verdict"], verdict)
+                self.assertEqual(
+                    cleanup["status"], "fail" if rc_expected == 1 else "unknown"
+                )
+
+    def test_fail_is_not_hidden_by_unknown_steps(self):
+        rc, cleanup = self.run_cleanup(
+            terminate=("fail", []), claims=("unknown", [])
+        )
+        self.assertEqual(rc, 1)
+        self.assertEqual(cleanup["status"], "fail")
+
+    def test_surviving_owned_process_fails_verification(self):
+        token = str(self.run_root)
+        table = [{"pid": 4242, "ppid": 1, "command": f"watch.sh {token}"}]
+        rc, cleanup = self.run_cleanup(table=table)
+        self.assertEqual(rc, 1)
+        step = cleanup["steps"]["processVerification"]
+        self.assertEqual(step["verdict"], "fail")
+        self.assertEqual([r["pid"] for r in step["remaining"]], [4242])
+
+    def test_leftover_gh_store_is_detected(self):
+        leftover = self.run_root / "tmp" / "gh-gate-store"
+        leftover.mkdir(parents=True)
+        rc, cleanup = self.run_cleanup()
+        self.assertEqual(rc, 1)
+        step = cleanup["steps"]["transientGhStore"]
+        self.assertEqual(step["verdict"], "fail")
+        self.assertEqual(step["remaining"], [str(leftover)])
+
+    def test_gh_store_matcher_needs_both_words(self):
+        (self.run_root / "tmp").mkdir()
+        (self.run_root / "tmp" / "gh-cache").mkdir()
+        (self.run_root / "tmp" / "gate-notes").mkdir()
+        rc, cleanup = self.run_cleanup()
+        self.assertEqual(cleanup["steps"]["transientGhStore"]["verdict"],
+                         "pass")
+        self.assertEqual(rc, 0)
+
+    def test_missing_gate_repo_marks_claims_and_registrations_unknown(self):
+        import shutil as shutil_module
+        shutil_module.rmtree(self.gate_repo)
+        rc, cleanup = self.run_cleanup()
+        self.assertEqual(rc, 2)
+        self.assertNotIn("claims", self.events)
+        self.assertNotIn("resets", self.events)
+        self.assertEqual(cleanup["steps"]["claims"]["verdict"], "unknown")
+        self.assertEqual(cleanup["steps"]["registrations"]["verdict"],
+                         "unknown")
+        self.assertEqual(cleanup["steps"]["repository"]["verdict"], "pass")
+
+    def test_target_counts_are_reported(self):
+        rc, cleanup = self.run_cleanup(
+            terminate=("pass", [{"pid": 1}, {"pid": 2}]),
+            claims=("pass", [{"messageId": "m"}]),
+            resets=("pass", [{}, {}, {}]),
+        )
+        self.assertEqual(cleanup["steps"]["processes"]["targetCount"], 2)
+        self.assertEqual(cleanup["steps"]["claims"]["targetCount"], 1)
+        self.assertEqual(cleanup["steps"]["registrations"]["targetCount"], 3)
+
+
 if __name__ == "__main__":
     unittest.main()
