@@ -11,6 +11,7 @@ on:
       - "site/**"
       - ".github/workflows/pages.yml"
   pull_request:
+    types: [opened, synchronize, reopened, edited]
     paths:
       - "site/**"
       - ".github/workflows/pages.yml"
