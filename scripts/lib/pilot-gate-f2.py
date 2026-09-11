@@ -97,6 +97,19 @@ def verdict_from_assertions(checks: list[dict[str, Any]]) -> str:
     return "pass"
 
 
+def verdict_result(verdict: Any) -> bool | None:
+    """Lift a phase/case verdict into an assertion result, keeping unknown.
+
+    "pass" -> True, "fail" -> False, anything else -> None (unknown).
+    Comparing with == "pass" would fold unknown into fail.
+    """
+    if verdict == "pass":
+        return True
+    if verdict == "fail":
+        return False
+    return None
+
+
 def require_regular(path: pathlib.Path, executable: bool = False) -> None:
     st = path.lstat()
     if path.is_symlink() or not stat.S_ISREG(st.st_mode):
@@ -1380,20 +1393,18 @@ def run_f2(args: argparse.Namespace) -> int:
         checks = [
             assertion(
                 "F2a-missing-pass",
-                (
+                verdict_result(
                     case_results["missing"]
                     .get("verdict")
-                    == "pass"
                 ),
                 case_results["missing"]
                 .get("verdict"),
             ),
             assertion(
                 "F2b-timeout-pass",
-                (
+                verdict_result(
                     case_results["timeout"]
                     .get("verdict")
-                    == "pass"
                 ),
                 case_results["timeout"]
                 .get("verdict"),

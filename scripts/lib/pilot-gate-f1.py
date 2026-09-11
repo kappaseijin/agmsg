@@ -74,6 +74,19 @@ def verdict_from_assertions(assertions: list[dict[str, Any]]) -> str:
     return "pass"
 
 
+def verdict_result(verdict: Any) -> bool | None:
+    """Lift a phase/case verdict into an assertion result, keeping unknown.
+
+    "pass" -> True, "fail" -> False, anything else -> None (unknown).
+    Comparing with == "pass" would fold unknown into fail.
+    """
+    if verdict == "pass":
+        return True
+    if verdict == "fail":
+        return False
+    return None
+
+
 def require_regular_executable(path: pathlib.Path) -> None:
     metadata = path.lstat()
     if path.is_symlink() or not stat.S_ISREG(metadata.st_mode) or not os.access(path, os.X_OK):
@@ -756,7 +769,7 @@ def run_case(
         transcript_count = count_exact_native_tool_use(i1, native.transcript, delegate_command)
 
         checks: list[dict[str, Any]] = [
-            assertion("receive-pass", receive_result["verdict"] == "pass", receive_result["verdict"]),
+            assertion("receive-pass", verdict_result(receive_result["verdict"]), receive_result["verdict"]),
             assertion(
                 "delegate-native-command-exactly-once",
                 transcript_count == 1 if transcript_count is not None else None,
@@ -767,7 +780,7 @@ def run_case(
         if label in {CASE_CONTROL, CASE_RECOVERY}:
             checks.extend(
                 [
-                    assertion("delegate-pass", delegate_result["verdict"] == "pass", delegate_result["verdict"]),
+                    assertion("delegate-pass", verdict_result(delegate_result["verdict"]), delegate_result["verdict"]),
                     assertion("persistent-delegate-write-count", writes == 1, writes),
                 ]
             )
@@ -776,7 +789,7 @@ def run_case(
                 [
                     assertion(
                         "delegate-stopped-on-backend-failure",
-                        delegate_result["verdict"] == "pass",
+                        verdict_result(delegate_result["verdict"]),
                         delegate_result,
                     ),
                     assertion("persistent-fault-request-write-count", writes == 0, writes),
@@ -972,9 +985,9 @@ def run_f1(args: argparse.Namespace) -> int:
         provider_final_digest = iso.sha256_file(provider)
         checks = [
             assertion("request-ids-nonempty-and-distinct", all(ids) and len(set(ids)) == 3, ids),
-            assertion("control-case-pass", control.get("verdict") == "pass", control.get("verdict")),
-            assertion("fault-case-pass", fault_case.get("verdict") == "pass", fault_case.get("verdict")),
-            assertion("recovery-case-pass", recovery.get("verdict") == "pass", recovery.get("verdict")),
+            assertion("control-case-pass", verdict_result(control.get("verdict")), control.get("verdict")),
+            assertion("fault-case-pass", verdict_result(fault_case.get("verdict")), fault_case.get("verdict")),
+            assertion("recovery-case-pass", verdict_result(recovery.get("verdict")), recovery.get("verdict")),
             assertion(
                 "control-write-count-one",
                 post_counts[CASE_CONTROL] == 1 if post_counts[CASE_CONTROL] is not None else None,

@@ -96,6 +96,19 @@ def verdict_from_assertions(checks: list[dict[str, Any]]) -> str:
     return "pass"
 
 
+def verdict_result(verdict: Any) -> bool | None:
+    """Lift a phase/case verdict into an assertion result, keeping unknown.
+
+    "pass" -> True, "fail" -> False, anything else -> None (unknown).
+    Comparing with == "pass" would fold unknown into fail.
+    """
+    if verdict == "pass":
+        return True
+    if verdict == "fail":
+        return False
+    return None
+
+
 def require_regular(path: pathlib.Path, executable: bool = False) -> None:
     st = path.lstat()
     if path.is_symlink() or not stat.S_ISREG(st.st_mode):
@@ -706,8 +719,8 @@ def run_f3(args: argparse.Namespace) -> int:
 
         checks = [
             *pretool_checks,
-            assertion("control-pass", control.get("verdict") == "pass", control.get("verdict")),
-            assertion("fault-pass", fault.get("verdict") == "pass", fault.get("verdict")),
+            assertion("control-pass", verdict_result(control.get("verdict")), control.get("verdict")),
+            assertion("fault-pass", verdict_result(fault.get("verdict")), fault.get("verdict")),
         ]
         verdict = verdict_from_assertions(checks)
         final = {

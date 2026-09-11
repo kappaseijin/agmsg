@@ -4833,158 +4833,48 @@ class PilotGateF3RoundD(unittest.TestCase):
                 )
             )
 
-    def test_fault_nonpass_makes_full_aggregate_fail_exit_one(
-        self,
-    ):
-        for verdict in (
-            "fail",
-            "unknown",
-        ):
-            with self.subTest(
-                verdict=verdict
-            ):
-                with tempfile.TemporaryDirectory() as temp:
-                    fixture = (
-                        self.make_fixture(
-                            Path(temp)
-                        )
-                    )
-                    iso, i1 = (
-                        self.make_modules()
-                    )
-
-                    with self.patch_modules(
-                        iso,
-                        i1,
-                    ), mock.patch.object(
-                        F3,
-                        "run_case",
-                        side_effect=[
-                            {
-                                "verdict":
-                                    "pass"
-                            },
-                            {
-                                "verdict":
-                                    verdict
-                            },
-                        ],
-                    ):
-                        status = (
-                            F3.run_f3(
-                                fixture[
-                                    "args"
-                                ]
-                            )
-                        )
-
-                    self.assertEqual(
-                        status,
-                        1,
-                    )
-
-                    result = F3.read_json(
-                        fixture["artifact"]
-                        / "result.json"
-                    )
-
-                    self.assertEqual(
-                        result["verdict"],
-                        "fail",
-                    )
-
-                    checks = {
-                        item["name"]:
-                            item[
-                                "verdict"
-                            ]
-                        for item
-                        in result[
-                            "checks"
-                        ]
-                    }
-
-                    self.assertEqual(
-                        checks[
-                            "control-pass"
-                        ],
-                        "pass",
-                    )
-                    self.assertEqual(
-                        checks[
-                            "fault-pass"
-                        ],
-                        "fail",
-                    )
-
-    def test_full_aggregate_unknown_exit_two_branch_requires_injected_verdict(
-        self,
-    ):
+    def run_fault_verdict(self, verdict):
         with tempfile.TemporaryDirectory() as temp:
-            fixture = self.make_fixture(
-                Path(temp)
-            )
-            iso, i1 = (
-                self.make_modules()
-            )
-
-            calls = {
-                "count": 0
-            }
-
-            def verdict_side_effect(
-                checks,
-            ):
-                calls["count"] += 1
-
-                if (
-                    calls["count"]
-                    == 1
-                ):
-                    return "pass"
-
-                return "unknown"
-
-            with self.patch_modules(
-                iso,
-                i1,
-            ), mock.patch.object(
-                F3,
-                "verdict_from_assertions",
-                side_effect=
-                    verdict_side_effect,
-            ), mock.patch.object(
+            fixture = self.make_fixture(Path(temp))
+            iso, i1 = self.make_modules()
+            with self.patch_modules(iso, i1), mock.patch.object(
                 F3,
                 "run_case",
                 side_effect=[
-                    {
-                        "verdict":
-                            "pass"
-                    },
-                    {
-                        "verdict":
-                            "pass"
-                    },
+                    {"verdict": "pass"},
+                    {"verdict": verdict},
                 ],
             ):
-                status = F3.run_f3(
-                    fixture["args"]
-                )
+                status = F3.run_f3(fixture["args"])
+            result = F3.read_json(fixture["artifact"] / "result.json")
+        checks = {
+            item["name"]: item["verdict"] for item in result["checks"]
+        }
+        return status, result, checks
 
-            self.assertEqual(
-                status,
-                2,
-            )
+    def test_fault_fail_makes_full_aggregate_fail_exit_one(self):
+        status, result, checks = self.run_fault_verdict("fail")
+        self.assertEqual(status, 1)
+        self.assertEqual(result["verdict"], "fail")
+        self.assertEqual(checks["control-pass"], "pass")
+        self.assertEqual(checks["fault-pass"], "fail")
 
-            result = F3.read_json(
-                fixture["artifact"]
-                / "result.json"
-            )
+    def test_fault_unknown_makes_full_aggregate_unknown_exit_two(self):
+        # Runbook contract: no fail + some unknown -> unknown (rc 2).
+        # Before the fix this branch was reachable only by stubbing
+        # verdict_from_assertions.
+        status, result, checks = self.run_fault_verdict("unknown")
+        self.assertEqual(status, 2)
+        self.assertEqual(result["verdict"], "unknown")
+        self.assertEqual(checks["control-pass"], "pass")
+        self.assertEqual(checks["fault-pass"], "unknown")
 
-            self.assertEqual(
-                result["verdict"],
-                "unknown",
-            )
+    def test_fault_invalid_verdict_is_unknown_not_pass_or_fail(self):
+        for verdict in (None, "", "PASS", "skipped"):
+            with self.subTest(verdict=verdict):
+                status, result, checks = self.run_fault_verdict(verdict)
+                self.assertEqual(status, 2)
+                self.assertEqual(checks["fault-pass"], "unknown")
 
     def test_normal_finally_writes_restore_record_without_profile_restore_call(
         self,

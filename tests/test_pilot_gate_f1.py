@@ -3365,6 +3365,60 @@ class PilotGateF1RoundBRunCase(unittest.TestCase):
             native.stop.assert_called_once()
 
 
+    def run_case_with_delegate_verdict(self, label, verdict):
+        with tempfile.TemporaryDirectory() as temp:
+            paths = self.make_paths(Path(temp))
+            i1, _native = self.make_i1()
+            delegate_result = self.default_delegate_result()
+            delegate_result["verdict"] = verdict
+            with self.run_case_harness(
+                paths=paths,
+                i1=i1,
+                delegate_result=delegate_result,
+                writes=1 if label != F1.CASE_FAULT else 0,
+                transcript_count=1,
+            ):
+                result = self.call_run_case(
+                    i1,
+                    paths,
+                    label=label,
+                    provider_fault=(
+                        mock.Mock() if label == F1.CASE_FAULT else None
+                    ),
+                )
+        checks = {
+            item["name"]: item["verdict"] for item in result["checks"]
+        }
+        return result, checks
+
+    def test_delegate_unknown_keeps_case_unknown_not_fail(self):
+        # Runbook contract: an unobservable delegate outcome must not
+        # be reported as a failed delegate.
+        for label, name in (
+            (F1.CASE_CONTROL, "delegate-pass"),
+            (F1.CASE_RECOVERY, "delegate-pass"),
+            (F1.CASE_FAULT, "delegate-stopped-on-backend-failure"),
+        ):
+            with self.subTest(label=label):
+                result, checks = self.run_case_with_delegate_verdict(
+                    label, "unknown"
+                )
+                self.assertEqual(checks[name], "unknown")
+                self.assertEqual(result["verdict"], "unknown")
+
+    def test_delegate_fail_keeps_case_fail(self):
+        for label, name in (
+            (F1.CASE_CONTROL, "delegate-pass"),
+            (F1.CASE_RECOVERY, "delegate-pass"),
+            (F1.CASE_FAULT, "delegate-stopped-on-backend-failure"),
+        ):
+            with self.subTest(label=label):
+                result, checks = self.run_case_with_delegate_verdict(
+                    label, "fail"
+                )
+                self.assertEqual(checks[name], "fail")
+                self.assertEqual(result["verdict"], "fail")
+
 class PilotGateF1RoundCRunF1(unittest.TestCase):
     ORIGINAL_DIGEST = "provider-original-digest"
     FAULT_DIGEST = "provider-fault-digest"
@@ -4971,6 +5025,56 @@ class PilotGateF1RoundCRunF1(unittest.TestCase):
                     ],
                     17.0,
                 )
+
+    def run_f1_with_case_verdicts(self, fault, recovery):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(Path(temp))
+            cases = [
+                self.case_record(F1.CASE_CONTROL),
+                self.case_record(F1.CASE_FAULT, verdict=fault),
+                self.case_record(F1.CASE_RECOVERY, verdict=recovery),
+            ]
+            with self.harness(fixture, run_case_side_effect=cases):
+                status = F1.run_f1(fixture["args"])
+            result = self.read_result(fixture)
+        checks = {
+            name: item["verdict"]
+            for name, item in self.checks_by_name(result).items()
+        }
+        return status, result, checks
+
+    def test_fault_or_recovery_case_unknown_is_final_unknown_exit_two(self):
+        # Runbook contract: no fail + some unknown -> unknown (rc 2).
+        for fault, recovery in (
+            ("unknown", "pass"),
+            ("pass", "unknown"),
+            ("unknown", "unknown"),
+        ):
+            with self.subTest(fault=fault, recovery=recovery):
+                status, result, checks = self.run_f1_with_case_verdicts(
+                    fault, recovery
+                )
+                self.assertEqual(status, 2)
+                self.assertEqual(result["verdict"], "unknown")
+                self.assertEqual(checks["fault-case-pass"], fault)
+                self.assertEqual(checks["recovery-case-pass"], recovery)
+                self.assertEqual(checks["control-case-pass"], "pass")
+
+    def test_fault_or_recovery_case_fail_is_final_fail_even_with_unknown(self):
+        for fault, recovery in (
+            ("fail", "pass"),
+            ("pass", "fail"),
+            ("fail", "unknown"),
+            ("unknown", "fail"),
+        ):
+            with self.subTest(fault=fault, recovery=recovery):
+                status, result, checks = self.run_f1_with_case_verdicts(
+                    fault, recovery
+                )
+                self.assertEqual(status, 1)
+                self.assertEqual(result["verdict"], "fail")
+                self.assertEqual(checks["fault-case-pass"], fault)
+                self.assertEqual(checks["recovery-case-pass"], recovery)
 
 if __name__ == "__main__":
     unittest.main()

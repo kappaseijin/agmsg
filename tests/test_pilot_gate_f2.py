@@ -6433,41 +6433,14 @@ class PilotGateF2RoundF(unittest.TestCase):
                 )
             )
 
-    def test_missing_or_timeout_nonpass_makes_full_aggregate_fail_exit_one(
-        self,
-    ):
-        scenarios = (
-            {
-                "control": "pass",
-                "missing": "fail",
-                "timeout": "pass",
-            },
-            {
-                "control": "pass",
-                "missing": "unknown",
-                "timeout": "pass",
-            },
-            {
-                "control": "pass",
-                "missing": "pass",
-                "timeout": "unknown",
-            },
-            {
-                "control": "pass",
-                "missing": "pass",
-                "timeout": "fail",
-            },
-        )
-
-        for verdicts in scenarios:
-            with self.subTest(
-                verdicts=verdicts
-            ):
+    def run_missing_timeout_scenarios(self, scenarios):
+        results = []
+        for verdicts, expected_status, expected_verdict in scenarios:
+            with self.subTest(verdicts=verdicts):
                 with tempfile.TemporaryDirectory() as temp:
                     fixture = self.make_fixture(
                         Path(temp)
                     )
-
                     with self.harness(
                         fixture,
                         verdicts=verdicts,
@@ -6476,42 +6449,60 @@ class PilotGateF2RoundF(unittest.TestCase):
                             fixture["args"]
                         )
 
-                    self.assertEqual(
-                        status,
-                        1,
-                    )
+                    self.assertEqual(status, expected_status)
                     result = F2.read_json(
                         fixture["artifact"]
                         / "result.json"
                     )
                     self.assertEqual(
                         result["verdict"],
-                        "fail",
+                        expected_verdict,
                     )
 
                     checks = self.check_map(result)
+                    # Each case verdict is lifted as-is: unknown stays
+                    # unknown, it is not folded into fail.
                     self.assertEqual(
-                        checks[
-                            "F2a-missing-pass"
-                        ]["verdict"],
-                        (
-                            "pass"
-                            if verdicts["missing"]
-                            == "pass"
-                            else "fail"
-                        ),
+                        checks["F2a-missing-pass"]["verdict"],
+                        verdicts["missing"],
                     )
                     self.assertEqual(
-                        checks[
-                            "F2b-timeout-pass"
-                        ]["verdict"],
-                        (
-                            "pass"
-                            if verdicts["timeout"]
-                            == "pass"
-                            else "fail"
-                        ),
+                        checks["F2b-timeout-pass"]["verdict"],
+                        verdicts["timeout"],
                     )
+        return results
+
+    def test_missing_or_timeout_fail_makes_full_aggregate_fail_exit_one(
+        self,
+    ):
+        self.run_missing_timeout_scenarios(
+            (
+                ({"control": "pass", "missing": "fail",
+                  "timeout": "pass"}, 1, "fail"),
+                ({"control": "pass", "missing": "pass",
+                  "timeout": "fail"}, 1, "fail"),
+                # fail is not hidden by unknown
+                ({"control": "pass", "missing": "unknown",
+                  "timeout": "fail"}, 1, "fail"),
+                ({"control": "pass", "missing": "fail",
+                  "timeout": "unknown"}, 1, "fail"),
+            )
+        )
+
+    def test_missing_or_timeout_unknown_makes_full_aggregate_unknown_exit_two(
+        self,
+    ):
+        # Runbook contract: no fail + some unknown -> unknown (rc 2).
+        self.run_missing_timeout_scenarios(
+            (
+                ({"control": "pass", "missing": "unknown",
+                  "timeout": "pass"}, 2, "unknown"),
+                ({"control": "pass", "missing": "pass",
+                  "timeout": "unknown"}, 2, "unknown"),
+                ({"control": "pass", "missing": "unknown",
+                  "timeout": "unknown"}, 2, "unknown"),
+            )
+        )
 
     def test_profile_finally_restored_check_fails_if_profile_is_mutated_after_timeout_restore(
         self,
