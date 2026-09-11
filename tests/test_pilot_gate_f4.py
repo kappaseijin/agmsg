@@ -2905,5 +2905,1129 @@ class PilotGateF4RoundD(unittest.TestCase):
                 ),
             )
 
+
+class PilotGateF4RoundE(unittest.TestCase):
+    RUN_ID = "round-e-run"
+    TEAM = "agmsg-g4gate-round-e"
+
+    def make_fixture(
+        self,
+        root: Path,
+        *,
+        cutoff=10,
+        margin=2,
+        poll_interval=0.25,
+    ):
+        root = root.resolve()
+
+        run_root = root / "run-root"
+        gate_repo = run_root / "repo"
+        claude_config = run_root / "claude"
+        artifact_dir = root / "artifacts"
+
+        (gate_repo / "scripts").mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        claude_config.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        artifact_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        collector = (
+            gate_repo
+            / "scripts"
+            / "pilot-collector.sh"
+        )
+        collector.write_text(
+            "#!/bin/sh\nexit 0\n",
+            encoding="utf-8",
+        )
+        collector.chmod(0o700)
+
+        binding = gate_repo / "binding.json"
+        binding.write_text(
+            "{}\n",
+            encoding="utf-8",
+        )
+
+        args = F4.argparse.Namespace(
+            gate_repo=str(gate_repo),
+            run_root=str(run_root),
+            claude_config=str(
+                claude_config
+            ),
+            artifact_dir=str(
+                artifact_dir
+            ),
+            run_id=self.RUN_ID,
+            gate_team=self.TEAM,
+            cutoff_seconds=cutoff,
+            margin_seconds=margin,
+            poll_interval_seconds=
+                poll_interval,
+        )
+
+        return {
+            "root": root,
+            "run_root": run_root,
+            "gate_repo": gate_repo,
+            "claude_config":
+                claude_config,
+            "artifact_dir":
+                artifact_dir,
+            "artifact":
+                artifact_dir / "F4",
+            "collector": collector,
+            "binding": binding,
+            "args": args,
+        }
+
+    def sample(
+        self,
+        *,
+        captured: bool,
+        liveness: str,
+        exceeded: bool,
+        expected: str,
+        timestamp: float,
+    ):
+        return {
+            "wallTimestamp":
+                (
+                    "2026-09-11T"
+                    f"00:00:0{int(timestamp) % 10}"
+                    ".000Z"
+                ),
+            "monotonicTimestamp":
+                timestamp,
+            "elapsedSinceLastSuccessfulScan":
+                timestamp - 100.0,
+            "cutoffSeconds":
+                10.0,
+            "cutoffExceeded":
+                exceeded,
+            "auditLiveness":
+                liveness,
+            "expectedObservation":
+                expected,
+            "expectedObservationCaptured":
+                captured,
+        }
+
+    def invoke(
+        self,
+        fixture,
+        *,
+        below,
+        above,
+        successful_scans=2,
+        scan_attempts=2,
+        last_success_mono=100.0,
+        last_success_wall=(
+            "2026-09-11T"
+            "00:00:00.000Z"
+        ),
+    ):
+        env = {
+            "AGMSG_PM_BINDING_FILE":
+                str(
+                    fixture["binding"]
+                ),
+            "CLAUDE_CONFIG_DIR":
+                str(
+                    fixture[
+                        "claude_config"
+                    ]
+                ),
+        }
+
+        poller = mock.Mock()
+        poller.run_until_successes.return_value = (
+            True
+        )
+        poller.scan_attempts = (
+            scan_attempts
+        )
+        poller.successful_scans = (
+            successful_scans
+        )
+        poller.last_scan_record = {
+            "phase": "polling-loop",
+        }
+        poller.last_success_monotonic = (
+            last_success_mono
+        )
+        poller.last_success_wall = (
+            last_success_wall
+        )
+
+        with mock.patch.object(
+            F4,
+            "latest_binding",
+            return_value=
+                fixture["binding"],
+        ) as latest_mock, mock.patch.object(
+            F4,
+            "sanitized_collector_env",
+            return_value=env,
+        ) as env_mock, mock.patch.object(
+            F4,
+            "collector_call",
+            return_value=(
+                True,
+                {
+                    "phase":
+                        "initial-discover",
+                },
+            ),
+        ) as collector_mock, mock.patch.object(
+            F4,
+            "AuditPollingLoop",
+            return_value=poller,
+        ) as poller_class, mock.patch.object(
+            F4,
+            "sleep_until",
+        ) as sleep_mock, mock.patch.object(
+            F4,
+            "liveness_sample",
+            side_effect=[
+                below,
+                above,
+            ],
+        ) as liveness_mock, mock.patch.object(
+            F4.time,
+            "monotonic",
+            return_value=50.0,
+        ), mock.patch.object(
+            F4,
+            "utc_now",
+            return_value=(
+                "2026-09-11T"
+                "00:00:00.000Z"
+            ),
+        ):
+            status = F4.run_f4(
+                fixture["args"]
+            )
+
+        return {
+            "status": status,
+            "poller": poller,
+            "latest_mock":
+                latest_mock,
+            "env_mock":
+                env_mock,
+            "collector_mock":
+                collector_mock,
+            "poller_class":
+                poller_class,
+            "sleep_mock":
+                sleep_mock,
+            "liveness_mock":
+                liveness_mock,
+        }
+
+    def test_full_success_records_polling_samples_checks_and_final_result_without_real_sleep(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            below = self.sample(
+                captured=True,
+                liveness="healthy",
+                exceeded=False,
+                expected="below",
+                timestamp=108.0,
+            )
+            above = self.sample(
+                captured=True,
+                liveness="failed/stale",
+                exceeded=True,
+                expected="above",
+                timestamp=112.0,
+            )
+
+            observed = self.invoke(
+                fixture,
+                below=below,
+                above=above,
+            )
+
+            self.assertEqual(
+                observed["status"],
+                0,
+            )
+
+            artifact = (
+                fixture["artifact"]
+            )
+
+            polling = F4.read_json(
+                artifact
+                / "polling-loop.json"
+            )
+
+            self.assertEqual(
+                polling,
+                {
+                    "schemaVersion": 1,
+                    "runId":
+                        self.RUN_ID,
+                    "scanAttempts":
+                        2,
+                    "successfulScans":
+                        2,
+                    "pollIntervalSeconds":
+                        0.25,
+                    "lastSuccessfulScanWall":
+                        (
+                            "2026-09-11T"
+                            "00:00:00.000Z"
+                        ),
+                    (
+                        "lastSuccessfulScan"
+                        "Monotonic"
+                    ):
+                        100.0,
+                    "stoppedIntentionally":
+                        True,
+                    "stoppedReason":
+                        (
+                            "F4 cutoff liveness "
+                            "fault injection"
+                        ),
+                },
+            )
+
+            self.assertEqual(
+                observed[
+                    "sleep_mock"
+                ].call_args_list,
+                [
+                    mock.call(108.0),
+                    mock.call(112.0),
+                ],
+            )
+
+            self.assertEqual(
+                observed[
+                    "liveness_mock"
+                ].call_args_list,
+                [
+                    mock.call(
+                        last_success_monotonic=
+                            100.0,
+                        cutoff_seconds=
+                            10.0,
+                        expected="below",
+                    ),
+                    mock.call(
+                        last_success_monotonic=
+                            100.0,
+                        cutoff_seconds=
+                            10.0,
+                        expected="above",
+                    ),
+                ],
+            )
+
+            below_artifact = (
+                F4.read_json(
+                    artifact
+                    / "below-cutoff.json"
+                )
+            )
+
+            self.assertEqual(
+                below_artifact,
+                {
+                    "schemaVersion": 1,
+                    "runId":
+                        self.RUN_ID,
+                    "lastSuccessfulScanWall":
+                        (
+                            "2026-09-11T"
+                            "00:00:00.000Z"
+                        ),
+                    (
+                        "lastSuccessfulScan"
+                        "Monotonic"
+                    ):
+                        100.0,
+                    "targetElapsed":
+                        8.0,
+                    **below,
+                },
+            )
+
+            above_artifact = (
+                F4.read_json(
+                    artifact
+                    / "above-cutoff.json"
+                )
+            )
+
+            self.assertEqual(
+                above_artifact,
+                {
+                    "schemaVersion": 1,
+                    "runId":
+                        self.RUN_ID,
+                    "lastSuccessfulScanWall":
+                        (
+                            "2026-09-11T"
+                            "00:00:00.000Z"
+                        ),
+                    (
+                        "lastSuccessfulScan"
+                        "Monotonic"
+                    ):
+                        100.0,
+                    "targetElapsed":
+                        12.0,
+                    **above,
+                },
+            )
+
+            result = F4.read_json(
+                artifact
+                / "result.json"
+            )
+
+            self.assertEqual(
+                result["verdict"],
+                "pass",
+            )
+            self.assertEqual(
+                result["schemaVersion"],
+                1,
+            )
+            self.assertEqual(
+                result["check"],
+                "F4",
+            )
+            self.assertEqual(
+                result["runId"],
+                self.RUN_ID,
+            )
+            self.assertEqual(
+                result["cutoffSeconds"],
+                10.0,
+            )
+            self.assertEqual(
+                result["marginSeconds"],
+                2.0,
+            )
+            self.assertEqual(
+                result[
+                    "pollIntervalSeconds"
+                ],
+                0.25,
+            )
+            self.assertEqual(
+                result["binding"],
+                str(
+                    fixture["binding"]
+                ),
+            )
+            self.assertEqual(
+                result[
+                    "lastSuccessfulScan"
+                ],
+                {
+                    "wallTimestamp":
+                        (
+                            "2026-09-11T"
+                            "00:00:00.000Z"
+                        ),
+                    "monotonicTimestamp":
+                        100.0,
+                },
+            )
+            self.assertEqual(
+                result["belowCutoff"],
+                below,
+            )
+            self.assertEqual(
+                result["aboveCutoff"],
+                above,
+            )
+
+            self.assertEqual(
+                [
+                    item["name"]
+                    for item
+                    in result["checks"]
+                ],
+                [
+                    (
+                        "polling-loop-"
+                        "established"
+                    ),
+                    (
+                        "below-observation-"
+                        "captured"
+                    ),
+                    (
+                        "below-cutoff-"
+                        "healthy"
+                    ),
+                    (
+                        "above-observation-"
+                        "captured"
+                    ),
+                    (
+                        "above-cutoff-"
+                        "unhealthy"
+                    ),
+                    "boundary-rule-fixed",
+                ],
+            )
+
+            self.assertTrue(
+                all(
+                    item["verdict"]
+                    == "pass"
+                    for item
+                    in result["checks"]
+                )
+            )
+
+            observed[
+                "collector_mock"
+            ].assert_called_once()
+
+            observed[
+                "poller_class"
+            ].assert_called_once()
+
+            observed[
+                "poller"
+            ].run_until_successes.assert_called_once_with(
+                F4.REQUIRED_POLL_SUCCESSES
+            )
+
+    def test_below_uncaptured_makes_below_checks_unknown_and_overall_unknown(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            below = self.sample(
+                captured=False,
+                liveness="healthy",
+                exceeded=False,
+                expected="below",
+                timestamp=110.0,
+            )
+            above = self.sample(
+                captured=True,
+                liveness="failed/stale",
+                exceeded=True,
+                expected="above",
+                timestamp=112.0,
+            )
+
+            observed = self.invoke(
+                fixture,
+                below=below,
+                above=above,
+            )
+
+            self.assertEqual(
+                observed["status"],
+                2,
+            )
+
+            result = F4.read_json(
+                fixture["artifact"]
+                / "result.json"
+            )
+
+            checks = {
+                item["name"]:
+                    item["verdict"]
+                for item
+                in result["checks"]
+            }
+
+            self.assertEqual(
+                checks[
+                    (
+                        "below-observation-"
+                        "captured"
+                    )
+                ],
+                "unknown",
+            )
+            self.assertEqual(
+                checks[
+                    "below-cutoff-healthy"
+                ],
+                "unknown",
+            )
+            self.assertEqual(
+                checks[
+                    (
+                        "above-observation-"
+                        "captured"
+                    )
+                ],
+                "pass",
+            )
+            self.assertEqual(
+                checks[
+                    (
+                        "above-cutoff-"
+                        "unhealthy"
+                    )
+                ],
+                "pass",
+            )
+            self.assertEqual(
+                result["verdict"],
+                "unknown",
+            )
+
+            self.assertEqual(
+                observed[
+                    "sleep_mock"
+                ].call_count,
+                2,
+            )
+
+    def test_below_captured_but_unhealthy_makes_check_fail_and_overall_fail(
+        self,
+    ):
+        scenarios = (
+            (
+                "failed/stale",
+                False,
+            ),
+            (
+                "healthy",
+                True,
+            ),
+        )
+
+        for liveness, exceeded in scenarios:
+            with self.subTest(
+                liveness=liveness,
+                exceeded=exceeded,
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = (
+                        self.make_fixture(
+                            Path(temp)
+                        )
+                    )
+
+                    below = self.sample(
+                        captured=True,
+                        liveness=liveness,
+                        exceeded=exceeded,
+                        expected="below",
+                        timestamp=108.0,
+                    )
+                    above = self.sample(
+                        captured=True,
+                        liveness=
+                            "failed/stale",
+                        exceeded=True,
+                        expected="above",
+                        timestamp=112.0,
+                    )
+
+                    observed = self.invoke(
+                        fixture,
+                        below=below,
+                        above=above,
+                    )
+
+                    self.assertEqual(
+                        observed["status"],
+                        1,
+                    )
+
+                    result = F4.read_json(
+                        fixture["artifact"]
+                        / "result.json"
+                    )
+
+                    checks = {
+                        item["name"]:
+                            item["verdict"]
+                        for item
+                        in result["checks"]
+                    }
+
+                    self.assertEqual(
+                        checks[
+                            (
+                                "below-observation-"
+                                "captured"
+                            )
+                        ],
+                        "pass",
+                    )
+                    self.assertEqual(
+                        checks[
+                            (
+                                "below-cutoff-"
+                                "healthy"
+                            )
+                        ],
+                        "fail",
+                    )
+                    self.assertEqual(
+                        result["verdict"],
+                        "fail",
+                    )
+
+                    self.assertEqual(
+                        observed[
+                            "sleep_mock"
+                        ].call_count,
+                        2,
+                    )
+
+    def test_above_uncaptured_makes_above_checks_unknown_and_overall_unknown(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            below = self.sample(
+                captured=True,
+                liveness="healthy",
+                exceeded=False,
+                expected="below",
+                timestamp=108.0,
+            )
+            above = self.sample(
+                captured=False,
+                liveness="failed/stale",
+                exceeded=True,
+                expected="above",
+                timestamp=110.0,
+            )
+
+            observed = self.invoke(
+                fixture,
+                below=below,
+                above=above,
+            )
+
+            self.assertEqual(
+                observed["status"],
+                2,
+            )
+
+            result = F4.read_json(
+                fixture["artifact"]
+                / "result.json"
+            )
+
+            checks = {
+                item["name"]:
+                    item["verdict"]
+                for item
+                in result["checks"]
+            }
+
+            self.assertEqual(
+                checks[
+                    (
+                        "above-observation-"
+                        "captured"
+                    )
+                ],
+                "unknown",
+            )
+            self.assertEqual(
+                checks[
+                    (
+                        "above-cutoff-"
+                        "unhealthy"
+                    )
+                ],
+                "unknown",
+            )
+            self.assertEqual(
+                checks[
+                    (
+                        "below-observation-"
+                        "captured"
+                    )
+                ],
+                "pass",
+            )
+            self.assertEqual(
+                checks[
+                    "below-cutoff-healthy"
+                ],
+                "pass",
+            )
+            self.assertEqual(
+                result["verdict"],
+                "unknown",
+            )
+
+            self.assertEqual(
+                observed[
+                    "sleep_mock"
+                ].call_count,
+                2,
+            )
+
+    def test_above_captured_but_not_stale_makes_check_fail_and_overall_fail(
+        self,
+    ):
+        scenarios = (
+            (
+                "healthy",
+                True,
+            ),
+            (
+                "failed/stale",
+                False,
+            ),
+        )
+
+        for liveness, exceeded in scenarios:
+            with self.subTest(
+                liveness=liveness,
+                exceeded=exceeded,
+            ):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = (
+                        self.make_fixture(
+                            Path(temp)
+                        )
+                    )
+
+                    below = self.sample(
+                        captured=True,
+                        liveness="healthy",
+                        exceeded=False,
+                        expected="below",
+                        timestamp=108.0,
+                    )
+                    above = self.sample(
+                        captured=True,
+                        liveness=liveness,
+                        exceeded=exceeded,
+                        expected="above",
+                        timestamp=112.0,
+                    )
+
+                    observed = self.invoke(
+                        fixture,
+                        below=below,
+                        above=above,
+                    )
+
+                    self.assertEqual(
+                        observed["status"],
+                        1,
+                    )
+
+                    result = F4.read_json(
+                        fixture["artifact"]
+                        / "result.json"
+                    )
+
+                    checks = {
+                        item["name"]:
+                            item["verdict"]
+                        for item
+                        in result["checks"]
+                    }
+
+                    self.assertEqual(
+                        checks[
+                            (
+                                "above-observation-"
+                                "captured"
+                            )
+                        ],
+                        "pass",
+                    )
+                    self.assertEqual(
+                        checks[
+                            (
+                                "above-cutoff-"
+                                "unhealthy"
+                            )
+                        ],
+                        "fail",
+                    )
+                    self.assertEqual(
+                        result["verdict"],
+                        "fail",
+                    )
+
+                    self.assertEqual(
+                        observed[
+                            "sleep_mock"
+                        ].call_count,
+                        2,
+                    )
+
+    def test_polling_loop_established_check_fails_if_success_count_drops_below_required(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            below = self.sample(
+                captured=True,
+                liveness="healthy",
+                exceeded=False,
+                expected="below",
+                timestamp=108.0,
+            )
+            above = self.sample(
+                captured=True,
+                liveness="failed/stale",
+                exceeded=True,
+                expected="above",
+                timestamp=112.0,
+            )
+
+            observed = self.invoke(
+                fixture,
+                below=below,
+                above=above,
+                successful_scans=1,
+                scan_attempts=2,
+            )
+
+            self.assertEqual(
+                observed["status"],
+                1,
+            )
+
+            result = F4.read_json(
+                fixture["artifact"]
+                / "result.json"
+            )
+
+            checks = {
+                item["name"]:
+                    item["verdict"]
+                for item
+                in result["checks"]
+            }
+
+            self.assertEqual(
+                checks[
+                    (
+                        "polling-loop-"
+                        "established"
+                    )
+                ],
+                "fail",
+            )
+            self.assertEqual(
+                result["verdict"],
+                "fail",
+            )
+
+    def test_no_collector_or_poller_activity_occurs_between_below_and_above_samples(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = self.make_fixture(
+                Path(temp)
+            )
+
+            events = []
+
+            below = self.sample(
+                captured=True,
+                liveness="healthy",
+                exceeded=False,
+                expected="below",
+                timestamp=108.0,
+            )
+            above = self.sample(
+                captured=True,
+                liveness="failed/stale",
+                exceeded=True,
+                expected="above",
+                timestamp=112.0,
+            )
+
+            env = {
+                "COLLECTOR_ENV":
+                    "yes",
+            }
+
+            poller = mock.Mock()
+            poller.run_until_successes.return_value = (
+                True
+            )
+            poller.scan_attempts = 2
+            poller.successful_scans = 2
+            poller.last_scan_record = {
+                "scan": "ok",
+            }
+            poller.last_success_monotonic = (
+                100.0
+            )
+            poller.last_success_wall = (
+                "2026-09-11T"
+                "00:00:00.000Z"
+            )
+
+            def sleep_side_effect(
+                target,
+            ):
+                events.append(
+                    (
+                        "sleep",
+                        target,
+                    )
+                )
+
+            def sample_side_effect(
+                **kwargs,
+            ):
+                events.append(
+                    (
+                        "sample",
+                        kwargs["expected"],
+                    )
+                )
+
+                return (
+                    below
+                    if kwargs[
+                        "expected"
+                    ] == "below"
+                    else above
+                )
+
+            def collector_side_effect(
+                *args,
+                **kwargs,
+            ):
+                events.append(
+                    (
+                        "collector",
+                        args[1],
+                    )
+                )
+
+                return (
+                    True,
+                    {
+                        "phase":
+                            "initial-discover",
+                    },
+                )
+
+            with mock.patch.object(
+                F4,
+                "latest_binding",
+                return_value=
+                    fixture["binding"],
+            ), mock.patch.object(
+                F4,
+                "sanitized_collector_env",
+                return_value=env,
+            ), mock.patch.object(
+                F4,
+                "collector_call",
+                side_effect=
+                    collector_side_effect,
+            ) as collector_mock, mock.patch.object(
+                F4,
+                "AuditPollingLoop",
+                return_value=poller,
+            ) as poller_class, mock.patch.object(
+                F4,
+                "sleep_until",
+                side_effect=
+                    sleep_side_effect,
+            ) as sleep_mock, mock.patch.object(
+                F4,
+                "liveness_sample",
+                side_effect=
+                    sample_side_effect,
+            ), mock.patch.object(
+                F4.time,
+                "monotonic",
+                return_value=50.0,
+            ), mock.patch.object(
+                F4,
+                "utc_now",
+                return_value=(
+                    "2026-09-11T"
+                    "00:00:00.000Z"
+                ),
+            ):
+                status = F4.run_f4(
+                    fixture["args"]
+                )
+
+            self.assertEqual(
+                status,
+                0,
+            )
+
+            self.assertEqual(
+                events,
+                [
+                    (
+                        "collector",
+                        "discover",
+                    ),
+                    (
+                        "sleep",
+                        108.0,
+                    ),
+                    (
+                        "sample",
+                        "below",
+                    ),
+                    (
+                        "sleep",
+                        112.0,
+                    ),
+                    (
+                        "sample",
+                        "above",
+                    ),
+                ],
+            )
+
+            collector_mock.assert_called_once()
+            poller_class.assert_called_once()
+
+            poller.run_until_successes.assert_called_once_with(
+                F4.REQUIRED_POLL_SUCCESSES
+            )
+
+            self.assertEqual(
+                sleep_mock.call_count,
+                2,
+            )
+
 if __name__ == "__main__":
     unittest.main()
