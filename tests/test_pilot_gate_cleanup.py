@@ -1483,5 +1483,350 @@ class PilotGateCleanupRoundC(SignalGuardedCase):
         self.assertEqual(cleanup["steps"]["registrations"]["targetCount"], 3)
 
 
+
+class PilotGateCleanupRoundD(SignalGuardedCase):
+    """Live-PM comparison and result/assertion helpers."""
+
+    # --- scrub / normalize -----------------------------------------------
+
+    def test_scrub_volatile_removes_volatile_keys_recursively_sorted(self):
+        value = {
+            "z": 1,
+            "pid": 99,
+            "observedAt": "t",
+            "nested": [{"timestamp": 1, "keep": [{"elapsed": 2, "k": 3}]}],
+            "a": "x",
+        }
+        scrubbed = CL.scrub_volatile(value)
+        self.assertEqual(
+            scrubbed,
+            {"a": "x", "nested": [{"keep": [{"k": 3}]}], "z": 1},
+        )
+        self.assertEqual(list(scrubbed), ["a", "nested", "z"])
+        self.assertEqual(CL.scrub_volatile("pid"), "pid")
+        self.assertEqual(CL.scrub_volatile([1, "t"]), [1, "t"])
+        self.assertEqual(value["pid"], 99)  # input not mutated
+
+    def test_normalized_file_value_json_text_and_invalid(self):
+        json_file = self.root / "r.json"
+        json_file.write_text('{"b": 1, "pid": 5, "a": {"startedAt": 1}}')
+        self.assertEqual(CL.normalized_file_value(json_file),
+                         {"a": {}, "b": 1})
+
+        broken = self.root / "bad.json"
+        broken.write_text("  {not json  \n")
+        self.assertEqual(CL.normalized_file_value(broken), "{not json")
+
+        text = self.root / "out.txt"
+        text.write_bytes(b"  deny \xff\n")
+        self.assertEqual(CL.normalized_file_value(text), "deny �")
+
+        # JSON content in a non-.json file is compared as text.
+        other = self.root / "response"
+        other.write_text('{"pid": 1}')
+        self.assertEqual(CL.normalized_file_value(other), '{"pid": 1}')
+
+    # --- choose_exit_value -----------------------------------------------
+
+    def test_choose_exit_value_requires_one_consistent_integer(self):
+        d = self.root / "d"
+        (d / "sub").mkdir(parents=True)
+        (d / "exit-status").write_text("2\n")
+        (d / "sub" / "deny.EXIT").write_text(" 2 ")
+        (d / "exit-note").write_text("not a number")
+        (d / "other").write_text("7")
+        value, paths = CL.choose_exit_value(d)
+        self.assertEqual(value, 2)
+        self.assertEqual(
+            sorted(paths),
+            sorted([str(d / "exit-status"), str(d / "sub" / "deny.EXIT")]),
+        )
+
+    def test_choose_exit_value_none_when_ambiguous_or_absent(self):
+        d = self.root / "d"
+        d.mkdir()
+        self.assertEqual(CL.choose_exit_value(d), (None, []))
+        (d / "exit-a").write_text("0")
+        (d / "exit-b").write_text("-1")
+        value, paths = CL.choose_exit_value(d)
+        self.assertIsNone(value)
+        self.assertEqual(len(paths), 2)
+        self.assertEqual(CL.choose_exit_value(self.root / "missing"),
+                         (None, []))
+
+    def test_choose_exit_value_ignores_symlinks_and_unreadable(self):
+        d = self.root / "d"
+        d.mkdir()
+        target = self.root / "real-exit"
+        target.write_text("9")
+        (d / "exit-link").symlink_to(target)
+        (d / "exit-bin").write_bytes(b"\xff\xfe")
+        (d / "exit-ok").write_text("0")
+        self.assertEqual(CL.choose_exit_value(d),
+                         (0, [str(d / "exit-ok")]))
+
+    # --- semantic_candidates ---------------------------------------------
+
+    def test_semantic_candidates_selects_keyword_files(self):
+        d = self.root / "d"
+        (d / "hooks").mkdir(parents=True)
+        (d / "deny-response.json").write_text('{"decision": "deny", "pid": 3}')
+        (d / "hooks" / "semantic.txt").write_text("blocked\n")
+        (d / "Decision.log").write_text("x")
+        (d / "guard.sha256").write_text("abc")
+        (d / "deny-exit").write_text("2")
+        (d / "notes.txt").write_text("irrelevant")
+        (d / "response-link").symlink_to(d / "notes.txt")
+        self.assertEqual(
+            CL.semantic_candidates(d),
+            {
+                "deny-response.json": {"decision": "deny"},
+                str(Path("hooks") / "semantic.txt"): "blocked",
+                "Decision.log": "x",
+            },
+        )
+        self.assertEqual(CL.semantic_candidates(self.root / "none"), {})
+
+    def test_semantic_candidates_excludes_guard_digest_even_under_keyword(self):
+        # guard.sha256 is compared by its own check; under a directory
+        # whose name contains a keyword it must still be excluded here.
+        d = self.root / "d"
+        (d / "deny-hook").mkdir(parents=True)
+        (d / "deny-hook" / "guard.sha256").write_text("abc")
+        (d / "deny-hook" / "decision.txt").write_text("deny")
+        self.assertEqual(
+            CL.semantic_candidates(d),
+            {str(Path("deny-hook") / "decision.txt"): "deny"},
+        )
+
+    # --- compare_live_pm -------------------------------------------------
+
+    def live_fixture(self, *, before=None, after=None):
+        artifact = self.root / "art"
+        defaults = {
+            "guard.sha256": "digest-1",
+            "deny-exit": "2",
+            "deny-response.json": json.dumps({"decision": "deny"}),
+        }
+        for side, files in (("before", before), ("after", after)):
+            directory = artifact / "live-pm" / side
+            directory.mkdir(parents=True)
+            values = dict(defaults)
+            values.update(files or {})
+            for name, content in values.items():
+                if content is None:
+                    continue
+                (directory / name).write_text(content)
+        return artifact
+
+    def compare(self, artifact, after_status=0):
+        rc = CL.compare_live_pm(
+            argparse.Namespace(
+                artifact_dir=str(artifact), after_status=after_status
+            )
+        )
+        result = json.loads(
+            (artifact / "live-pm" / "result.json").read_text()
+        )
+        checks = {c["name"]: c["verdict"] for c in result["checks"]}
+        return rc, result, checks
+
+    def test_compare_live_pm_pass_when_everything_matches(self):
+        rc, result, checks = self.compare(self.live_fixture())
+        self.assertEqual(rc, 0)
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual(result["check"], "livePmNegativeControl")
+        self.assertEqual(
+            checks,
+            {
+                "after-control-runner-status": "pass",
+                "guard-digest-before-after": "pass",
+                "deny-exit-before-after": "pass",
+                "deny-semantic-before-after": "pass",
+            },
+        )
+
+    def test_compare_live_pm_runner_status_mapping(self):
+        for status, verdict, rc_expected in ((1, "fail", 1), (2, "unknown", 2),
+                                             (70, "unknown", 2)):
+            with self.subTest(status=status):
+                self._tmp.cleanup()
+                self.setUp()
+                rc, _, checks = self.compare(self.live_fixture(), status)
+                self.assertEqual(checks["after-control-runner-status"],
+                                 verdict)
+                self.assertEqual(rc, rc_expected)
+
+    def test_compare_live_pm_guard_digest(self):
+        cases = (
+            ({"after": {"guard.sha256": "digest-2"}}, "fail"),
+            ({"before": {"guard.sha256": ""}, "after": {"guard.sha256": ""}},
+             "fail"),
+            ({"after": {"guard.sha256": None}}, "unknown"),
+            ({"before": {"guard.sha256": None}}, "unknown"),
+        )
+        for fixture, verdict in cases:
+            with self.subTest(fixture=fixture):
+                self._tmp.cleanup()
+                self.setUp()
+                _, result, checks = self.compare(self.live_fixture(**fixture))
+                self.assertEqual(checks["guard-digest-before-after"], verdict)
+        self.assertEqual(
+            [c for c in result["checks"]
+             if c["name"] == "guard-digest-before-after"][0]["reason"],
+            "guard_digest_artifact_missing",
+        )
+
+    def test_compare_live_pm_exit_values(self):
+        cases = (
+            ({"after": {"deny-exit": "0"}}, "fail", 1),
+            ({"after": {"deny-exit": None}}, "unknown", 2),
+            ({"before": {"deny-exit": "x"}}, "unknown", 2),
+            ({"after": {"exit-extra": "3"}}, "unknown", 2),  # ambiguous
+        )
+        for fixture, verdict, rc_expected in cases:
+            with self.subTest(fixture=fixture):
+                self._tmp.cleanup()
+                self.setUp()
+                rc, _, checks = self.compare(self.live_fixture(**fixture))
+                self.assertEqual(checks["deny-exit-before-after"], verdict)
+                self.assertEqual(rc, rc_expected)
+
+    def test_compare_live_pm_semantic_values(self):
+        cases = (
+            ({"after": {"deny-response.json":
+                        json.dumps({"decision": "allow"})}}, "fail"),
+            # volatile keys are ignored
+            ({"after": {"deny-response.json":
+                        json.dumps({"decision": "deny", "pid": 7})}}, "pass"),
+            ({"after": {"deny-response.json": None}}, "unknown"),
+            ({"before": {"deny-response.json": None},
+              "after": {"deny-response.json": None}}, "unknown"),
+            # no common file between the two sides
+            ({"before": {"deny-response.json": None,
+                         "semantic-a.txt": "x"},
+              "after": {"deny-response.json": None,
+                        "semantic-b.txt": "x"}}, "unknown"),
+        )
+        for fixture, verdict in cases:
+            with self.subTest(fixture=fixture):
+                self._tmp.cleanup()
+                self.setUp()
+                _, _, checks = self.compare(self.live_fixture(**fixture))
+                self.assertEqual(checks["deny-semantic-before-after"], verdict)
+
+    def test_compare_live_pm_fail_wins_over_unknown(self):
+        rc, result, _ = self.compare(
+            self.live_fixture(after={"guard.sha256": "other",
+                                     "deny-exit": None}),
+        )
+        self.assertEqual(rc, 1)
+        self.assertEqual(result["verdict"], "fail")
+
+    # --- result_verdict --------------------------------------------------
+
+    def test_result_verdict(self):
+        path = self.root / "result.json"
+        self.assertEqual(CL.result_verdict(path),
+                         ("unknown", "result_file_missing"))
+        path.write_text("{")
+        self.assertEqual(CL.result_verdict(path),
+                         ("unknown", "result_unreadable:JSONDecodeError"))
+        path.write_text("[]")
+        self.assertEqual(CL.result_verdict(path),
+                         ("unknown", "result_root_not_object"))
+        for bad in ("PASS", None, "", 1):
+            path.write_text(json.dumps({"verdict": bad}))
+            self.assertEqual(CL.result_verdict(path),
+                             ("unknown", "result_verdict_invalid"))
+        for verdict in ("pass", "fail", "unknown"):
+            path.write_text(json.dumps({"verdict": verdict, "reason": "r"}))
+            self.assertEqual(CL.result_verdict(path), (verdict, "r"))
+        path.write_text(json.dumps({"verdict": "fail", "reason": 5}))
+        self.assertEqual(CL.result_verdict(path), ("fail", None))
+
+    # --- flatten_problem_assertions --------------------------------------
+
+    def test_flatten_problem_assertions_walks_known_containers(self):
+        value = {
+            "check": "F5",
+            "verdict": "fail",
+            "checks": [
+                {"name": "a", "verdict": "pass"},
+                {"name": "b", "verdict": "unknown"},
+                {"name": "c", "verdict": "fail", "reason": "why"},
+            ],
+            "control": {"verdict": "unknown", "checks": [
+                {"name": "d", "verdict": "fail"}]},
+            "fault": {"verdict": "pass"},
+            "recovery": {"verdict": "fail"},
+            "F2a": {"name": "x", "verdict": "unknown"},
+            "F2b": {"verdict": "pass"},
+            "cases": {"verdict": "unknown"},
+            # not walked
+            "containment": {"verdict": "fail", "checks": [
+                {"name": "hidden", "verdict": "fail"}]},
+            "other": [{"name": "hidden2", "verdict": "fail"}],
+        }
+        problems = CL.flatten_problem_assertions(value, "F5", "F5/result.json")
+        self.assertEqual(
+            problems,
+            [
+                {"check": "F5", "reason": "assertion_fail",
+                 "evidence": "F5/result.json", "verdict": "fail"},
+                {"check": "b", "reason": "assertion_unknown",
+                 "evidence": "F5/result.json", "verdict": "unknown"},
+                {"check": "c", "reason": "why",
+                 "evidence": "F5/result.json", "verdict": "fail"},
+                {"check": "F5.control", "reason": "assertion_unknown",
+                 "evidence": "F5/result.json", "verdict": "unknown"},
+                {"check": "d", "reason": "assertion_fail",
+                 "evidence": "F5/result.json", "verdict": "fail"},
+                {"check": "F5.recovery", "reason": "assertion_fail",
+                 "evidence": "F5/result.json", "verdict": "fail"},
+                {"check": "x", "reason": "assertion_unknown",
+                 "evidence": "F5/result.json", "verdict": "unknown"},
+                {"check": "F5.cases", "reason": "assertion_unknown",
+                 "evidence": "F5/result.json", "verdict": "unknown"},
+            ],
+        )
+        self.assertEqual(CL.flatten_problem_assertions("x", "p", "e"), [])
+        self.assertEqual(
+            CL.flatten_problem_assertions([{"verdict": "fail"}], "p", "e"),
+            [{"check": "p[0]", "reason": "assertion_fail", "evidence": "e",
+              "verdict": "fail"}],
+        )
+
+    # --- observation -----------------------------------------------------
+
+    def test_observation_record_shape_and_default_reason(self):
+        record = CL.observation(
+            check="F4", value="pass", cutoff=10, source="monotonic-clock",
+            command=None, raw_evidence="F4/result.json", verdict="pass",
+            reason=None,
+        )
+        self.assertEqual(record["reason"], "observation_matches_expected")
+        self.assertRegex(record["observedAt"], r"Z$")
+        self.assertEqual(
+            {k: v for k, v in record.items() if k != "observedAt"},
+            {"schemaVersion": 1, "check": "F4", "value": "pass",
+             "cutoff": 10, "source": "monotonic-clock", "command": None,
+             "rawEvidence": "F4/result.json", "verdict": "pass",
+             "reason": "observation_matches_expected"},
+        )
+        self.assertEqual(
+            CL.observation(check="F1", value="fail", cutoff=None, source="s",
+                           command=None, raw_evidence="r", verdict="fail",
+                           reason=None)["reason"],
+            "F1_fail",
+        )
+        self.assertEqual(
+            CL.observation(check="F1", value="fail", cutoff=None, source="s",
+                           command=None, raw_evidence="r", verdict="fail",
+                           reason="given")["reason"],
+            "given",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
