@@ -464,6 +464,77 @@ bootstrap_run() {
   log "run-id=$RUN_ID"
 }
 
+# cleanup and evaluate act on the run that already exists for ARTIFACT_DIR.
+# They must not mint a new run id or overwrite part1-state.json (Issue #405):
+# a new run root would be cleaned instead of the one the run left behind.
+load_existing_run() {
+  local state="$ARTIFACT_DIR/part1-state.json"
+  local fields=()
+  local field
+
+  [ -f "$state" ] ||
+    usage_error \
+      "no existing run for this artifact directory: $state not found"
+
+  while IFS= read -r -d '' field; do
+    fields+=("$field")
+  done < <(
+    python3 - "$state" "$ARTIFACT_DIR" <<'PY'
+import json
+import os
+import sys
+
+state_path, artifact_dir = sys.argv[1], sys.argv[2]
+
+try:
+    with open(state_path, "r", encoding="utf-8") as fh:
+        state = json.load(fh)
+    xdg = state["xdg"]
+    values = [
+        state["runId"],
+        state["runRoot"],
+        state["gateTeam"],
+        state["gateRepo"],
+        state["gateHome"],
+        xdg["config"],
+        xdg["cache"],
+        xdg["data"],
+        xdg["state"],
+        state["claudeConfigDir"],
+        state["artifactDir"],
+    ]
+except Exception:
+    raise SystemExit(0)
+
+if not all(isinstance(v, str) and v and "\0" not in v for v in values):
+    raise SystemExit(0)
+
+if os.path.realpath(values[-1]) != os.path.realpath(artifact_dir):
+    raise SystemExit(0)
+
+sys.stdout.write("\0".join(values) + "\0")
+PY
+  )
+
+  [ "${#fields[@]}" -eq 11 ] ||
+    usage_error \
+      "part1-state.json is unreadable or belongs to another artifact directory: $state"
+
+  RUN_ID="${fields[0]}"
+  RUN_ROOT="${fields[1]}"
+  GATE_TEAM="${fields[2]}"
+  GATE_REPO="${fields[3]}"
+  GATE_HOME="${fields[4]}"
+  GATE_XDG_CONFIG="${fields[5]}"
+  GATE_XDG_CACHE="${fields[6]}"
+  GATE_XDG_DATA="${fields[7]}"
+  GATE_XDG_STATE="${fields[8]}"
+  GATE_CLAUDE_CONFIG="${fields[9]}"
+  STATE_FILE="$state"
+
+  log "existing run-id=$RUN_ID"
+}
+
 export_isolated_environment() {
   export HOME="$GATE_HOME"
   export XDG_CONFIG_HOME="$GATE_XDG_CONFIG"
@@ -529,7 +600,7 @@ run_live_pm_control() {
   # decision log while this negative control is being observed.
   printf '{}\n' > "$fixture"
 
-  set +e
+  status=0
   env \
     -u AGMSG_PM_DECISIONS_FILE \
     -u AGMSG_PM_BINDING_FILE \
@@ -544,9 +615,7 @@ run_live_pm_control() {
     "$LIVE_GUARD" \
       < "$fixture" \
       > "$stdout_file" \
-      2> "$stderr_file"
-  status="$?"
-  set -e
+      2> "$stderr_file" || status="$?"
 
   printf '%s\n' "$status" > "$status_file"
 
@@ -660,7 +729,7 @@ phase_p3_isolation_preflight() {
 
   log "P3 isolation preflight"
 
-  set +e
+  status=0
   python3 "$ISOLATION_HELPER" preflight \
     --output "$ARTIFACT_DIR/isolation.json" \
     --run-id "$RUN_ID" \
@@ -678,9 +747,7 @@ phase_p3_isolation_preflight() {
     --xdg-data "$GATE_XDG_DATA" \
     --xdg-state "$GATE_XDG_STATE" \
     --claude-config "$GATE_CLAUDE_CONFIG" \
-    --claude-bin "$CLAUDE_BIN_CANONICAL"
-  status="$?"
-  set -e
+    --claude-bin "$CLAUDE_BIN_CANONICAL" || status="$?"
 
   case "$status" in
     0)
@@ -722,7 +789,7 @@ phase_p4_f2_containment() {
     internal_error \
       "F2 probe target exists before containment proof"
 
-  set +e
+  status=0
   python3 "$ISOLATION_HELPER" f2-proof \
     --output "$ARTIFACT_DIR/f2-containment.json" \
     --run-id "$RUN_ID" \
@@ -733,9 +800,7 @@ phase_p4_f2_containment() {
     --xdg-config "$GATE_XDG_CONFIG" \
     --probe-target "$F2_PROBE_TARGET" \
     --probe-program "$F2_PROBE_PROGRAM" \
-    --probe-manifest "$F2_PROBE_MANIFEST"
-  status="$?"
-  set -e
+    --probe-manifest "$F2_PROBE_MANIFEST" || status="$?"
 
   case "$status" in
     0)
@@ -977,7 +1042,7 @@ launch_n1_case() {
 
   CASE_SESSION="$session_id"
 
-  set +e
+  validation_status=0
   python3 "$ISOLATION_HELPER" validate-binding \
     --binding "$binding" \
     --output "$case_dir/binding-validation.json" \
@@ -986,9 +1051,7 @@ launch_n1_case() {
     --project "$GATE_REPO" \
     --generation "$expected_generation" \
     --process-pid "$launcher_pid" \
-    ${expected_session:+--expected-session "$expected_session"}
-  validation_status="$?"
-  set -e
+    ${expected_session:+--expected-session "$expected_session"} || validation_status="$?"
 
   if [ "$validation_status" -ne 0 ]; then
     exec 9>&-
@@ -1040,14 +1103,12 @@ launch_n1_case() {
     cat "$process_command"
   )"
 
-  set +e
+  validation_status=0
   python3 "$ISOLATION_HELPER" validate-process-command \
     --command-file "$process_command" \
     --mode "$mode" \
     --session-id "$session_id" \
-    --settings "$GATE_REPO/.claude/settings.local.json"
-  validation_status="$?"
-  set -e
+    --settings "$GATE_REPO/.claude/settings.local.json" || validation_status="$?"
 
   if [ "$validation_status" -ne 0 ]; then
     exec 9>&-
@@ -1099,9 +1160,7 @@ launch_n1_case() {
   terminate_native_process "$launcher_pid"
   CURRENT_NATIVE_PID=""
 
-  set +e
-  wait "$launcher_pid" >/dev/null 2>&1
-  set -e
+  wait "$launcher_pid" >/dev/null 2>&1 || true
 
   printf '%s\n' "pass" > "$case_dir/verdict"
 
@@ -1125,10 +1184,8 @@ phase_n1() {
 
   mkdir -p "$ARTIFACT_DIR/N1"
 
-  set +e
-  launch_n1_case "fresh" "1"
-  fresh_status="$?"
-  set -e
+  fresh_status=0
+  launch_n1_case "fresh" "1" || fresh_status="$?"
 
   case "$fresh_status" in
     0)
@@ -1161,13 +1218,11 @@ phase_n1() {
   printf '%s\n' "$fresh_binding_digest_before" \
     > "$ARTIFACT_DIR/N1/fresh/binding.sha256.before-resume"
 
-  set +e
+  resume_status=0
   launch_n1_case \
     "resume" \
     "2" \
-    "$fresh_session"
-  resume_status="$?"
-  set -e
+    "$fresh_session" || resume_status="$?"
 
   case "$resume_status" in
     0)
@@ -1218,14 +1273,12 @@ phase_n1() {
     return "$EX_GATE_FAIL"
   fi
 
-  set +e
+  state_status=0
   python3 "$ISOLATION_HELPER" validate-state \
     --binding "$resume_binding" \
     --expected-generation 2 \
     --expected-session "$fresh_session" \
-    --output "$ARTIFACT_DIR/N1/state-validation.json"
-  state_status="$?"
-  set -e
+    --output "$ARTIFACT_DIR/N1/state-validation.json" || state_status="$?"
 
   case "$state_status" in
     0)
@@ -1292,16 +1345,14 @@ phase_i1() {
   #
   # A broker-direct observation alone is therefore insufficient for pass.
   #
-  set +e
+  status=0
   python3 "$I1_HELPER" \
     --run-id "$RUN_ID" \
     --run-root "$RUN_ROOT" \
     --gate-repo "$GATE_REPO" \
     --artifact-dir "$ARTIFACT_DIR" \
     --gate-team "$GATE_TEAM" \
-    --claude-config "$GATE_CLAUDE_CONFIG"
-  status="$?"
-  set -e
+    --claude-config "$GATE_CLAUDE_CONFIG" || status="$?"
 
   case "$status" in
     0)
@@ -1338,18 +1389,14 @@ run_p0_through_p4() {
   phase_p1_live_pm_before
   phase_p2_isolation_setup
 
-  set +e
-  phase_p3_isolation_preflight
-  status="$?"
-  set -e
+  status=0
+  phase_p3_isolation_preflight || status="$?"
 
   [ "$status" -eq 0 ] ||
     return "$status"
 
-  set +e
-  phase_p4_f2_containment
-  status="$?"
-  set -e
+  status=0
+  phase_p4_f2_containment || status="$?"
 
   [ "$status" -eq 0 ] ||
     return "$status"
@@ -1357,15 +1404,35 @@ run_p0_through_p4() {
   return 0
 }
 
+# Worst of two gate statuses: internal > fail > unknown > pass.
+worst_status() {
+  local a="$1"
+  local b="$2"
+
+  case "$a:$b" in
+    *"$EX_INTERNAL"*) printf '%s\n' "$EX_INTERNAL" ;;
+    *1*) printf '%s\n' "$EX_GATE_FAIL" ;;
+    *2*) printf '%s\n' "$EX_GATE_UNKNOWN" ;;
+    0:0) printf '%s\n' "$EX_GATE_PASS" ;;
+    *) printf '%s\n' "$EX_INTERNAL" ;;
+  esac
+}
+
 subcommand_preflight() {
   local status
+  local cleanup_status
 
-  set +e
-  run_p0_through_p4
-  status="$?"
-  set -e
+  status=0
+  run_p0_through_p4 || status="$?"
 
-  return "$status"
+  # preflight creates a disposable run root; it must not outlive the
+  # command (Issue #405). No live PM mutation happens in P0-P4, so only
+  # P5 is needed here.
+  FINALIZE_PENDING=0
+  cleanup_status=0
+  phase_p5_cleanup || cleanup_status="$?"
+
+  return "$(worst_status "$status" "$cleanup_status")"
 }
 
 phase_f1() {
@@ -1373,16 +1440,14 @@ phase_f1() {
 
   log "F1 broker/backend failure"
 
-  set +e
+  status=0
   python3 "$F1_HELPER" \
     --run-id "$RUN_ID" \
     --run-root "$RUN_ROOT" \
     --gate-repo "$GATE_REPO" \
     --artifact-dir "$ARTIFACT_DIR" \
     --gate-team "$GATE_TEAM" \
-    --claude-config "$GATE_CLAUDE_CONFIG"
-  status="$?"
-  set -e
+    --claude-config "$GATE_CLAUDE_CONFIG" || status="$?"
 
   case "$status" in
     0)
@@ -1410,16 +1475,14 @@ phase_f2() {
 
   log "F2 PreToolUse hook unavailable"
 
-  set +e
+  status=0
   python3 "$F2_HELPER" \
     --run-id "$RUN_ID" \
     --run-root "$RUN_ROOT" \
     --gate-repo "$GATE_REPO" \
     --artifact-dir "$ARTIFACT_DIR" \
     --gate-team "$GATE_TEAM" \
-    --claude-config "$GATE_CLAUDE_CONFIG"
-  status="$?"
-  set -e
+    --claude-config "$GATE_CLAUDE_CONFIG" || status="$?"
 
   case "$status" in
     0)
@@ -1447,16 +1510,14 @@ phase_f3() {
 
   log "F3 PostToolUse stopped"
 
-  set +e
+  status=0
   python3 "$F3_HELPER" \
     --run-id "$RUN_ID" \
     --run-root "$RUN_ROOT" \
     --gate-repo "$GATE_REPO" \
     --artifact-dir "$ARTIFACT_DIR" \
     --gate-team "$GATE_TEAM" \
-    --claude-config "$GATE_CLAUDE_CONFIG"
-  status="$?"
-  set -e
+    --claude-config "$GATE_CLAUDE_CONFIG" || status="$?"
 
   case "$status" in
     0)
@@ -1484,7 +1545,7 @@ phase_f4() {
 
   log "F4 audit loop cutoff"
 
-  set +e
+  status=0
   python3 "$F4_HELPER" \
     --run-id "$RUN_ID" \
     --run-root "$RUN_ROOT" \
@@ -1492,9 +1553,7 @@ phase_f4() {
     --artifact-dir "$ARTIFACT_DIR" \
     --gate-team "$GATE_TEAM" \
     --claude-config "$GATE_CLAUDE_CONFIG" \
-    --cutoff-seconds "$COLLECTOR_CUTOFF_SECONDS"
-  status="$?"
-  set -e
+    --cutoff-seconds "$COLLECTOR_CUTOFF_SECONDS" || status="$?"
 
   case "$status" in
     0)
@@ -1522,16 +1581,14 @@ phase_f5() {
 
   log "F5 notification delivery"
 
-  set +e
+  status=0
   python3 "$F5_HELPER" \
     --run-id "$RUN_ID" \
     --run-root "$RUN_ROOT" \
     --gate-repo "$GATE_REPO" \
     --artifact-dir "$ARTIFACT_DIR" \
     --gate-team "$GATE_TEAM" \
-    --claude-config "$GATE_CLAUDE_CONFIG"
-  status="$?"
-  set -e
+    --claude-config "$GATE_CLAUDE_CONFIG" || status="$?"
 
   case "$status" in
     0)
@@ -1559,7 +1616,7 @@ phase_p5_cleanup() {
 
   log "P5 cleanup + cleanup verification"
 
-  set +e
+  status=0
   python3 "$CLEANUP_HELPER" cleanup \
     --run-id "$RUN_ID" \
     --run-root "$RUN_ROOT" \
@@ -1571,9 +1628,7 @@ phase_p5_cleanup() {
     --xdg-state "$GATE_XDG_STATE" \
     --claude-config "$GATE_CLAUDE_CONFIG" \
     --artifact-dir "$ARTIFACT_DIR" \
-    --gate-team "$GATE_TEAM"
-  status="$?"
-  set -e
+    --gate-team "$GATE_TEAM" || status="$?"
 
   case "$status" in
     0)
@@ -1602,17 +1657,13 @@ phase_p6_live_pm_after() {
 
   log "P6 live PM final negative control"
 
-  set +e
-  run_live_pm_control "after"
-  control_status="$?"
-  set -e
+  control_status=0
+  run_live_pm_control "after" || control_status="$?"
 
-  set +e
+  compare_status=0
   python3 "$CLEANUP_HELPER" compare-live \
     --artifact-dir "$ARTIFACT_DIR" \
-    --after-status "$control_status"
-  compare_status="$?"
-  set -e
+    --after-status "$control_status" || compare_status="$?"
 
   case "$control_status" in
     0|1|2)
@@ -1659,14 +1710,12 @@ phase_p7_aggregate() {
       ;;
   esac
 
-  set +e
+  status=0
   python3 "$CLEANUP_HELPER" evaluate \
     --run-id "$RUN_ID" \
     --artifact-dir "$ARTIFACT_DIR" \
     --requested-check "$CHECK" \
-    --execution-status "$execution_status"
-  status="$?"
-  set -e
+    --execution-status "$execution_status" || status="$?"
 
   case "$status" in
     0)
@@ -1708,10 +1757,8 @@ subcommand_run() {
   #
   # P0-P4 are mandatory prerequisites for every N1/I1/F1-F5 check.
   #
-  set +e
-  run_p0_through_p4
-  status="$?"
-  set -e
+  status=0
+  run_p0_through_p4 || status="$?"
 
   case "$status" in
     0)
@@ -1735,35 +1782,24 @@ subcommand_run() {
   # N1
   #
   if [ "$continue_checks" -eq 1 ]; then
-    set +e
-    phase_n1
-    n1_status="$?"
-    set -e
+    n1_status=0
+    phase_n1 || n1_status="$?"
 
     case "$n1_status" in
       0)
         if [ "$CHECK" = "N1" ]; then
-          return "$EX_GATE_PASS"
+          continue_checks=0
         fi
         ;;
       1)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_GATE_FAIL"
-        fi
         execution_status="$EX_GATE_FAIL"
         continue_checks=0
         ;;
       2)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_GATE_UNKNOWN"
-        fi
         execution_status="$EX_GATE_UNKNOWN"
         continue_checks=0
         ;;
       *)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_INTERNAL"
-        fi
         execution_status="$EX_GATE_UNKNOWN"
         internal_status="$EX_INTERNAL"
         continue_checks=0
@@ -1775,35 +1811,24 @@ subcommand_run() {
   # I1
   #
   if [ "$continue_checks" -eq 1 ]; then
-    set +e
-    phase_i1
-    i1_status="$?"
-    set -e
+    i1_status=0
+    phase_i1 || i1_status="$?"
 
     case "$i1_status" in
       0)
         if [ "$CHECK" = "I1" ]; then
-          return "$EX_GATE_PASS"
+          continue_checks=0
         fi
         ;;
       1)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_GATE_FAIL"
-        fi
         execution_status="$EX_GATE_FAIL"
         continue_checks=0
         ;;
       2)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_GATE_UNKNOWN"
-        fi
         execution_status="$EX_GATE_UNKNOWN"
         continue_checks=0
         ;;
       *)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_INTERNAL"
-        fi
         execution_status="$EX_GATE_UNKNOWN"
         internal_status="$EX_INTERNAL"
         continue_checks=0
@@ -1815,35 +1840,24 @@ subcommand_run() {
   # F1
   #
   if [ "$continue_checks" -eq 1 ]; then
-    set +e
-    phase_f1
-    f1_status="$?"
-    set -e
+    f1_status=0
+    phase_f1 || f1_status="$?"
 
     case "$f1_status" in
       0)
         if [ "$CHECK" = "F1" ]; then
-          return "$EX_GATE_PASS"
+          continue_checks=0
         fi
         ;;
       1)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_GATE_FAIL"
-        fi
         execution_status="$EX_GATE_FAIL"
         continue_checks=0
         ;;
       2)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_GATE_UNKNOWN"
-        fi
         execution_status="$EX_GATE_UNKNOWN"
         continue_checks=0
         ;;
       *)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_INTERNAL"
-        fi
         execution_status="$EX_GATE_UNKNOWN"
         internal_status="$EX_INTERNAL"
         continue_checks=0
@@ -1855,35 +1869,24 @@ subcommand_run() {
   # F2
   #
   if [ "$continue_checks" -eq 1 ]; then
-    set +e
-    phase_f2
-    f2_status="$?"
-    set -e
+    f2_status=0
+    phase_f2 || f2_status="$?"
 
     case "$f2_status" in
       0)
         if [ "$CHECK" = "F2" ]; then
-          return "$EX_GATE_PASS"
+          continue_checks=0
         fi
         ;;
       1)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_GATE_FAIL"
-        fi
         execution_status="$EX_GATE_FAIL"
         continue_checks=0
         ;;
       2)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_GATE_UNKNOWN"
-        fi
         execution_status="$EX_GATE_UNKNOWN"
         continue_checks=0
         ;;
       *)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_INTERNAL"
-        fi
         execution_status="$EX_GATE_UNKNOWN"
         internal_status="$EX_INTERNAL"
         continue_checks=0
@@ -1895,35 +1898,24 @@ subcommand_run() {
   # F3
   #
   if [ "$continue_checks" -eq 1 ]; then
-    set +e
-    phase_f3
-    f3_status="$?"
-    set -e
+    f3_status=0
+    phase_f3 || f3_status="$?"
 
     case "$f3_status" in
       0)
         if [ "$CHECK" = "F3" ]; then
-          return "$EX_GATE_PASS"
+          continue_checks=0
         fi
         ;;
       1)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_GATE_FAIL"
-        fi
         execution_status="$EX_GATE_FAIL"
         continue_checks=0
         ;;
       2)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_GATE_UNKNOWN"
-        fi
         execution_status="$EX_GATE_UNKNOWN"
         continue_checks=0
         ;;
       *)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_INTERNAL"
-        fi
         execution_status="$EX_GATE_UNKNOWN"
         internal_status="$EX_INTERNAL"
         continue_checks=0
@@ -1935,35 +1927,24 @@ subcommand_run() {
   # F4
   #
   if [ "$continue_checks" -eq 1 ]; then
-    set +e
-    phase_f4
-    f4_status="$?"
-    set -e
+    f4_status=0
+    phase_f4 || f4_status="$?"
 
     case "$f4_status" in
       0)
         if [ "$CHECK" = "F4" ]; then
-          return "$EX_GATE_PASS"
+          continue_checks=0
         fi
         ;;
       1)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_GATE_FAIL"
-        fi
         execution_status="$EX_GATE_FAIL"
         continue_checks=0
         ;;
       2)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_GATE_UNKNOWN"
-        fi
         execution_status="$EX_GATE_UNKNOWN"
         continue_checks=0
         ;;
       *)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_INTERNAL"
-        fi
         execution_status="$EX_GATE_UNKNOWN"
         internal_status="$EX_INTERNAL"
         continue_checks=0
@@ -1975,35 +1956,24 @@ subcommand_run() {
   # F5
   #
   if [ "$continue_checks" -eq 1 ]; then
-    set +e
-    phase_f5
-    f5_status="$?"
-    set -e
+    f5_status=0
+    phase_f5 || f5_status="$?"
 
     case "$f5_status" in
       0)
         if [ "$CHECK" = "F5" ]; then
-          return "$EX_GATE_PASS"
+          continue_checks=0
         fi
         ;;
       1)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_GATE_FAIL"
-        fi
         execution_status="$EX_GATE_FAIL"
         continue_checks=0
         ;;
       2)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_GATE_UNKNOWN"
-        fi
         execution_status="$EX_GATE_UNKNOWN"
         continue_checks=0
         ;;
       *)
-        if [ "$CHECK" != "all" ]; then
-          return "$EX_INTERNAL"
-        fi
         execution_status="$EX_GATE_UNKNOWN"
         internal_status="$EX_INTERNAL"
         continue_checks=0
@@ -2012,8 +1982,11 @@ subcommand_run() {
   fi
 
   #
-  # Development/partial checks returned above. Reaching here therefore means
-  # CHECK=all.
+  # Every CHECK value reaches this point: a partial run stops running
+  # checks after the requested one, but cleanup, the live PM after-control
+  # and the aggregate evaluation are never skipped (runbook §33, §37).
+  # P7 is given CHECK, so its exit status covers the requested scope while
+  # results.json keeps the full-pilot verdict.
   #
   # Do not continue fault injection after a prerequisite/check has produced
   # fail/unknown. The remaining unexecuted result artifacts stay absent and
@@ -2021,10 +1994,9 @@ subcommand_run() {
   #
   # P5 MUST nevertheless be attempted regardless of the N1/I1/F1-F5 result.
   #
-  set +e
-  phase_p5_cleanup
-  cleanup_status="$?"
-  set -e
+  FINALIZE_PENDING=0
+  cleanup_status=0
+  phase_p5_cleanup || cleanup_status="$?"
 
   case "$cleanup_status" in
     0|1|2)
@@ -2038,10 +2010,8 @@ subcommand_run() {
   # P6 also runs regardless of cleanup verdict. Its before-control evidence
   # lives outside RUN_ROOT in ARTIFACT_DIR, so it remains available after P5.
   #
-  set +e
-  phase_p6_live_pm_after
-  live_status="$?"
-  set -e
+  live_status=0
+  phase_p6_live_pm_after || live_status="$?"
 
   case "$live_status" in
     0|1|2)
@@ -2056,10 +2026,8 @@ subcommand_run() {
   # only the N1/I1/F1-F5 execution aggregate; cleanup and live PM negative
   # control are read independently from their artifacts by the evaluator.
   #
-  set +e
-  phase_p7_aggregate "$execution_status"
-  aggregate_status="$?"
-  set -e
+  aggregate_status=0
+  phase_p7_aggregate "$execution_status" || aggregate_status="$?"
 
   case "$aggregate_status" in
     0|1|2)
@@ -2086,7 +2054,7 @@ subcommand_evaluate() {
   local status
 
   if [ -f "$ARTIFACT_DIR/results.json" ]; then
-    set +e
+    status=0
     recorded_execution_status="$(
       python3 - "$ARTIFACT_DIR/results.json" <<'PY'
 import json
@@ -2115,9 +2083,7 @@ if result is None:
 
 print(result)
 PY
-    )"
-    status="$?"
-    set -e
+    )" || status="$?"
 
     if [ "$status" -eq 0 ]; then
       case "$recorded_execution_status" in
@@ -2131,22 +2097,44 @@ PY
     fi
   fi
 
-  set +e
-  phase_p7_aggregate "$execution_status"
-  status="$?"
-  set -e
+  status=0
+  phase_p7_aggregate "$execution_status" || status="$?"
 
   return "$status"
 }
 subcommand_cleanup() {
   local status
 
-  set +e
-  phase_p5_cleanup
-  status="$?"
-  set -e
+  status=0
+  phase_p5_cleanup || status="$?"
 
   return "$status"
+}
+
+# Set once run/preflight has created a disposable run root and cleared
+# when the normal path takes over P5. If the process leaves before that
+# (internal_error's exit 70, an unexpected errexit, a signal), the EXIT trap
+# still attempts cleanup, the live PM after-control and the aggregate
+# (runbook §37: "abort後もcleanupとlive PM after-controlは行う").
+FINALIZE_PENDING=0
+
+finalize_after_abort() {
+  local exit_status="$?"
+
+  if [ "$FINALIZE_PENDING" -eq 1 ]; then
+    FINALIZE_PENDING=0
+
+    log "aborted with status=$exit_status; attempting P5/P6/P7 before exit"
+
+    phase_p5_cleanup || true
+
+    if [ "$SUBCOMMAND" = "run" ]; then
+      phase_p6_live_pm_after || true
+      phase_p7_aggregate "$EX_GATE_UNKNOWN" || true
+    fi
+  fi
+
+  exit "$exit_status"
 }
 
 on_signal() {
@@ -2174,7 +2162,17 @@ main() {
   validate_static_inputs
   scrub_github_credentials
   identify_native_claude
-  bootstrap_run
+
+  case "$SUBCOMMAND" in
+    cleanup|evaluate)
+      load_existing_run
+      ;;
+    *)
+      trap finalize_after_abort EXIT
+      bootstrap_run
+      FINALIZE_PENDING=1
+      ;;
+  esac
 
   trap 'on_signal 129' HUP
   trap 'on_signal 130' INT
@@ -2182,31 +2180,23 @@ main() {
 
   case "$SUBCOMMAND" in
     preflight)
-      set +e
-      subcommand_preflight
-      status="$?"
-      set -e
+      status=0
+      subcommand_preflight || status="$?"
       ;;
 
     run)
-      set +e
-      subcommand_run
-      status="$?"
-      set -e
+      status=0
+      subcommand_run || status="$?"
       ;;
 
     evaluate)
-      set +e
-      subcommand_evaluate
-      status="$?"
-      set -e
+      status=0
+      subcommand_evaluate || status="$?"
       ;;
 
     cleanup)
-      set +e
-      subcommand_cleanup
-      status="$?"
-      set -e
+      status=0
+      subcommand_cleanup || status="$?"
       ;;
 
     *)
@@ -2214,6 +2204,10 @@ main() {
         "unreachable subcommand: $SUBCOMMAND"
       ;;
   esac
+
+  # The subcommand returned: it owned P5-P7 on this path, so there is no
+  # abort left for the EXIT trap to finish.
+  FINALIZE_PENDING=0
 
   case "$status" in
     0|1|2|64|70)

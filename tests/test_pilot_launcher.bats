@@ -30,15 +30,10 @@ setup() {
   export OTHER_PROJ="$TEST_SKILL_DIR/other-project"
   mkdir -p "$OTHER_PROJ"
 
-  # G4-B is intentionally a separate PR. G4-A must fail closed if these
-  # future files do not exist, so this test suite installs minimal executable
-  # placeholders for tests which need to exercise the launcher beyond that
-  # boundary.
-  cat > "$SCRIPTS/pm-pilot-pretool-guard" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-  chmod +x "$SCRIPTS/pm-pilot-pretool-guard"
+  # The real pilot guard (#404) is copied with scripts/. G4-B is a separate
+  # PR, so this suite still installs a minimal executable broker placeholder
+  # for tests which need to exercise the launcher beyond that boundary.
+  [ -x "$SCRIPTS/pm-pilot-pretool-guard" ]
 
   cat > "$SCRIPTS/p2-consumer-broker.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -174,6 +169,10 @@ if [ "${FAKE_CLAUDE_VALIDATE_IDENTITY:-0}" = "1" ]; then
     node \
       "$SKILL_DIR/scripts/session-identity.js" \
       >> "$FAKE_CLAUDE_IDENTITY_LOG"
+fi
+
+if [ -n "${FAKE_CLAUDE_ENV_LOG:-}" ]; then
+  env | grep '^AGMSG_PM_' > "$FAKE_CLAUDE_ENV_LOG" || true
 fi
 
 exit "${FAKE_CLAUDE_EXIT_CODE:-0}"
@@ -595,6 +594,52 @@ assert_resume_rejected_without_new_launch() {
     "$FAKE_CLAUDE_LOG" \
     "$session_id" \
     "$CANONICAL_PROJ/.claude/settings.local.json"
+}
+
+@test "pilot launcher: inherited AGMSG_PM_* is cleared and run logs are created next to the binding" {
+  join_pilot
+
+  local env_log="$TEST_SKILL_DIR/fake-claude-env.txt"
+
+  # Negative control: values a live PM session would leak into the pilot.
+  run env \
+    FAKE_CLAUDE_ENV_LOG="$env_log" \
+    AGMSG_PM_EXECUTIONS_FILE=/outside/executions.jsonl \
+    AGMSG_PM_DECISIONS_FILE=/outside/decisions.jsonl \
+    AGMSG_PM_QQZZ=1 \
+    bash "$LAUNCHER" --team "$TEAM" --project "$PROJ" --fresh
+
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output"; return 1; }
+  [ "$(fake_launch_count)" -eq 1 ]
+  [ -s "$env_log" ]
+
+  # Positive control: a variable the launcher exports is visible.
+  grep -q "^AGMSG_PM_BINDING_FILE=$(binding_file 1)\$" "$env_log"
+
+  grep -q '^AGMSG_PM_QQZZ=' "$env_log" && return 1
+  grep -q '/outside/' "$env_log" && return 1
+
+  grep -q "^AGMSG_PM_EXECUTIONS_FILE=$(bindings_dir)/1.executions.jsonl\$" "$env_log"
+  grep -q "^AGMSG_PM_DECISIONS_FILE=$(bindings_dir)/1.decisions.jsonl\$" "$env_log"
+
+  [ -f "$(bindings_dir)/1.executions.jsonl" ]
+  [ ! -L "$(bindings_dir)/1.executions.jsonl" ]
+  [ -f "$(bindings_dir)/1.decisions.jsonl" ]
+  [ ! -L "$(bindings_dir)/1.decisions.jsonl" ]
+}
+
+@test "pilot launcher: a pre-planted run log for the new generation fails closed before exec" {
+  join_pilot
+  ensure_pilot_runtime_dirs
+
+  ln -s "$TEST_SKILL_DIR/elsewhere.jsonl" "$(bindings_dir)/1.decisions.jsonl"
+
+  run run_fresh
+
+  [ "$status" -ne 0 ]
+  assert_no_fake_launch
+  assert_no_claim_file
+  [ ! -e "$TEST_SKILL_DIR/elsewhere.jsonl" ]
 }
 
 @test "pilot launcher: roster with no matching pilot seat is rejected before claim or exec" {
