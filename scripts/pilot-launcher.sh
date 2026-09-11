@@ -55,6 +55,16 @@ die() {
   exit 1
 }
 
+# Drop every inherited AGMSG_PM_* variable (#404). A pilot started from a
+# live PM session would otherwise hand the live PM's decision/execution logs
+# and bindings to the pilot guard and hooks. Clear by prefix, not by name, so
+# a variable added later cannot reopen the same hole. Every value the pilot
+# needs is exported again below immediately before exec.
+while IFS= read -r inherited_pm_var; do
+  unset "$inherited_pm_var"
+done < <(compgen -e | grep '^AGMSG_PM_' || true)
+unset inherited_pm_var
+
 [ -f "$BINDING_HELPER" ] || die "pilot binding helper unavailable"
 [ -f "$SESSION_IDENTITY" ] || die "session identity helper unavailable"
 [ -f "$ACTAS_LOCK_LIB" ] || die "actas lock helper unavailable"
@@ -755,7 +765,24 @@ current_digest() {
 [ -x "$PREP_BROKER_PATH" ] ||
   die "pilot broker is not executable before exec"
 
-# Environment consumed by session-identity.js and the future pilot-only guard.
+# The pilot guard's decision log and the PostToolUse execution log live next
+# to this generation's binding. Generations are never reused, so both files
+# are created exclusively here (noclobber also refuses a pre-planted symlink)
+# and the guard requires them to be regular files in the binding directory.
+BINDING_DIR="$(dirname "$BINDING_FILE")"
+DECISIONS_FILE="$BINDING_DIR/$GENERATION.decisions.jsonl"
+EXECUTIONS_FILE="$BINDING_DIR/$GENERATION.executions.jsonl"
+
+for run_log in "$DECISIONS_FILE" "$EXECUTIONS_FILE"; do
+  ( set -o noclobber; : > "$run_log" ) 2>/dev/null ||
+    die "cannot create pilot run log exclusively: $run_log"
+
+  [ -f "$run_log" ] && [ ! -L "$run_log" ] ||
+    die "pilot run log is not a regular file: $run_log"
+done
+
+# Environment consumed by session-identity.js, the pilot-only guard, and the
+# PostToolUse recorder. Every inherited AGMSG_PM_* was cleared at startup.
 # These values are process-local and become Claude's environment through exec.
 export AGMSG_PM_PILOT_SESSION_ID="$SESSION_ID"
 export AGMSG_PM_BINDING_FILE="$BINDING_FILE"
@@ -769,6 +796,8 @@ export AGMSG_PM_TEAMS_DIR="$TEAMS_DIR"
 export AGMSG_PM_CLAIM_FILE="$CLAIM_FILE"
 export AGMSG_PM_GUARD_PATH="$PREP_GUARD_PATH"
 export AGMSG_PM_BROKER_PATH="$PREP_BROKER_PATH"
+export AGMSG_PM_DECISIONS_FILE="$DECISIONS_FILE"
+export AGMSG_PM_EXECUTIONS_FILE="$EXECUTIONS_FILE"
 
 cd "$PROJECT" ||
   die "cannot enter project before exec"
