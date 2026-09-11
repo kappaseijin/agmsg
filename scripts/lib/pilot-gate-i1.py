@@ -299,10 +299,34 @@ def make_request(run_id: str, request_id: str, operation: str, team: str, genera
     return value
 
 
-def exact_broker_command(broker: pathlib.Path, config: pathlib.Path, operation: str, request: pathlib.Path) -> str:
+def exact_broker_command(
+    broker: pathlib.Path,
+    config: pathlib.Path,
+    operation: str,
+    request: pathlib.Path,
+    gh_config_dir: pathlib.Path | None = None,
+) -> str:
+    """The exact Bash command the pilot runs (Issue #404 guard grammar).
+
+    Form A: <B> --config <C> <OP> < <R>
+    Form B: <B> --config <C> --gh-config-dir <G> issue-record < <R>
+    The broker refuses issue-record without --gh-config-dir
+    (gh_config_dir_required), and the guard allows form B only for
+    issue-record, so G is required for issue-record and refused otherwise.
+    Every path, G included, must pass SAFE_PATH_TOKEN (Issue #409).
+    """
+    if operation == "issue-record":
+        if gh_config_dir is None:
+            raise RuntimeError("issue-record requires gh_config_dir (--gh-config-dir)")
+    elif gh_config_dir is not None:
+        raise RuntimeError(f"gh_config_dir is only valid for issue-record, not {operation}")
     tokens = [str(broker), str(config), str(request)]
+    if gh_config_dir is not None:
+        tokens.append(str(gh_config_dir))
     if not all(SAFE_PATH_TOKEN.fullmatch(token) for token in tokens):
         raise RuntimeError("I1 paths contain shell metacharacters/whitespace; exact guarded command cannot be proven")
+    if gh_config_dir is not None:
+        return f"{broker} --config {config} --gh-config-dir {gh_config_dir} {operation} < {request}"
     return f"{broker} --config {config} {operation} < {request}"
 
 
@@ -645,6 +669,9 @@ def run_i1(args: argparse.Namespace) -> int:
         raise RuntimeError("isolated gh copy digest mismatch")
     gh_store = run_root / "gh-store"
     gh_store.mkdir(parents=True, exist_ok=True)
+    # Disposable gh config for the broker's issue-record (--gh-config-dir).
+    gh_config_dir = run_root / "gh-config"
+    gh_config_dir.mkdir(parents=True, exist_ok=True)
     gh_log = artifact / "gh-invocations.jsonl"
     mutation_log = artifact / "mutation-log.jsonl"
     if mutation_log.exists():
@@ -690,7 +717,13 @@ def run_i1(args: argparse.Namespace) -> int:
         def invoke_operation(operation: str, request_value: dict[str, Any]) -> dict[str, Any]:
             request_path = requests_dir / f"{operation}.json"
             write_request(request_path, request_value)
-            command = exact_broker_command(broker, config, operation, request_path)
+            command = exact_broker_command(
+                broker,
+                config,
+                operation,
+                request_path,
+                gh_config_dir if operation == "issue-record" else None,
+            )
             append_jsonl(mutation_log, {"kind": "native-broker", "operation": operation, "argv": [command], "team": args.gate_team, "target": str(request_path)})
             native_record = native.invoke(command, artifact / operation)
             native_record["runId"] = args.run_id
