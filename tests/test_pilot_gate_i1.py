@@ -905,6 +905,11 @@ class PilotGateI1RoundA(unittest.TestCase):
                 ),
             )
 
+    def test_hook_decision_is_unknown_before_the_binding_is_known(self):
+        # NativePilot.decisions is None until the launcher has published the
+        # binding (#415); that must read as "no decision", never raise.
+        self.assertIsNone(I1.hook_decision(None, "toolu_01"))
+
     def test_hook_decision_returns_last_matching_decision(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp).resolve()
@@ -2189,10 +2194,10 @@ class PilotGateI1RoundBNativePilot(unittest.TestCase):
             self.assertIs(native.env, env)
             self.assertEqual(native.timeout, 7.5)
             self.assertEqual(native.pty_log, artifact / "native-pty.raw")
-            self.assertEqual(
-                native.decisions,
-                artifact / "pretool-decisions.jsonl",
-            )
+            # Run logs are placed by the launcher next to the binding and
+            # are unknown until the binding is (#415).
+            self.assertIsNone(native.decisions)
+            self.assertIsNone(native.executions)
             self.assertEqual(native.session_id, "")
             self.assertEqual(native.generation, 0)
             self.assertIsNone(native.binding)
@@ -2787,6 +2792,10 @@ time.sleep(float(os.environ["TEST_SLEEP_SECONDS"]))
             native = fixture["native"]
 
             try:
+                # A live PM value in the harness environment must not reach
+                # the launcher (#415).
+                native.env["AGMSG_PM_DECISIONS_FILE"] = "/live/pm/decisions.jsonl"
+
                 native.start()
 
                 self.assertEqual(native.generation, 3)
@@ -2813,7 +2822,15 @@ time.sleep(float(os.environ["TEST_SLEEP_SECONDS"]))
                     fixture["decisions_log"].read_text(
                         encoding="utf-8"
                     ),
-                    str(native.decisions),
+                    "",
+                )
+                self.assertEqual(
+                    native.decisions,
+                    fixture["binding"].parent / "3.decisions.jsonl",
+                )
+                self.assertEqual(
+                    native.executions,
+                    fixture["binding"].parent / "3.executions.jsonl",
                 )
             finally:
                 native.stop()

@@ -1196,6 +1196,8 @@ make_profile_gate_repo() {
   cp "$SCRIPTS/lib/pilot-profile.js" "$GATE_REPO/scripts/lib/pilot-profile.js"
   printf '#!/bin/sh\nexit 2\n' > "$GATE_REPO/scripts/pm-pilot-pretool-guard"
   chmod +x "$GATE_REPO/scripts/pm-pilot-pretool-guard"
+  printf '#!/bin/sh\nexit 0\n' > "$GATE_REPO/scripts/pm-posttool-record"
+  chmod +x "$GATE_REPO/scripts/pm-posttool-record"
 }
 
 @test "write_pilot_profile routes every tool through the copy's pilot guard" {
@@ -1213,9 +1215,12 @@ entries = profile["hooks"]["PreToolUse"]
 assert len(entries) == 1, entries
 assert entries[0]["matcher"] == "*", entries
 assert [h["command"] for h in entries[0]["hooks"]] == [guard], entries
-assert set(profile["hooks"]) == {"PreToolUse"}, profile
+assert set(profile["hooks"]) == {"PreToolUse", "PostToolUse"}, profile
+post = [h["command"] for g in profile["hooks"]["PostToolUse"] for h in g["hooks"]]
+# Exactly one PostToolUse handler: F3 needs one to stop (#415).
+assert post == [sys.argv[3]], post
 print("ok")
-' "$profile" "$GATE_REPO/scripts/pm-pilot-pretool-guard"
+' "$profile" "$GATE_REPO/scripts/pm-pilot-pretool-guard" "$GATE_REPO/scripts/pm-posttool-record"
   [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
   [ "$output" = "ok" ]
 }

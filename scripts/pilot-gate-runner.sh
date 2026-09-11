@@ -551,11 +551,13 @@ PY
 write_pilot_profile() {
   local profile_js="$GATE_REPO/scripts/lib/pilot-profile.js"
   local guard="$GATE_REPO/scripts/pm-pilot-pretool-guard"
+  local posttool="$GATE_REPO/scripts/pm-posttool-record"
   local log="$ARTIFACT_DIR/P2-pilot-profile.log"
 
   node "$profile_js" \
     --project "$GATE_REPO" \
     --guard "$guard" \
+    --posttool "$posttool" \
     > "$log" 2>&1 ||
     internal_error \
       "cannot write pilot profile (see $log)"

@@ -222,8 +222,8 @@ def find_tool_result(transcript: pathlib.Path, command: str) -> tuple[str | None
     return tool_id, None
 
 
-def hook_decision(decisions: pathlib.Path, tool_id: str) -> str | None:
-    if not decisions.is_file():
+def hook_decision(decisions: pathlib.Path | None, tool_id: str) -> str | None:
+    if decisions is None or not decisions.is_file():
         return None
     matches: list[str] = []
     try:
@@ -402,7 +402,12 @@ class NativePilot:
         self.proc: subprocess.Popen[bytes] | None = None
         self.master: int | None = None
         self.pty_log = artifact / "native-pty.raw"
-        self.decisions = artifact / "pretool-decisions.jsonl"
+        # The launcher creates both run logs next to the binding
+        # (<bindings_dir>/<generation>.decisions.jsonl / .executions.jsonl,
+        # #404/#415) and overwrites any value handed to it, so the harness
+        # does not choose them: they are known once the binding is.
+        self.decisions: pathlib.Path | None = None
+        self.executions: pathlib.Path | None = None
         self.session_id = ""
         self.generation = 0
         self.binding: pathlib.Path | None = None
@@ -429,8 +434,10 @@ class NativePilot:
         self.generation = previous + 1
         master, slave = pty.openpty()
         self.master = master
-        env = dict(self.env)
-        env["AGMSG_PM_DECISIONS_FILE"] = str(self.decisions)
+        # No AGMSG_PM_* reaches the launcher from the harness: live PM
+        # state must not leak into the pilot (#415). The launcher clears
+        # and re-sets them as well.
+        env = {key: value for key, value in self.env.items() if not key.startswith("AGMSG_PM_")}
         argv = [str(self.launcher), "--team", self.team, "--project", str(self.gate_repo), "--fresh"]
         self.proc = subprocess.Popen(argv, cwd=self.gate_repo, env=env, stdin=slave, stdout=slave, stderr=slave, close_fds=True, start_new_session=True)
         os.close(slave)
@@ -446,6 +453,8 @@ class NativePilot:
             raise RuntimeError("I1 binding project mismatch")
         self.session_id = session
         self.binding = binding_path
+        self.decisions = binding_path.parent / f"{self.generation}.decisions.jsonl"
+        self.executions = binding_path.parent / f"{self.generation}.executions.jsonl"
 
     def discover_transcript(self) -> pathlib.Path | None:
         matches = transcript_matches(self.claude_config, self.session_id)
