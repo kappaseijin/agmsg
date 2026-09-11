@@ -573,66 +573,6 @@ def registration_rows(
     return rows, errors
 
 
-def binding_sessions(
-    gate_repo: pathlib.Path,
-) -> dict[
-    tuple[str, str, str],
-    str,
-]:
-    mapping: dict[
-        tuple[str, str, str],
-        str,
-    ] = {}
-
-    root = gate_repo / "run" / "pilot"
-
-    if not root.is_dir():
-        return mapping
-
-    for path in root.glob(
-        "*/bindings/*.json"
-    ):
-        if (
-            not path.is_file()
-            or path.is_symlink()
-        ):
-            continue
-
-        try:
-            value = read_json(path)
-        except Exception:
-            continue
-
-        if not isinstance(value, dict):
-            continue
-
-        team = value.get("team")
-        agent = value.get("agent")
-        project = value.get("project")
-        session = value.get("sessionId")
-
-        if all(
-            isinstance(item, str) and item
-            for item in (
-                team,
-                agent,
-                project,
-                session,
-            )
-        ):
-            mapping[
-                (
-                    team,
-                    agent,
-                    str(
-                        safe_absolute(project)
-                    ),
-                )
-            ] = session
-
-    return mapping
-
-
 def disposable_teams(
     registrations: list[dict[str, str]],
     gate_team: str,
