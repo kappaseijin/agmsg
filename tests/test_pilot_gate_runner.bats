@@ -121,6 +121,11 @@ EOF
 exit 1
 EOF
 
+  # #404: the source must carry the pilot profile writer and pilot guard.
+  mkdir -p "$UNIT_SOURCE/scripts/lib"
+  : > "$UNIT_SOURCE/scripts/lib/pilot-profile.js"
+  printf '#!/bin/sh\nexit 2\n' > "$UNIT_SOURCE/scripts/pm-pilot-pretool-guard"
+
   git -C "$UNIT_SOURCE" init -q
   git -C "$UNIT_SOURCE" config user.email \
     "pilot-gate-runner-test@example.invalid"
@@ -1163,3 +1168,191 @@ PY
   [ "$status" -eq 70 ]
   [[ "$output" == *"unexpected internal status=5"* ]]
 }
+
+# --- #404: the runner writes the pilot profile through pilot-profile.js -----
+
+@test "validate_static_inputs requires the pilot profile writer and pilot guard" {
+  local relative
+
+  for relative in scripts/lib/pilot-profile.js scripts/pm-pilot-pretool-guard
+  do
+    mv "$UNIT_SOURCE/$relative" "$UNIT_SOURCE/$relative.away"
+
+    run validate_static_inputs
+
+    mv "$UNIT_SOURCE/$relative.away" "$UNIT_SOURCE/$relative"
+
+    [ "$status" -eq 64 ]
+    case "$output" in
+      *"source $relative not found"*) ;;
+      *) echo "unexpected output: $output" >&2; return 1 ;;
+    esac
+  done
+}
+
+make_profile_gate_repo() {
+  GATE_REPO="$TEST_ROOT/gate-repo"
+  mkdir -p "$GATE_REPO/scripts/lib"
+  cp "$SCRIPTS/lib/pilot-profile.js" "$GATE_REPO/scripts/lib/pilot-profile.js"
+  printf '#!/bin/sh\nexit 2\n' > "$GATE_REPO/scripts/pm-pilot-pretool-guard"
+  chmod +x "$GATE_REPO/scripts/pm-pilot-pretool-guard"
+  printf '#!/bin/sh\nexit 0\n' > "$GATE_REPO/scripts/pm-posttool-record"
+  chmod +x "$GATE_REPO/scripts/pm-posttool-record"
+}
+
+@test "write_pilot_profile routes every tool through the copy's pilot guard" {
+  command -v node >/dev/null || skip "node not installed"
+  make_profile_gate_repo
+
+  write_pilot_profile
+
+  local profile="$GATE_REPO/.claude/settings.local.json"
+  [ -f "$profile" ]
+  run python3 -c '
+import json, sys
+profile, guard = json.load(open(sys.argv[1])), sys.argv[2]
+entries = profile["hooks"]["PreToolUse"]
+assert len(entries) == 1, entries
+assert entries[0]["matcher"] == "*", entries
+assert [h["command"] for h in entries[0]["hooks"]] == [guard], entries
+assert set(profile["hooks"]) == {"PreToolUse", "PostToolUse"}, profile
+post = [h["command"] for g in profile["hooks"]["PostToolUse"] for h in g["hooks"]]
+# Exactly one PostToolUse handler: F3 needs one to stop (#415).
+assert post == [sys.argv[3]], post
+print("ok")
+' "$profile" "$GATE_REPO/scripts/pm-pilot-pretool-guard" "$GATE_REPO/scripts/pm-posttool-record"
+  [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
+  [ "$output" = "ok" ]
+}
+
+@test "write_pilot_profile stops the run instead of leaving an empty profile" {
+  command -v node >/dev/null || skip "node not installed"
+  make_profile_gate_repo
+
+  local variant
+  for variant in missing symlink not-executable
+  do
+    rm -rf "$GATE_REPO/.claude"
+    rm -f "$GATE_REPO/scripts/pm-pilot-pretool-guard"
+    case "$variant" in
+      missing)
+        ;;
+      symlink)
+        printf '#!/bin/sh\nexit 2\n' > "$TEST_ROOT/real-guard"
+        chmod +x "$TEST_ROOT/real-guard"
+        ln -s "$TEST_ROOT/real-guard" "$GATE_REPO/scripts/pm-pilot-pretool-guard"
+        ;;
+      not-executable)
+        printf '#!/bin/sh\nexit 2\n' > "$GATE_REPO/scripts/pm-pilot-pretool-guard"
+        chmod -x "$GATE_REPO/scripts/pm-pilot-pretool-guard"
+        ;;
+    esac
+
+    run write_pilot_profile
+
+    [ "$status" -eq 70 ] || { echo "$variant: status=$status $output" >&2; return 1; }
+    [ ! -e "$GATE_REPO/.claude/settings.local.json" ] ||
+      { echo "$variant: a profile was left behind" >&2; return 1; }
+    grep -q "pilot-profile:" "$ARTIFACT_DIR/P2-pilot-profile.log" ||
+      { echo "$variant: no pilot-profile diagnostic" >&2; return 1; }
+  done
+}
+
+@test "the runner no longer writes an empty hooks profile" {
+  # The profile that let N1/F2 bypass the guard (#397).
+  run grep -n '"hooks": {}' "$RUNNER"
+  [ "$status" -eq 1 ]
+}
+
+# --- #415: no live PM state reaches the pilot --------------------------------
+
+@test "scrub_agmsg_pm_environment removes every AGMSG_PM_* and nothing else" {
+  export AGMSG_PM_EXECUTIONS_FILE=/live/executions.jsonl
+  export AGMSG_PM_DECISIONS_FILE=/live/decisions.jsonl
+  export AGMSG_PM_BINDING_FILE=/live/binding.json
+  AGMSG_PM_NOT_EXPORTED=1
+  export AGMSG_OTHER=keep
+
+  scrub_agmsg_pm_environment
+
+  # Anchor on the variable name: the bats test description itself contains
+  # the text AGMSG_PM_ and is exported.
+  run bash -c "env | grep '^AGMSG_PM_'"
+  [ "$status" -eq 1 ] || { echo "left behind: $output" >&2; return 1; }
+  [ -z "${AGMSG_PM_NOT_EXPORTED+set}" ]
+  [ "$AGMSG_OTHER" = "keep" ]
+}
+
+@test "the pilot launch environment carries no AGMSG_PM_*" {
+  GATE_HOME="$TEST_ROOT/home"
+  GATE_XDG_CONFIG="$TEST_ROOT/xdg/config"
+  GATE_XDG_CACHE="$TEST_ROOT/xdg/cache"
+  GATE_XDG_DATA="$TEST_ROOT/xdg/data"
+  GATE_XDG_STATE="$TEST_ROOT/xdg/state"
+  GATE_CLAUDE_CONFIG="$TEST_ROOT/claude"
+  export AGMSG_PM_EXECUTIONS_FILE=/live/executions.jsonl
+
+  # launch_n1_case runs the launcher in a subshell after this call.
+  run bash -c '
+    source "$1"
+    GATE_HOME=h GATE_XDG_CONFIG=c GATE_XDG_CACHE=k GATE_XDG_DATA=d
+    GATE_XDG_STATE=s GATE_CLAUDE_CONFIG=cc
+    export_isolated_environment
+    if env | grep "^AGMSG_PM_"; then exit 3; fi
+    printf "%s\n" "$CLAUDE_CONFIG_DIR"
+  ' bash "$RUNNER"
+
+  [ "$status" -eq 0 ] || { echo "inherited: $output" >&2; return 1; }
+  [ "$output" = "cc" ]
+}
+
+@test "P3 records a clean gate environment" {
+  scrub_agmsg_pm_environment
+
+  check_agmsg_pm_environment
+
+  run python3 -c '
+import json, sys
+v = json.load(open(sys.argv[1]))
+assert v == {"schemaVersion": 1, "check": "gate-environment-has-no-AGMSG_PM",
+             "present": [], "verdict": "pass"}, v
+print("ok")
+' "$ARTIFACT_DIR/P3-agmsg-pm-environment.json"
+  [ "$output" = "ok" ]
+}
+
+@test "P3 stops before the isolation helper when an AGMSG_PM_* is left" {
+  # Negative control asked for by the breaker: one variable deliberately
+  # left behind must stop preflight.
+  scrub_agmsg_pm_environment
+  export AGMSG_PM_EXECUTIONS_FILE=/live/executions.jsonl
+  : > "$CALL_LOG"
+  python3() {
+    if [ "${1:-}" = "$ISOLATION_HELPER" ]; then
+      record_call "isolation-helper" "${2:-}"
+    fi
+    command python3 "$@"
+  }
+
+  run invoke_runner_function phase_p3_isolation_preflight
+
+  [ "$status" -eq 2 ]
+  assert_called isolation-helper 0
+  grep -q '"AGMSG_PM_EXECUTIONS_FILE"' "$ARTIFACT_DIR/P3-agmsg-pm-environment.json"
+  grep -q '"verdict": "fail"' "$ARTIFACT_DIR/P3-agmsg-pm-environment.json"
+}
+
+@test "main scrubs AGMSG_PM_* before any subcommand runs" {
+  install_main_stubs
+  subcommand_run() {
+    record_call "subcommand_run" "${AGMSG_PM_EXECUTIONS_FILE-unset}"
+    return 0
+  }
+  export AGMSG_PM_EXECUTIONS_FILE=/live/executions.jsonl
+
+  run invoke_runner_function main run
+
+  [ "$status" -eq 0 ]
+  [ "$(last_call_arg subcommand_run)" = "unset" ]
+}
+
