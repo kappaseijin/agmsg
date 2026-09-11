@@ -39,14 +39,22 @@ setup() {
 
   node "$SCRIPTS/lib/pilot-profile.js" --project "$CANONICAL_PROJ" --guard "$GUARD" > /dev/null
 
+  # Like the launcher: the binding, decision log, and execution log share one
+  # directory, and both logs exist as regular files before the first hook.
+  export BINDINGS_DIR="$TEST_SKILL_DIR/bindings"
+  mkdir -p "$BINDINGS_DIR"
+  : > "$BINDINGS_DIR/1.decisions.jsonl"
+  : > "$BINDINGS_DIR/1.executions.jsonl"
+
   install_identity_stub
   write_binding
 
   export AGMSG_PM_PILOT_SESSION_ID="$PILOT_SESSION"
-  export AGMSG_PM_BINDING_FILE="$TEST_SKILL_DIR/binding.json"
+  export AGMSG_PM_BINDING_FILE="$BINDINGS_DIR/1.json"
   export AGMSG_PM_GUARD_PATH="$GUARD"
   export AGMSG_PM_BROKER_PATH="$BROKER"
-  export AGMSG_PM_DECISIONS_FILE="$TEST_SKILL_DIR/decisions.jsonl"
+  export AGMSG_PM_DECISIONS_FILE="$BINDINGS_DIR/1.decisions.jsonl"
+  export AGMSG_PM_EXECUTIONS_FILE="$BINDINGS_DIR/1.executions.jsonl"
   export AGMSG_PM_TEAM="pilot-team"
   export AGMSG_PM_AGENT="agmsg_pm_pilot_claude"
   export AGMSG_PM_TYPE="claude-code"
@@ -101,7 +109,7 @@ EOF
 # binding.json with digests of the current fixture files. Extra args are
 # "field=value" overrides.
 write_binding() {
-  node - "$TEST_SKILL_DIR/binding.json" "$CANONICAL_PROJ" "$GUARD" "$BROKER" "$SCRIPTS/lib/pilot-binding.js" "$@" <<'NODE'
+  node - "$BINDINGS_DIR/1.json" "$CANONICAL_PROJ" "$GUARD" "$BROKER" "$SCRIPTS/lib/pilot-binding.js" "$@" <<'NODE'
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -437,6 +445,7 @@ true"
 @test "pilot guard: each missing AGMSG_PM_* variable is denied" {
   local name reason saved
   for name in AGMSG_PM_PILOT_SESSION_ID AGMSG_PM_BINDING_FILE AGMSG_PM_GUARD_PATH AGMSG_PM_BROKER_PATH \
+    AGMSG_PM_EXECUTIONS_FILE \
     AGMSG_PM_TEAM AGMSG_PM_AGENT AGMSG_PM_TYPE AGMSG_PM_PROCESS_PID AGMSG_PM_PROCESS_GENERATION \
     AGMSG_PM_PROCESS_START AGMSG_PM_TEAMS_DIR AGMSG_PM_CLAIM_FILE
   do
@@ -444,7 +453,13 @@ true"
     reason="env_$(printf '%s' "${name#AGMSG_PM_}" | tr '[:upper:]' '[:lower:]')_invalid"
     unset "$name"
     guard_bash "$(form_a receive)"
-    assert_deny "$reason" || { printf 'name=%s\n' "$name"; return 1; }
+    if [ "$name" = AGMSG_PM_BINDING_FILE ]; then
+      # Without a binding the decision log cannot be located, so the deny
+      # happens before any stage and is not written anywhere.
+      assert_deny decision_log_location_invalid unrecorded || { printf 'name=%s\n' "$name"; return 1; }
+    else
+      assert_deny "$reason" || { printf 'name=%s\n' "$name"; return 1; }
+    fi
     export "$name=$saved"
   done
 }
@@ -467,9 +482,65 @@ true"
 }
 
 @test "pilot guard: a failed allow record turns the decision into deny" {
-  export AGMSG_PM_DECISIONS_FILE="$TEST_SKILL_DIR/no-such-dir/decisions.jsonl"
+  chmod 0444 "$AGMSG_PM_DECISIONS_FILE"
   guard_bash "$(form_a receive)"
   assert_deny decision_log_unavailable unrecorded
+  [ ! -s "$AGMSG_PM_DECISIONS_FILE" ]
+}
+
+# --- run logs next to the binding (#404, inherited live PM environment) ----
+
+@test "pilot guard: a decision log outside the binding directory denies without writing it" {
+  mkdir -p "$TEST_SKILL_DIR/live-pm"
+  : > "$TEST_SKILL_DIR/live-pm/decisions.jsonl"
+  export AGMSG_PM_DECISIONS_FILE="$TEST_SKILL_DIR/live-pm/decisions.jsonl"
+  guard_bash "$(form_a receive)"
+  assert_deny decision_log_location_invalid unrecorded
+  [ ! -s "$TEST_SKILL_DIR/live-pm/decisions.jsonl" ]
+}
+
+@test "pilot guard: a decision log symlink inside the binding directory is denied" {
+  : > "$TEST_SKILL_DIR/target.jsonl"
+  ln -s "$TEST_SKILL_DIR/target.jsonl" "$BINDINGS_DIR/1.link.jsonl"
+  export AGMSG_PM_DECISIONS_FILE="$BINDINGS_DIR/1.link.jsonl"
+  guard_bash "$(form_a receive)"
+  assert_deny decision_log_location_invalid unrecorded
+  [ ! -s "$TEST_SKILL_DIR/target.jsonl" ]
+}
+
+@test "pilot guard: a missing or non-normalized decision log is denied" {
+  export AGMSG_PM_DECISIONS_FILE="$BINDINGS_DIR/2.decisions.jsonl"
+  guard_bash "$(form_a receive)"
+  assert_deny decision_log_location_invalid unrecorded
+  [ ! -e "$BINDINGS_DIR/2.decisions.jsonl" ]
+
+  export AGMSG_PM_DECISIONS_FILE="$BINDINGS_DIR/../bindings/1.decisions.jsonl"
+  guard_bash "$(form_a receive)"
+  assert_deny decision_log_location_invalid unrecorded
+
+  # Both paths share the same non-normalized directory spelling, so only the
+  # normalization check can tell them apart from the launcher's paths.
+  export AGMSG_PM_BINDING_FILE="$BINDINGS_DIR//1.json"
+  export AGMSG_PM_DECISIONS_FILE="$BINDINGS_DIR//1.decisions.jsonl"
+  guard_bash "$(form_a receive)"
+  assert_deny decision_log_location_invalid unrecorded
+}
+
+@test "pilot guard: an execution log outside the binding directory, missing, or symlinked is denied" {
+  mkdir -p "$TEST_SKILL_DIR/live-pm"
+  : > "$TEST_SKILL_DIR/live-pm/executions.jsonl"
+  export AGMSG_PM_EXECUTIONS_FILE="$TEST_SKILL_DIR/live-pm/executions.jsonl"
+  guard_bash "$(form_a receive)"
+  assert_deny executions_log_location_invalid
+
+  export AGMSG_PM_EXECUTIONS_FILE="$BINDINGS_DIR/2.executions.jsonl"
+  guard_bash "$(form_a receive)"
+  assert_deny executions_log_location_invalid
+
+  ln -s "$TEST_SKILL_DIR/live-pm/executions.jsonl" "$BINDINGS_DIR/1.link-exec.jsonl"
+  export AGMSG_PM_EXECUTIONS_FILE="$BINDINGS_DIR/1.link-exec.jsonl"
+  guard_bash "$(form_a receive)"
+  assert_deny executions_log_location_invalid
 }
 
 # --- input (stage 1) ---------------------------------------------------------
@@ -565,6 +636,29 @@ NODE
 
   run node "$SCRIPTS/lib/pilot-profile.js" --project "$CANONICAL_PROJ"
   [ "$status" -eq 1 ]
+
+  run node "$SCRIPTS/lib/pilot-profile.js" --project "$CANONICAL_PROJ" --guard "$GUARD" \
+    --posttool "$SCRIPTS/pm-pretool-guard"
+  [ "$status" -eq 1 ]
+}
+
+@test "pilot profile: --posttool adds exactly one PostToolUse handler and keeps PreToolUse unchanged" {
+  local pre_only
+  pre_only="$(cat "$CANONICAL_PROJ/.claude/settings.local.json")"
+  node "$SCRIPTS/lib/pilot-profile.js" --project "$CANONICAL_PROJ" --guard "$GUARD" \
+    --posttool "$SCRIPTS/pm-posttool-record" > /dev/null
+  node - "$CANONICAL_PROJ/.claude/settings.local.json" "$GUARD" "$SCRIPTS/pm-posttool-record" "$pre_only" <<'NODE'
+'use strict';
+const fs = require('fs');
+const [file, guard, posttool, preOnly] = process.argv.slice(2);
+const profile = JSON.parse(fs.readFileSync(file, 'utf8'));
+if (JSON.stringify(Object.keys(profile.hooks).sort()) !== '["PostToolUse","PreToolUse"]') process.exit(10);
+if (JSON.stringify(profile.hooks.PreToolUse) !== JSON.stringify(JSON.parse(preOnly).hooks.PreToolUse)) process.exit(11);
+const post = profile.hooks.PostToolUse.flatMap((group) => group.hooks);
+if (post.length !== 1) process.exit(12);
+if (post[0].type !== 'command' || post[0].command !== posttool || post[0].args !== undefined) process.exit(13);
+if (guard === posttool) process.exit(14);
+NODE
 }
 
 # --- non-sharing (§3) --------------------------------------------------------

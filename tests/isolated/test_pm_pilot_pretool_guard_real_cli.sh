@@ -51,7 +51,8 @@ TEAM="isolated-pilot-cli-team"
 AGENT="agmsg_pm_pilot_claude"
 mkdir -p "$SKILL/scripts" "$SKILL/teams/$TEAM" "$SKILL/run" "$PROJECT/.agmsg-gate/i1-requests"
 cp -R "$ROOT_DIR/scripts/." "$SKILL/scripts/"
-chmod +x "$SKILL/scripts/"*.sh "$SKILL/scripts/"*.js "$SKILL/scripts/pm-pilot-pretool-guard" 2>/dev/null || true
+chmod +x "$SKILL/scripts/"*.sh "$SKILL/scripts/"*.js "$SKILL/scripts/pm-pilot-pretool-guard" \
+  "$SKILL/scripts/pm-posttool-record" 2>/dev/null || true
 
 BROKER_MARKER="$TMP_ROOT/broker-executed"
 cat > "$SKILL/scripts/p2-consumer-broker.sh" <<EOF
@@ -84,7 +85,8 @@ fs.writeFileSync(file, JSON.stringify({
 }) + '\n');
 NODE
 
-node "$SKILL/scripts/lib/pilot-profile.js" --project "$PROJECT" --guard "$GUARD" >/dev/null
+node "$SKILL/scripts/lib/pilot-profile.js" --project "$PROJECT" --guard "$GUARD" \
+  --posttool "$SKILL/scripts/pm-posttool-record" >/dev/null
 
 cat > "$TMP_ROOT/launcher.sh" <<'LAUNCHER'
 #!/usr/bin/env bash
@@ -102,7 +104,11 @@ export AGMSG_PM_TYPE=claude-code
 export AGMSG_PM_TEAMS_DIR="$skill/teams"
 export AGMSG_PM_GUARD_PATH="$skill/scripts/pm-pilot-pretool-guard"
 export AGMSG_PM_BROKER_PATH="$skill/scripts/p2-consumer-broker.sh"
-export AGMSG_PM_DECISIONS_FILE="${AGMSG_PM_DECISIONS_FILE:?}"
+# Like pilot-launcher.sh: both run logs sit next to the binding and exist as
+# regular files before the first hook.
+export AGMSG_PM_DECISIONS_FILE="${binding%.json}.decisions.jsonl"
+export AGMSG_PM_EXECUTIONS_FILE="${binding%.json}.executions.jsonl"
+( set -o noclobber; : > "$AGMSG_PM_DECISIONS_FILE"; : > "$AGMSG_PM_EXECUTIONS_FILE" )
 pid_start="$(node "$skill/scripts/session-identity.js" --process-start "$pid")"
 export AGMSG_PM_PROCESS_START="$pid_start"
 . "$skill/scripts/lib/actas-lock.sh"
@@ -138,10 +144,8 @@ run_case() {
   local label="$1" session="$2" prompt="$3"
   local child_pid watchdog_pid rc
   set +e
-  (cd "$PROJECT" && env \
-    AGMSG_PM_DECISIONS_FILE="$TMP_ROOT/$label-decisions.jsonl" \
-    "$TMP_ROOT/launcher.sh" "$session" "$label-generation" "$PROJECT" "$SKILL" \
-    "$TMP_ROOT/$label-binding.json" "$TEAM" "$AGENT" "$CLAUDE_BIN" \
+  (cd "$PROJECT" && "$TMP_ROOT/launcher.sh" "$session" "$label-generation" "$PROJECT" "$SKILL" \
+    "$TMP_ROOT/$label.json" "$TEAM" "$AGENT" "$CLAUDE_BIN" \
     --session-id "$session" --settings "$PROJECT/.claude/settings.local.json" \
     --setting-sources project,local --strict-mcp-config \
     --max-budget-usd 0.50 --no-chrome \
@@ -168,12 +172,12 @@ dump_case() {
   printf '%s\n' "$label output:" >&2
   cat "$TMP_ROOT/$label-output.json" >&2 2>/dev/null || true
   printf '%s\n' "$label decisions:" >&2
-  cat "$TMP_ROOT/$label-decisions.jsonl" >&2 2>/dev/null || true
+  cat "$TMP_ROOT/$label.decisions.jsonl" >&2 2>/dev/null || true
 }
 
 # decision_count <label> <tool> <decision>
 decision_count() {
-  node - "$TMP_ROOT/$1-decisions.jsonl" "$2" "$3" <<'NODE'
+  node - "$TMP_ROOT/$1.decisions.jsonl" "$2" "$3" <<'NODE'
 const fs = require('fs');
 const [file, tool, decision] = process.argv.slice(2);
 const rows = fs.existsSync(file)
@@ -211,7 +215,7 @@ run_case write "77777777-7777-4777-8777-777777777777" \
 }
 
 node - "$HEAD" "$CLI_VERSION" "$PROJECT/.claude/settings.local.json" \
-  "$TMP_ROOT/allowed-decisions.jsonl" "$TMP_ROOT/probe-decisions.jsonl" "$TMP_ROOT/write-decisions.jsonl" \
+  "$TMP_ROOT/allowed.decisions.jsonl" "$TMP_ROOT/probe.decisions.jsonl" "$TMP_ROOT/write.decisions.jsonl" \
   "$TMP_ROOT/allowed.rc" "$TMP_ROOT/probe.rc" "$TMP_ROOT/write.rc" "$BROKER_MARKER" <<'NODE'
 const crypto = require('crypto');
 const fs = require('fs');

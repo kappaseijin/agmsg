@@ -55,7 +55,7 @@ const IDENTITY_ENV = [
 ];
 const GUARD_ENV = [
   'AGMSG_PM_PILOT_SESSION_ID', 'AGMSG_PM_BINDING_FILE', 'AGMSG_PM_GUARD_PATH',
-  'AGMSG_PM_BROKER_PATH',
+  'AGMSG_PM_BROKER_PATH', 'AGMSG_PM_EXECUTIONS_FILE',
 ];
 
 class Deny extends Error {}
@@ -96,12 +96,33 @@ const writeResult = (decision, reason) => {
   process.exit(2);
 };
 
-// §8: an unconfigured decision log cannot record anything, so it is checked
-// before every other stage and reported only on stderr.
+// The decision and execution logs must be regular files next to this
+// generation's binding (the launcher creates both exclusively). This is the
+// second layer behind the launcher clearing inherited AGMSG_PM_*: a log path
+// inherited from a live PM session is outside the pilot binding directory.
+const runLogLocated = (file) => {
+  const binding = process.env.AGMSG_PM_BINDING_FILE;
+  if (!validText(file) || !validText(binding)) return false;
+  if (!path.isAbsolute(file) || path.normalize(file) !== file) return false;
+  if (!path.isAbsolute(binding) || path.normalize(binding) !== binding) return false;
+  if (path.dirname(file) !== path.dirname(binding)) return false;
+  try {
+    const stat = fs.lstatSync(file);
+    return !stat.isSymbolicLink() && stat.isFile();
+  } catch (_) {
+    return false;
+  }
+};
+
+// §8: a decision log that is unconfigured, or not the pilot's own log, cannot
+// be written, so it is checked before every other stage and the deny is
+// reported only on stderr. Writing to a log elsewhere would pollute another
+// session's record.
 const decisionsFile = () => {
   const file = process.env.AGMSG_PM_DECISIONS_FILE;
-  if (!validText(file) || !path.isAbsolute(file)) return null;
-  return file;
+  if (!validText(file) || !path.isAbsolute(file)) return {file: null, reason: 'decision_log_unconfigured'};
+  if (!runLogLocated(file)) return {file: null, reason: 'decision_log_location_invalid'};
+  return {file, reason: null};
 };
 
 const appendDecision = (file, input, decision, reason) => {
@@ -152,6 +173,7 @@ const checkInput = (input) => {
   }
   if (input.hook_event_name !== undefined && input.hook_event_name !== 'PreToolUse') deny('hook_event_invalid');
   for (const name of [...GUARD_ENV, ...IDENTITY_ENV]) envText(name);
+  if (!runLogLocated(process.env.AGMSG_PM_EXECUTIONS_FILE)) deny('executions_log_location_invalid');
 };
 
 const pathToken = (token) => PATH_TOKEN.test(token) &&
@@ -301,8 +323,8 @@ const evaluate = (raw, input) => {
 };
 
 const main = () => {
-  const file = decisionsFile();
-  if (file === null) writeResult('deny', 'decision_log_unconfigured');
+  const {file, reason: logReason} = decisionsFile();
+  if (file === null) writeResult('deny', logReason);
 
   let input = null;
   let reason = null;
