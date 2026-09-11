@@ -734,25 +734,7 @@ class PilotGateCleanupRoundB(SignalGuardedCase):
             ([], []),
         )
 
-    # --- binding_sessions / disposable_teams -----------------------------
-
-    def test_binding_sessions_maps_complete_bindings_only(self):
-        bindings = self.gate_repo / "run" / "pilot" / "gen1" / "bindings"
-        bindings.mkdir(parents=True)
-        good = {"team": "t", "agent": "a",
-                "project": str(self.run_root / "p"), "sessionId": "s1"}
-        (bindings / "good.json").write_text(json.dumps(good))
-        (bindings / "partial.json").write_text(
-            json.dumps({**good, "sessionId": ""})
-        )
-        (bindings / "list.json").write_text("[]")
-        (bindings / "broken.json").write_text("{")
-        (bindings / "link.json").symlink_to(bindings / "good.json")
-        self.assertEqual(
-            CL.binding_sessions(self.gate_repo),
-            {("t", "a", str(self.run_root / "p")): "s1"},
-        )
-        self.assertEqual(CL.binding_sessions(self.root / "none"), {})
+    # --- disposable_teams ------------------------------------------------
 
     def test_disposable_teams_always_includes_gate_team_sorted_unique(self):
         self.assertEqual(CL.disposable_teams([], "gate"), ["gate"])
@@ -1579,13 +1561,16 @@ class PilotGateCleanupRoundD(SignalGuardedCase):
         (d / "response-link").symlink_to(d / "notes.txt")
         self.assertEqual(
             CL.semantic_candidates(d),
-            {
-                "deny-response.json": {"decision": "deny"},
-                str(Path("hooks") / "semantic.txt"): "blocked",
-                "Decision.log": "x",
-            },
+            (
+                {
+                    "deny-response.json": {"decision": "deny"},
+                    str(Path("hooks") / "semantic.txt"): "blocked",
+                    "Decision.log": "x",
+                },
+                [],
+            ),
         )
-        self.assertEqual(CL.semantic_candidates(self.root / "none"), {})
+        self.assertEqual(CL.semantic_candidates(self.root / "none"), ({}, []))
 
     def test_semantic_candidates_excludes_guard_digest_even_under_keyword(self):
         # guard.sha256 is compared by its own check; under a directory
@@ -1596,7 +1581,7 @@ class PilotGateCleanupRoundD(SignalGuardedCase):
         (d / "deny-hook" / "decision.txt").write_text("deny")
         self.assertEqual(
             CL.semantic_candidates(d),
-            {str(Path("deny-hook") / "decision.txt"): "deny"},
+            ({str(Path("deny-hook") / "decision.txt"): "deny"}, []),
         )
 
     # --- compare_live_pm -------------------------------------------------
@@ -1699,14 +1684,15 @@ class PilotGateCleanupRoundD(SignalGuardedCase):
             # volatile keys are ignored
             ({"after": {"deny-response.json":
                         json.dumps({"decision": "deny", "pid": 7})}}, "pass"),
-            ({"after": {"deny-response.json": None}}, "unknown"),
+            # a semantic file missing on one side is a mutation
+            ({"after": {"deny-response.json": None}}, "fail"),
             ({"before": {"deny-response.json": None},
               "after": {"deny-response.json": None}}, "unknown"),
-            # no common file between the two sides
+            # different file sets on the two sides
             ({"before": {"deny-response.json": None,
                          "semantic-a.txt": "x"},
               "after": {"deny-response.json": None,
-                        "semantic-b.txt": "x"}}, "unknown"),
+                        "semantic-b.txt": "x"}}, "fail"),
         )
         for fixture, verdict in cases:
             with self.subTest(fixture=fixture):
@@ -2107,7 +2093,7 @@ class PilotGateCleanupRoundE(SignalGuardedCase):
 
     def run_main(self, handler):
         argv = ["pilot-gate-cleanup.py", "compare-live", "--artifact-dir",
-                str(self.root)]
+                str(self.root), "--after-status", "0"]
         stderr = io.StringIO()
         with mock.patch.object(CL.sys, "argv", argv), \
                 mock.patch.object(CL, "compare_live_pm", handler), \
