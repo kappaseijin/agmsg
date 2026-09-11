@@ -1115,30 +1115,120 @@ def snapshot_evidence(
     return record
 
 
+def symlink_components(
+    path: pathlib.Path,
+    run_root: pathlib.Path,
+) -> tuple[list[str], str | None]:
+    """lstat every existing component from run_root down to path.
+
+    Returns (symlinks, error). symlinks lists each component that is a
+    symbolic link, the run root and the target included. Walking stops
+    at the first missing component: nothing below it can exist. Any
+    other lstat failure is returned as error (the caller cannot prove
+    the path is free of links).
+    """
+    relative = path.absolute().relative_to(
+        run_root.absolute()
+    )
+
+    components = [run_root]
+    current = run_root
+
+    for part in relative.parts:
+        current = current / part
+        components.append(current)
+
+    found: list[str] = []
+
+    for component in components:
+        try:
+            metadata = os.lstat(component)
+        except FileNotFoundError:
+            break
+        except OSError as exc:
+            return found, (
+                f"lstat_failed:{type(exc).__name__}:{component}"
+            )
+
+        if stat.S_ISLNK(metadata.st_mode):
+            found.append(str(component))
+
+    return found, None
+
+
 def remove_tree_safely(
     path: pathlib.Path,
     run_root: pathlib.Path,
+    evidence: dict[str, Any] | None = None,
 ) -> str:
+    """Remove path, which must lie inside run_root, without leaving it.
+
+    Fail-closed (Issue #400): the pilot processes under test can write
+    inside run_root, so any symbolic link between run_root and the
+    target (both included) stops the removal with "unknown" and leaves
+    everything in place. The resolved target must also lie inside the
+    resolved run root. Nothing is partially removed.
+    """
+    if evidence is None:
+        evidence = {}
+
+    evidence["symlinkComponents"] = []
+
     if not is_within(
         path,
         run_root,
     ):
+        evidence["reason"] = "path_outside_run_root"
         return "fail"
 
     if path == run_root:
+        evidence["reason"] = "path_is_run_root"
         return "fail"
+
+    links, error = symlink_components(
+        path,
+        run_root,
+    )
+    evidence["symlinkComponents"] = links
+
+    if error is not None:
+        evidence["reason"] = error
+        return "unknown"
+
+    if links:
+        evidence["reason"] = "symlink_in_removal_path"
+        return "unknown"
 
     if not os.path.lexists(path):
         return "pass"
 
     try:
-        if path.is_symlink():
-            path.unlink()
-        elif path.is_dir():
+        resolved_path = path.resolve(strict=True)
+        resolved_root = run_root.resolve(strict=True)
+    except OSError as exc:
+        evidence["reason"] = (
+            f"resolve_failed:{type(exc).__name__}"
+        )
+        return "unknown"
+
+    if (
+        resolved_path == resolved_root
+        or not is_within(
+            resolved_path,
+            resolved_root,
+        )
+    ):
+        evidence["reason"] = "resolved_path_escapes_run_root"
+        evidence["resolvedPath"] = str(resolved_path)
+        return "unknown"
+
+    try:
+        if path.is_dir():
             shutil.rmtree(path)
         else:
             path.unlink()
     except OSError:
+        evidence["reason"] = "remove_failed"
         return "fail"
 
     return (
@@ -1245,6 +1335,10 @@ def cleanup_run(
                     True,
                 "runRootAbsent":
                     True,
+                "incomplete":
+                    False,
+                "remainingPaths":
+                    [],
                 "observedAt":
                     utc_now(),
             },
@@ -1379,6 +1473,10 @@ def cleanup_run(
     # Physical cleanup follows logical claim/registration cleanup.
     path_statuses = {}
 
+    # Paths whose removal was stopped because a symbolic link was found
+    # on the way (Issue #400). They are left in place and reported.
+    stopped_paths: list[str] = []
+
     for name, path in (
         (
             "claudeConfig",
@@ -1405,9 +1503,11 @@ def cleanup_run(
             xdg_state,
         ),
     ):
+        evidence: dict[str, Any] = {}
         status = remove_tree_safely(
             path,
             run_root,
+            evidence,
         )
         path_statuses[name] = status
         steps[name] = {
@@ -1415,11 +1515,17 @@ def cleanup_run(
             "path": str(path),
             "absent":
                 not os.path.lexists(path),
+            **evidence,
         }
 
+        if status == "unknown":
+            stopped_paths.append(str(path))
+
+    repo_evidence: dict[str, Any] = {}
     repo_status = remove_tree_safely(
         gate_repo,
         run_root,
+        repo_evidence,
     )
     path_statuses["repository"] = (
         repo_status
@@ -1434,7 +1540,22 @@ def cleanup_run(
             not os.path.lexists(
                 gate_repo
             ),
+        **repo_evidence,
     }
+
+    if repo_status == "unknown":
+        stopped_paths.append(str(gate_repo))
+
+    # The run root itself must not be a link either.
+    root_links, root_error = (
+        symlink_components(
+            run_root,
+            run_root,
+        )
+    )
+
+    if root_error is not None or root_links:
+        stopped_paths.append(str(run_root))
 
     # Any transient gh store created by I1 is under the disposable
     # repository/run root. Verify there is no surviving path whose
@@ -1500,32 +1621,67 @@ def cleanup_run(
 
     # Finally remove the run root itself. At this point only empty
     # parents/runtime leftovers should remain.
-    try:
-        if os.path.lexists(run_root):
-            shutil.rmtree(
+    #
+    # If any removal was stopped on a symbolic link, stop here as well:
+    # do not go after the leftovers. Cleanup is incomplete and the
+    # remaining paths are reported (Issue #400).
+    if stopped_paths:
+        steps["runRoot"] = {
+            "verdict":
+                "unknown",
+            "reason":
+                "cleanup_stopped_on_symlink",
+            "path":
+                str(run_root),
+            "absent":
+                not os.path.lexists(
+                    run_root
+                ),
+            "symlinkComponents":
+                root_links,
+        }
+    else:
+        try:
+            if os.path.lexists(run_root):
+                shutil.rmtree(
+                    run_root
+                )
+        except OSError:
+            pass
+
+        run_root_status = (
+            "pass"
+            if not os.path.lexists(
                 run_root
             )
-    except OSError:
-        pass
-
-    run_root_status = (
-        "pass"
-        if not os.path.lexists(
-            run_root
+            else "fail"
         )
-        else "fail"
-    )
 
-    steps["runRoot"] = {
-        "verdict":
-            run_root_status,
-        "path":
-            str(run_root),
-        "absent":
-            not os.path.lexists(
-                run_root
+        steps["runRoot"] = {
+            "verdict":
+                run_root_status,
+            "path":
+                str(run_root),
+            "absent":
+                not os.path.lexists(
+                    run_root
+                ),
+        }
+
+    remaining_paths = sorted(
+        {
+            *(
+                path
+                for path in stopped_paths
+                if os.path.lexists(path)
             ),
-    }
+            *(
+                [str(run_root)]
+                if os.path.lexists(run_root)
+                else []
+            ),
+        }
+    )
 
     cleanup_status = (
         aggregate_verdict(
@@ -1546,6 +1702,10 @@ def cleanup_run(
             utc_now(),
         "disposableTeams":
             teams,
+        "incomplete":
+            bool(stopped_paths),
+        "remainingPaths":
+            remaining_paths,
         "steps":
             steps,
     }
@@ -2301,6 +2461,8 @@ def evaluate_run(
 
     cleanup_status = "unknown"
     cleanup_reason = None
+    cleanup_incomplete: bool | None = None
+    cleanup_remaining: list[str] = []
 
     if cleanup_path.is_file():
         try:
@@ -2327,6 +2489,43 @@ def evaluate_run(
                         "status"
                     ]
                 )
+
+                incomplete = cleanup_value.get(
+                    "incomplete"
+                )
+                cleanup_incomplete = (
+                    incomplete
+                    if isinstance(incomplete, bool)
+                    else None
+                )
+
+                remaining = cleanup_value.get(
+                    "remainingPaths"
+                )
+                if isinstance(remaining, list):
+                    cleanup_remaining = [
+                        item
+                        for item in remaining
+                        if isinstance(item, str)
+                    ]
+
+                # Issue #400: a cleanup that stopped and left paths
+                # behind is not a pass, and a record that does not say
+                # whether it completed cannot prove that it did.
+                if cleanup_incomplete is True:
+                    cleanup_reason = (
+                        "cleanup_incomplete"
+                    )
+                    if cleanup_status == "pass":
+                        cleanup_status = "unknown"
+                elif (
+                    cleanup_incomplete is None
+                    and cleanup_status == "pass"
+                ):
+                    cleanup_status = "unknown"
+                    cleanup_reason = (
+                        "cleanup_completion_unproved"
+                    )
             else:
                 cleanup_reason = (
                     "cleanup_status_invalid"
@@ -2434,6 +2633,10 @@ def evaluate_run(
             live_verdict,
         "cleanupStatus":
             cleanup_status,
+        "cleanupIncomplete":
+            cleanup_incomplete,
+        "cleanupRemainingPaths":
+            cleanup_remaining,
         "unknown":
             unknowns,
         "failures":
