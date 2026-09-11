@@ -1828,5 +1828,303 @@ class PilotGateCleanupRoundD(SignalGuardedCase):
         )
 
 
+
+class PilotGateCleanupRoundE(SignalGuardedCase):
+    """evaluate_run final aggregation, parser and main."""
+
+    def setUp(self):
+        super().setUp()
+        self.artifact_dir = self.root / "artifacts"
+
+    def write(self, *, checks=None, live="pass", cleanup=None):
+        verdicts = {check: "pass" for check in CL.CHECKS}
+        verdicts.update(checks or {})
+        for check, value in verdicts.items():
+            path = self.artifact_dir / check / "result.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if value is None:
+                continue
+            if isinstance(value, dict):
+                path.write_text(json.dumps(value))
+            else:
+                path.write_text(json.dumps({"verdict": value}))
+        live_path = self.artifact_dir / "live-pm" / "result.json"
+        live_path.parent.mkdir(parents=True, exist_ok=True)
+        if live is not None:
+            live_path.write_text(json.dumps({"verdict": live}))
+        if cleanup is None:
+            cleanup = {"status": "pass", "incomplete": False,
+                       "remainingPaths": []}
+        if cleanup != "absent":
+            target = self.artifact_dir / "cleanup.json"
+            target.write_text(
+                cleanup if isinstance(cleanup, str) else json.dumps(cleanup)
+            )
+
+    def evaluate(self, *, execution_status=0, requested="all"):
+        rc = CL.evaluate_run(
+            argparse.Namespace(
+                artifact_dir=str(self.artifact_dir),
+                execution_status=execution_status,
+                run_id="run-e",
+                requested_check=requested,
+            )
+        )
+        results = json.loads((self.artifact_dir / "results.json").read_text())
+        observations = [
+            json.loads(line) for line in
+            (self.artifact_dir / "observations.jsonl").read_text().splitlines()
+        ]
+        return rc, results, observations
+
+    def test_all_pass_is_pilot_ready(self):
+        self.write(checks={"F4": {"verdict": "pass", "cutoffSeconds": 30}})
+        (self.artifact_dir / "observations.jsonl").write_text("stale\n")
+        rc, results, observations = self.evaluate()
+        self.assertEqual(rc, 0)
+        self.assertEqual(results["verdict"], "pass")
+        self.assertIs(results["pilot_ready"], True)
+        self.assertEqual(results["unknown"], [])
+        self.assertEqual(results["failures"], [])
+        self.assertEqual(results["executionStatus"], "pass")
+        self.assertEqual(results["livePmNegativeControl"], "pass")
+        self.assertEqual(results["cleanupStatus"], "pass")
+        self.assertEqual(results["runId"], "run-e")
+        self.assertEqual(results["requestedCheck"], "all")
+        self.assertEqual(
+            results["checks"], {c: {"verdict": "pass"} for c in CL.CHECKS}
+        )
+        self.assertEqual(
+            [o["check"] for o in observations],
+            [*CL.CHECKS, "livePmNegativeControl", "cleanup"],
+        )
+        by_check = {o["check"]: o for o in observations}
+        for check in CL.CHECKS:
+            self.assertEqual(by_check[check]["source"],
+                             CL.SOURCE_BY_CHECK[check])
+            self.assertEqual(by_check[check]["rawEvidence"],
+                             f"{check}/result.json")
+        self.assertEqual(by_check["F4"]["cutoff"], 30)
+        self.assertIsNone(by_check["F3"]["cutoff"])
+
+    def test_check_fail_and_unknown(self):
+        self.write(checks={"F2": {"verdict": "fail", "reason": "boom"},
+                           "F5": "unknown"})
+        rc, results, _ = self.evaluate()
+        self.assertEqual(rc, 1)
+        self.assertEqual(results["verdict"], "fail")
+        self.assertIs(results["pilot_ready"], False)
+        self.assertIn(
+            {"check": "F2", "reason": "boom", "evidence": "F2/result.json"},
+            results["failures"],
+        )
+        self.assertIn(
+            {"check": "F5", "reason": "F5_unknown",
+             "evidence": "F5/result.json"},
+            results["unknown"],
+        )
+
+    def test_unknown_only_is_unknown_exit_two(self):
+        self.write(checks={"I1": None})  # missing result file
+        rc, results, _ = self.evaluate()
+        self.assertEqual(rc, 2)
+        self.assertEqual(results["verdict"], "unknown")
+        self.assertIn(
+            {"check": "I1", "reason": "result_file_missing",
+             "evidence": "I1/result.json"},
+            results["unknown"],
+        )
+
+    def test_nested_problem_assertions_are_collected_once(self):
+        nested = {
+            "verdict": "unknown",
+            "checks": [{"name": "leaf", "verdict": "fail"},
+                       {"name": "leaf", "verdict": "fail"}],
+        }
+        self.write(checks={"F1": nested})
+        rc, results, _ = self.evaluate()
+        leaf = {"check": "leaf", "reason": "assertion_fail",
+                "evidence": "F1/result.json"}
+        self.assertEqual(results["failures"].count(leaf), 1)
+        # A failing nested assertion makes the whole gate fail even though
+        # the check itself only reported unknown.
+        self.assertEqual(rc, 1)
+
+    def test_nested_fail_under_a_passing_check_blocks_readiness(self):
+        self.write(checks={"F3": {"verdict": "pass", "checks": [
+            {"name": "inner", "verdict": "fail"}]}})
+        rc, results, _ = self.evaluate()
+        self.assertIs(results["pilot_ready"], False)
+        self.assertEqual(results["verdict"], "fail")
+        self.assertEqual(rc, 1)
+
+    def test_nested_unknown_under_a_passing_check_blocks_readiness(self):
+        # Every top-level verdict is pass; only a nested assertion is
+        # unknown. pilot_ready must still be false and the gate unknown.
+        self.write(checks={"F3": {"verdict": "pass", "checks": [
+            {"name": "inner", "verdict": "unknown"}]}})
+        rc, results, _ = self.evaluate()
+        self.assertIs(results["pilot_ready"], False)
+        self.assertEqual(results["verdict"], "unknown")
+        self.assertEqual(rc, 2)
+        self.assertIn(
+            {"check": "inner", "reason": "assertion_unknown",
+             "evidence": "F3/result.json"},
+            results["unknown"],
+        )
+
+    def test_live_pm_negative_control(self):
+        for live, rc_expected, bucket in (("fail", 1, "failures"),
+                                          ("unknown", 2, "unknown"),
+                                          (None, 2, "unknown")):
+            with self.subTest(live=live):
+                self._tmp.cleanup()
+                self.setUp()
+                self.write(live=live)
+                rc, results, _ = self.evaluate()
+                self.assertEqual(rc, rc_expected)
+                self.assertIn(
+                    "livePmNegativeControl",
+                    [item["check"] for item in results[bucket]],
+                )
+
+    def test_cleanup_record_problems(self):
+        cases = (
+            ("absent", "cleanup_result_missing"),
+            ("{", "cleanup_unreadable:JSONDecodeError"),
+            ({"status": "done"}, "cleanup_status_invalid"),
+            ([1], "cleanup_status_invalid"),
+            ({"status": "unknown", "incomplete": False}, "cleanup_unknown"),
+        )
+        for cleanup, reason in cases:
+            with self.subTest(cleanup=cleanup):
+                self._tmp.cleanup()
+                self.setUp()
+                self.write(cleanup=cleanup)
+                rc, results, _ = self.evaluate()
+                self.assertEqual(rc, 2)
+                self.assertEqual(results["cleanupStatus"], "unknown")
+                self.assertIn(
+                    {"check": "cleanup", "reason": reason,
+                     "evidence": "cleanup.json"},
+                    results["unknown"],
+                )
+
+    def test_cleanup_fail_is_failure(self):
+        self.write(cleanup={"status": "fail", "incomplete": False,
+                            "remainingPaths": []})
+        rc, results, _ = self.evaluate()
+        self.assertEqual(rc, 1)
+        self.assertIn("cleanup",
+                      [item["check"] for item in results["failures"]])
+
+    def test_execution_status_mapping(self):
+        for status, verdict, rc_expected, reason in (
+            (1, "fail", 1, "gate_execution_failed"),
+            (2, "unknown", 2, "gate_execution_incomplete_or_unknown"),
+        ):
+            with self.subTest(status=status):
+                self._tmp.cleanup()
+                self.setUp()
+                self.write()
+                rc, results, _ = self.evaluate(execution_status=status)
+                self.assertEqual(rc, rc_expected)
+                self.assertEqual(results["executionStatus"], verdict)
+                bucket = "failures" if status == 1 else "unknown"
+                self.assertIn(
+                    {"check": "execution", "reason": reason,
+                     "evidence": "results.json"},
+                    results[bucket],
+                )
+                self.assertIs(results["pilot_ready"], False)
+
+    def test_requested_check_scopes_exit_code_only(self):
+        self.write(checks={"F1": "fail"})
+        rc, results, _ = self.evaluate(requested="F3")
+        # F3 itself, live control, cleanup and execution all pass.
+        self.assertEqual(rc, 0)
+        # results.json keeps the full-pilot verdict.
+        self.assertEqual(results["verdict"], "fail")
+        self.assertIs(results["pilot_ready"], False)
+        self.assertEqual(results["requestedCheck"], "F3")
+
+    def test_requested_check_includes_live_cleanup_and_execution(self):
+        cases = (
+            ({"checks": {"F3": "unknown"}}, {}, 2),
+            ({"live": "fail"}, {}, 1),
+            ({"cleanup": {"status": "unknown", "incomplete": True,
+                          "remainingPaths": []}}, {}, 2),
+            ({}, {"execution_status": 1}, 1),
+        )
+        for write_kwargs, eval_kwargs, rc_expected in cases:
+            with self.subTest(write=write_kwargs, eval=eval_kwargs):
+                self._tmp.cleanup()
+                self.setUp()
+                self.write(**write_kwargs)
+                rc, _, _ = self.evaluate(requested="F3", **eval_kwargs)
+                self.assertEqual(rc, rc_expected)
+
+    # --- parser / main ---------------------------------------------------
+
+    def test_parser_subcommands_and_choices(self):
+        parser = CL.build_parser()
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                parser.parse_args([])
+            with self.assertRaises(SystemExit):
+                parser.parse_args(["evaluate", "--run-id", "r",
+                                   "--artifact-dir", "a",
+                                   "--requested-check", "F9"])
+            with self.assertRaises(SystemExit):
+                parser.parse_args(["evaluate", "--run-id", "r",
+                                   "--artifact-dir", "a",
+                                   "--execution-status", "3"])
+            with self.assertRaises(SystemExit):
+                parser.parse_args(["compare-live", "--artifact-dir", "a",
+                                   "--after-status", "5"])
+            with self.assertRaises(SystemExit):
+                parser.parse_args(["cleanup", "--run-id", "r"])
+
+        args = parser.parse_args(["evaluate", "--run-id", "r",
+                                  "--artifact-dir", "a",
+                                  "--requested-check", "F4",
+                                  "--execution-status", "2"])
+        self.assertIs(args.handler, CL.evaluate_run)
+        self.assertEqual((args.requested_check, args.execution_status),
+                         ("F4", 2))
+        args = parser.parse_args(["compare-live", "--artifact-dir", "a",
+                                  "--after-status", "70"])
+        self.assertIs(args.handler, CL.compare_live_pm)
+        self.assertEqual(args.after_status, 70)
+        cleanup_argv = ["cleanup"]
+        for name in ("run-id", "run-root", "gate-repo", "gate-home",
+                     "xdg-config", "xdg-cache", "xdg-data", "xdg-state",
+                     "claude-config", "artifact-dir", "gate-team"):
+            cleanup_argv += [f"--{name}", f"v-{name}"]
+        args = parser.parse_args(cleanup_argv)
+        self.assertIs(args.handler, CL.cleanup_run)
+        self.assertEqual(args.xdg_state, "v-xdg-state")
+
+    def run_main(self, handler):
+        argv = ["pilot-gate-cleanup.py", "compare-live", "--artifact-dir",
+                str(self.root)]
+        stderr = io.StringIO()
+        with mock.patch.object(CL.sys, "argv", argv), \
+                mock.patch.object(CL, "compare_live_pm", handler), \
+                contextlib.redirect_stderr(stderr):
+            # build_parser binds the handler at call time
+            rc = CL.main()
+        return rc, stderr.getvalue()
+
+    def test_main_returns_handler_result_and_maps_errors(self):
+        rc, _ = self.run_main(lambda args: 1)
+        self.assertEqual(rc, 1)
+        rc, _ = self.run_main(mock.Mock(side_effect=KeyboardInterrupt))
+        self.assertEqual(rc, 130)
+        rc, err = self.run_main(mock.Mock(side_effect=RuntimeError("bad")))
+        self.assertEqual(rc, 2)
+        self.assertIn("pilot-gate-cleanup: RuntimeError: bad", err)
+
+
 if __name__ == "__main__":
     unittest.main()
