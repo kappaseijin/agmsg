@@ -565,7 +565,65 @@ write_pilot_profile() {
       "pilot profile was not written"
 }
 
+# Every AGMSG_PM_* variable names live PM state (binding, decision log,
+# executions log, claim file, ...). A pilot inherits whatever the gate
+# process carries, so a gate started from a live PM session would make the
+# pilot write the live PM's logs (#415). The launcher clears and re-sets them;
+# the runner clears them as well, before anything is started.
+scrub_agmsg_pm_environment() {
+  local name
+
+  for name in $(compgen -v); do
+    case "$name" in
+      AGMSG_PM_*)
+        unset "$name"
+        ;;
+    esac
+  done
+}
+
+# P3 records that the gate environment carries no AGMSG_PM_* at all, and
+# refuses to continue if one is present.
+check_agmsg_pm_environment() {
+  local name
+  local present=()
+
+  for name in $(compgen -v); do
+    case "$name" in
+      AGMSG_PM_*)
+        present+=("$name")
+        ;;
+    esac
+  done
+
+  python3 - "$ARTIFACT_DIR/P3-agmsg-pm-environment.json" \
+    "${present[@]+"${present[@]}"}" <<'PY' ||
+import json
+import sys
+
+output, names = sys.argv[1], sorted(sys.argv[2:])
+with open(output, "w", encoding="utf-8") as fh:
+    json.dump(
+        {
+            "schemaVersion": 1,
+            "check": "gate-environment-has-no-AGMSG_PM",
+            "present": names,
+            "verdict": "pass" if not names else "fail",
+        },
+        fh,
+        indent=2,
+        sort_keys=True,
+    )
+    fh.write("\n")
+PY
+    internal_error \
+      "cannot record the AGMSG_PM environment check"
+
+  [ "${#present[@]}" -eq 0 ]
+}
+
 export_isolated_environment() {
+  scrub_agmsg_pm_environment
   export HOME="$GATE_HOME"
   export XDG_CONFIG_HOME="$GATE_XDG_CONFIG"
   export XDG_CACHE_HOME="$GATE_XDG_CACHE"
@@ -749,6 +807,12 @@ phase_p3_isolation_preflight() {
   local status
 
   log "P3 isolation preflight"
+
+  if ! check_agmsg_pm_environment; then
+    log \
+      "P3 isolation preflight: AGMSG_PM_* present in the gate environment; aborting before N1"
+    return "$EX_GATE_UNKNOWN"
+  fi
 
   status=0
   python3 "$ISOLATION_HELPER" preflight \
@@ -2183,6 +2247,7 @@ main() {
 
   validate_static_inputs
   scrub_github_credentials
+  scrub_agmsg_pm_environment
   identify_native_claude
 
   case "$SUBCOMMAND" in

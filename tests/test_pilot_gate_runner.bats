@@ -1259,3 +1259,95 @@ print("ok")
   [ "$status" -eq 1 ]
 }
 
+# --- #415: no live PM state reaches the pilot --------------------------------
+
+@test "scrub_agmsg_pm_environment removes every AGMSG_PM_* and nothing else" {
+  export AGMSG_PM_EXECUTIONS_FILE=/live/executions.jsonl
+  export AGMSG_PM_DECISIONS_FILE=/live/decisions.jsonl
+  export AGMSG_PM_BINDING_FILE=/live/binding.json
+  AGMSG_PM_NOT_EXPORTED=1
+  export AGMSG_OTHER=keep
+
+  scrub_agmsg_pm_environment
+
+  # Anchor on the variable name: the bats test description itself contains
+  # the text AGMSG_PM_ and is exported.
+  run bash -c "env | grep '^AGMSG_PM_'"
+  [ "$status" -eq 1 ] || { echo "left behind: $output" >&2; return 1; }
+  [ -z "${AGMSG_PM_NOT_EXPORTED+set}" ]
+  [ "$AGMSG_OTHER" = "keep" ]
+}
+
+@test "the pilot launch environment carries no AGMSG_PM_*" {
+  GATE_HOME="$TEST_ROOT/home"
+  GATE_XDG_CONFIG="$TEST_ROOT/xdg/config"
+  GATE_XDG_CACHE="$TEST_ROOT/xdg/cache"
+  GATE_XDG_DATA="$TEST_ROOT/xdg/data"
+  GATE_XDG_STATE="$TEST_ROOT/xdg/state"
+  GATE_CLAUDE_CONFIG="$TEST_ROOT/claude"
+  export AGMSG_PM_EXECUTIONS_FILE=/live/executions.jsonl
+
+  # launch_n1_case runs the launcher in a subshell after this call.
+  run bash -c '
+    source "$1"
+    GATE_HOME=h GATE_XDG_CONFIG=c GATE_XDG_CACHE=k GATE_XDG_DATA=d
+    GATE_XDG_STATE=s GATE_CLAUDE_CONFIG=cc
+    export_isolated_environment
+    if env | grep "^AGMSG_PM_"; then exit 3; fi
+    printf "%s\n" "$CLAUDE_CONFIG_DIR"
+  ' bash "$RUNNER"
+
+  [ "$status" -eq 0 ] || { echo "inherited: $output" >&2; return 1; }
+  [ "$output" = "cc" ]
+}
+
+@test "P3 records a clean gate environment" {
+  scrub_agmsg_pm_environment
+
+  check_agmsg_pm_environment
+
+  run python3 -c '
+import json, sys
+v = json.load(open(sys.argv[1]))
+assert v == {"schemaVersion": 1, "check": "gate-environment-has-no-AGMSG_PM",
+             "present": [], "verdict": "pass"}, v
+print("ok")
+' "$ARTIFACT_DIR/P3-agmsg-pm-environment.json"
+  [ "$output" = "ok" ]
+}
+
+@test "P3 stops before the isolation helper when an AGMSG_PM_* is left" {
+  # Negative control asked for by the breaker: one variable deliberately
+  # left behind must stop preflight.
+  scrub_agmsg_pm_environment
+  export AGMSG_PM_EXECUTIONS_FILE=/live/executions.jsonl
+  : > "$CALL_LOG"
+  python3() {
+    if [ "${1:-}" = "$ISOLATION_HELPER" ]; then
+      record_call "isolation-helper" "${2:-}"
+    fi
+    command python3 "$@"
+  }
+
+  run invoke_runner_function phase_p3_isolation_preflight
+
+  [ "$status" -eq 2 ]
+  assert_called isolation-helper 0
+  grep -q '"AGMSG_PM_EXECUTIONS_FILE"' "$ARTIFACT_DIR/P3-agmsg-pm-environment.json"
+  grep -q '"verdict": "fail"' "$ARTIFACT_DIR/P3-agmsg-pm-environment.json"
+}
+
+@test "main scrubs AGMSG_PM_* before any subcommand runs" {
+  install_main_stubs
+  subcommand_run() {
+    record_call "subcommand_run" "${AGMSG_PM_EXECUTIONS_FILE-unset}"
+    return 0
+  }
+  export AGMSG_PM_EXECUTIONS_FILE=/live/executions.jsonl
+
+  run invoke_runner_function main run
+
+  [ "$status" -eq 0 ]
+  [ "$(last_call_arg subcommand_run)" = "unset" ]
+}
+
