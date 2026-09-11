@@ -41,6 +41,13 @@ class ActasControls(unittest.TestCase):
         self.instances[1]["host_pid"] = 10
         self.assertEqual(evaluate(self.instances, self.correlation, reached("watch_poll"), reached("handoff")), "unknown")
 
+    def test_shared_host_pid_alone_is_unknown(self):
+        # #272: the owner still names the winner, so only the host_pid check can refuse.
+        self.instances[1]["host_pid"] = self.instances[0]["host_pid"]
+        self.assertEqual(self.instances[1]["held_owner"], self.instances[0]["instance"])
+        self.assertEqual(ownership(self.instances), "unknown")
+        self.assertEqual(evaluate(self.instances, self.correlation, reached("watch_poll"), reached("handoff")), "unknown")
+
     def test_duplicate_handoff_is_incompatible(self):
         self.instances[1]["handoffs"] = 1
         self.assertEqual(evaluate(self.instances, self.correlation, reached("watch_poll"), reached("handoff")), "incompatible")
@@ -54,11 +61,22 @@ class ActasControls(unittest.TestCase):
         self.assertEqual(evaluate(self.instances, {"status": "unknown"}, reached("watch_poll"), reached("handoff")), "unknown")
         self.assertEqual(evaluate(self.instances, {"status": "pass"}, reached("watch_poll"), reached("handoff")), "unknown")
 
+    def test_empty_public_id_alone_is_unknown(self):
+        # #272: status and id count are valid, so only the empty-value check can refuse.
+        self.assertEqual(evaluate(self.instances, {"status": "pass", "ids": {"r": ""}},
+                                  reached("watch_poll"), reached("handoff")), "unknown")
+
     def test_claim_exit_and_fields_are_both_required(self):
         self.assertEqual(claim_state({"rc": 1, "stdout": "status=held team=team owner=sid.10"}), ("held", "sid.10"))
         for command in ({"rc": 1, "stdout": ""}, {"rc": 2, "stdout": "status=not_registered"},
                         {"rc": 0, "stdout": "status=held team=team owner=sid.10"}):
             self.assertEqual(claim_state(command)[0], "start_failure")
+
+    def test_acquired_requires_exit_zero_alone(self):
+        # #272: the fields name a successful claim, so only the rc == 0 check can refuse.
+        self.assertEqual(claim_state({"rc": 0, "stdout": "status=ok team=team"}), ("acquired", None))
+        for rc in (1, 2):
+            self.assertEqual(claim_state({"rc": rc, "stdout": "status=ok team=team"})[0], "start_failure")
 
     def test_missed_observation_window_is_unknown(self):
         for polled, observed in ((False, True), (True, False), (False, False)):
