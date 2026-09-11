@@ -2553,3 +2553,70 @@ PY
     $'message-ack\tpilot-team\tresult-message-001\tp2:11111111-1111-4111-8111-111111111111:1:run-g4b-001\tresult-receipt-001' \
     "$PROVIDER_LOG"
 }
+# Issue #409: the harness must run issue-record with --gh-config-dir.
+
+@test "issue-record: without --gh-config-dir the broker stops with gh_config_dir_required" {
+  install_fake_provider
+  export P2_PROVIDER_FAKE_MODE="normal"
+  export FAKE_GH_MODE="ok"
+
+  write_broker_state \
+    receipt_recorded \
+    input-message-001 \
+    "" \
+    request-001 \
+    delegate-message-001 \
+    input-receipt-001 \
+    result-message-001 \
+    result-receipt-001
+
+  # Form A, as the harness used to build it.
+  run invoke_broker "$(issue_request request-001)" issue-record
+
+  [ "$status" -eq 2 ]
+  [ "$(json_field "$output" reason)" = "gh_config_dir_required" ]
+  # Nothing was written to the Issue and nothing was acked.
+  [ ! -s "$GH_LOG" ]
+  [ "$(provider_call_count message-ack)" -eq 0 ]
+}
+
+@test "issue-record: the exact command built by pilot-gate-i1 is accepted and acks" {
+  install_fake_provider
+  export P2_PROVIDER_FAKE_MODE="normal"
+  export FAKE_GH_MODE="ok"
+
+  write_broker_state \
+    receipt_recorded \
+    input-message-001 \
+    "" \
+    request-001 \
+    delegate-message-001 \
+    input-receipt-001 \
+    result-message-001 \
+    result-receipt-001
+
+  local request_file="$TEST_SKILL_DIR/issue-record-request.json"
+  issue_request request-001 > "$request_file"
+
+  local command
+  command="$(
+    python3 - "$SCRIPTS/lib/pilot-gate-i1.py" "$BROKER" "$CONFIG_FILE" \
+      "$request_file" "$GH_CONFIG_DIR_TEST" <<'PY'
+import importlib.util, pathlib, sys
+spec = importlib.util.spec_from_file_location("pilot_gate_i1", sys.argv[1])
+i1 = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(i1)
+broker, config, request, gh = (pathlib.Path(a) for a in sys.argv[2:6])
+print(i1.exact_broker_command(broker, config, "issue-record", request, gh))
+PY
+  )"
+
+  [[ "$command" == *" --gh-config-dir $GH_CONFIG_DIR_TEST issue-record < "* ]]
+
+  run bash -c "$command"
+
+  [ "$status" -eq 0 ]
+  assert_json_state "$output" acked
+  grep -F "config=$GH_CONFIG_DIR_TEST" "$GH_LOG"
+  [ "$(provider_call_count message-ack)" -eq 2 ]
+}
