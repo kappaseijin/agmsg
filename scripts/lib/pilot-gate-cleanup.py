@@ -34,20 +34,25 @@ SOURCE_BY_CHECK = {
     "F4": "monotonic-clock",
     "F5": "provider-readback",
 }
-VOLATILE_KEYS = {
-    "observedAt",
-    "startedAt",
-    "finishedAt",
-    "started-at",
-    "finished-at",
-    "elapsed",
-    "elapsedMonotonic",
-    "elapsed-monotonic",
-    "wallTimestamp",
-    "monotonicTimestamp",
-    "timestamp",
-    "pid",
-}
+# Live PM deny-probe artifacts compared before/after (runbook §8.2, §36).
+# These are exactly what run_live_pm_control() in pilot-gate-runner.sh and
+# the isolation helper's record-live-control write. Raw files are compared
+# byte for byte, never normalized; control.json only on the fields whose
+# value is fixed by that contract ("phase" and "observedAt" differ between
+# the two sides by construction and are not compared).
+LIVE_RAW_FILES = (
+    "input.raw",
+    "stdout.raw",
+    "stderr.raw",
+)
+LIVE_CONTROL_FIELDS = (
+    "schemaVersion",
+    "inputSha256",
+    "stdoutSha256",
+    "stderrSha256",
+    "exitStatus",
+    "guardSha256",
+)
 
 
 def utc_now() -> str:
@@ -1662,50 +1667,6 @@ def cleanup_run(
     )
 
 
-def scrub_volatile(
-    value: Any,
-) -> Any:
-    if isinstance(value, dict):
-        return {
-            key: scrub_volatile(child)
-            for key, child
-            in sorted(value.items())
-            if key not in VOLATILE_KEYS
-        }
-
-    if isinstance(value, list):
-        return [
-            scrub_volatile(child)
-            for child in value
-        ]
-
-    return value
-
-
-def normalized_file_value(
-    path: pathlib.Path,
-) -> Any:
-    data = path.read_bytes()
-
-    if path.suffix == ".json":
-        try:
-            value = json.loads(
-                data.decode("utf-8")
-            )
-            return scrub_volatile(
-                value
-            )
-        except Exception:
-            pass
-
-    text = data.decode(
-        "utf-8",
-        errors="replace",
-    ).strip()
-
-    return text
-
-
 def choose_exit_value(
     directory: pathlib.Path,
 ) -> tuple[int | None, list[str]]:
@@ -1765,61 +1726,63 @@ def choose_exit_value(
     )
 
 
-def semantic_candidates(
+def live_control_semantics(
     directory: pathlib.Path,
 ) -> tuple[dict[str, Any], list[str]]:
-    """Normalized semantic files, and the ones that could not be read.
+    """The deny-probe values recorded in one live-PM control directory.
 
-    An unreadable file stays visible to the caller: it is part of the
-    set that was observed, only its content is unknown.
+    Returns (values, unreadable). Keys are raw file names and
+    "control.json:<field>"; raw values are bytes. A file or field that
+    is absent is simply not a key, so a set difference between the two
+    sides shows it. Anything present that cannot be read is listed in
+    unreadable instead of being skipped.
     """
-    result = {}
+    values: dict[str, Any] = {}
     unreadable: list[str] = []
 
-    keywords = (
-        "deny",
-        "semantic",
-        "response",
-        "decision",
-    )
+    for name in LIVE_RAW_FILES:
+        path = directory / name
 
-    for path in directory.rglob("*"):
-        if (
-            not path.is_file()
-            or path.is_symlink()
-        ):
+        if not os.path.lexists(path):
             continue
 
-        relative = str(
-            path.relative_to(
-                directory
-            )
-        )
-
-        lower = relative.lower()
-
-        if "guard.sha256" in lower:
-            continue
-
-        if "exit" in lower:
-            continue
-
-        if not any(
-            word in lower
-            for word in keywords
-        ):
+        if path.is_symlink() or not path.is_file():
+            unreadable.append(name)
             continue
 
         try:
-            result[relative] = (
-                normalized_file_value(
-                    path
-                )
-            )
-        except Exception:
-            unreadable.append(relative)
+            values[name] = path.read_bytes()
+        except OSError:
+            unreadable.append(name)
 
-    return result, sorted(unreadable)
+    control = directory / "control.json"
+
+    if os.path.lexists(control):
+        try:
+            if control.is_symlink() or not control.is_file():
+                raise ValueError("not a regular file")
+
+            record = read_json(control)
+
+            if not isinstance(record, dict):
+                raise ValueError("root not object")
+        except Exception:
+            unreadable.append("control.json")
+        else:
+            for field in LIVE_CONTROL_FIELDS:
+                if field in record:
+                    values[f"control.json:{field}"] = record[field]
+
+    return values, sorted(unreadable)
+
+
+def describe_live_value(value: Any) -> Any:
+    if isinstance(value, bytes):
+        return {
+            "sha256": hashlib.sha256(value).hexdigest(),
+            "bytes": len(value),
+        }
+    return value
 
 
 def compare_live_pm(
@@ -1963,31 +1926,46 @@ def compare_live_pm(
         }
     )
 
-    before_semantic, before_unreadable = (
-        semantic_candidates(
+    before_values, before_unreadable = (
+        live_control_semantics(
             before
         )
     )
-    after_semantic, after_unreadable = (
-        semantic_candidates(
+    after_values, after_unreadable = (
+        live_control_semantics(
             after
         )
     )
 
     before_names = {
-        *before_semantic,
+        *before_values,
         *before_unreadable,
     }
     after_names = {
-        *after_semantic,
+        *after_values,
         *after_unreadable,
     }
 
+    # A file that could not be read on either side cannot show a set
+    # difference: its keys are unknown, not missing. "control.json" covers
+    # every "control.json:<field>" key.
+    unreadable_files = {
+        *before_unreadable,
+        *after_unreadable,
+    }
+
+    def comparable(key: str) -> bool:
+        return key.split(":", 1)[0] not in unreadable_files
+
     missing_after = sorted(
-        before_names - after_names
+        key
+        for key in before_names - after_names
+        if comparable(key)
     )
     added_after = sorted(
-        after_names - before_names
+        key
+        for key in after_names - before_names
+        if comparable(key)
     )
     unreadable = sorted(
         {
@@ -1995,10 +1973,16 @@ def compare_live_pm(
             *(f"after/{name}" for name in after_unreadable),
         }
     )
+    changed = sorted(
+        key
+        for key in before_values
+        if key in after_values
+        and before_values[key] != after_values[key]
+    )
 
-    # runbook §36: a semantic file that disappears or appears is a
-    # mutation (fail); comparing only the files both sides share would
-    # miss it. Nothing observed on either side cannot be compared.
+    # runbook §36: a probe artifact that disappears or appears is a
+    # mutation (fail); a changed byte or fixed field is a mutation (fail);
+    # nothing observed, or something unreadable, cannot be compared.
     if (
         not before.is_dir()
         or not after.is_dir()
@@ -2009,19 +1993,15 @@ def compare_live_pm(
     elif missing_after or added_after:
         semantic_verdict = "fail"
         semantic_reason = "semantic_file_set_changed"
+    elif changed:
+        semantic_verdict = "fail"
+        semantic_reason = "semantic_content_changed"
     elif unreadable:
         semantic_verdict = "unknown"
         semantic_reason = "semantic_file_unreadable"
-    elif all(
-        before_semantic[key]
-        == after_semantic[key]
-        for key in before_semantic
-    ):
+    else:
         semantic_verdict = "pass"
         semantic_reason = None
-    else:
-        semantic_verdict = "fail"
-        semantic_reason = "semantic_content_changed"
 
     checks.append(
         {
@@ -2031,14 +2011,20 @@ def compare_live_pm(
                 semantic_verdict,
             "reason":
                 semantic_reason,
-            "before":
-                before_semantic,
-            "after":
-                after_semantic,
+            "before": {
+                key: describe_live_value(value)
+                for key, value in sorted(before_values.items())
+            },
+            "after": {
+                key: describe_live_value(value)
+                for key, value in sorted(after_values.items())
+            },
             "missingAfter":
                 missing_after,
             "addedAfter":
                 added_after,
+            "changed":
+                changed,
             "unreadable":
                 unreadable,
         }
