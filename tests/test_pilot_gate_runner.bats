@@ -91,6 +91,7 @@ install_dummy_helpers() {
   F4_HELPER="$DUMMY_HELPERS/pilot-gate-f4.py"
   F5_HELPER="$DUMMY_HELPERS/pilot-gate-f5.py"
   CLEANUP_HELPER="$DUMMY_HELPERS/pilot-gate-cleanup.py"
+  PTY_HELPER="$DUMMY_HELPERS/pilot-pty.py"
 
   install_dummy_executable "$ISOLATION_HELPER"
   install_dummy_executable "$I1_HELPER"
@@ -100,6 +101,7 @@ install_dummy_helpers() {
   install_dummy_executable "$F4_HELPER"
   install_dummy_executable "$F5_HELPER"
   install_dummy_executable "$CLEANUP_HELPER"
+  install_dummy_executable "$PTY_HELPER"
 }
 
 make_static_input_fixture() {
@@ -437,7 +439,8 @@ invoke_runner_function() {
     F3_HELPER \
     F4_HELPER \
     F5_HELPER \
-    CLEANUP_HELPER
+    CLEANUP_HELPER \
+    PTY_HELPER
   do
     eval "helper_path=\${$variable}"
     chmod -x "$helper_path"
@@ -1356,3 +1359,81 @@ print("ok")
   [ "$(last_call_arg subcommand_run)" = "unset" ]
 }
 
+
+# --- #426: N1 starts the native pilot in a terminal ------------------------
+
+# Stands in for pilot-launcher.sh + claude: without a terminal on stdin it
+# takes claude's --print path and exits 1, as in the #426 reproduction; with
+# one it stays up like an interactive session.
+install_tty_checking_launcher() {
+  GATE_REPO="$TEST_ROOT/gate-repo"
+  mkdir -p "$GATE_REPO/scripts"
+  cat > "$GATE_REPO/scripts/pilot-launcher.sh" <<'EOF'
+#!/usr/bin/env bash
+if [ ! -t 0 ]; then
+  printf '%s\n' "Error: Input must be provided either through stdin or as a prompt argument when using --print" >&2
+  printf '%s\n' 1 > "$(dirname "$0")/../launcher-exit"
+  exit 1
+fi
+printf '%s\n' "interactive: stdin is a terminal"
+exec sleep 60
+EOF
+  chmod +x "$GATE_REPO/scripts/pilot-launcher.sh"
+}
+
+@test "#426: N1 starts the launcher in a terminal and it is still alive after 8 seconds" {
+  install_tty_checking_launcher
+  ARTIFACT_DIR="$UNIT_ARTIFACT"
+  GATE_TEAM="gate-team"
+  PTY_HELPER="$SCRIPTS/lib/pilot-pty.py"
+
+  export_isolated_environment() { :; }
+  # Observe the launcher 8 seconds after start instead of a real binding.
+  wait_for_binding() {
+    sleep 8
+    if _agmsg_pid_alive_local "$2"; then
+      printf '%s\n' "$2" > "$TEST_ROOT/alive-after-8s"
+    fi
+    return 1
+  }
+
+  local case_status=0
+  launch_n1_case fresh 1 || case_status="$?"
+
+  local case_dir="$ARTIFACT_DIR/N1/fresh"
+  [ -s "$TEST_ROOT/alive-after-8s" ] || {
+    echo "launcher not alive after 8s; exit=$(cat "$GATE_REPO/launcher-exit" 2>/dev/null)" >&2
+    cat "$case_dir/stderr.raw" >&2
+    return 1
+  }
+  [ "$case_status" -eq "$EX_GATE_UNKNOWN" ] ||
+    { echo "case status: $case_status" >&2; return 1; }
+  grep -q 'interactive: stdin is a terminal' "$case_dir/pty.raw" ||
+    { echo "no terminal output recorded" >&2; return 1; }
+  [ "$(cat "$case_dir/launcher-pid")" = "$(cat "$TEST_ROOT/alive-after-8s")" ] ||
+    { echo "launcher-pid does not name the observed launcher" >&2; return 1; }
+  # The case stopped both the launcher and the pty helper.
+  ! _agmsg_pid_alive_local "$(cat "$TEST_ROOT/alive-after-8s")"
+}
+
+@test "#426: a pty helper that never reports a launcher PID is unknown" {
+  ARTIFACT_DIR="$UNIT_ARTIFACT"
+  GATE_REPO="$TEST_ROOT/gate-repo"
+  GATE_TEAM="gate-team"
+  mkdir -p "$GATE_REPO"
+  cat > "$DUMMY_HELPERS/pilot-pty.py" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$DUMMY_HELPERS/pilot-pty.py"
+  PTY_HELPER="$DUMMY_HELPERS/pilot-pty.py"
+  export_isolated_environment() { :; }
+  wait_for_binding() { printf '%s\n' called >> "$CALL_LOG"; return 1; }
+
+  local case_status=0
+  launch_n1_case fresh 1 || case_status="$?"
+
+  [ "$case_status" -eq "$EX_GATE_UNKNOWN" ]
+  [ "$(cat "$UNIT_ARTIFACT/N1/fresh/verdict")" = "unknown" ]
+  [ ! -s "$CALL_LOG" ]
+}
