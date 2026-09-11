@@ -16,12 +16,13 @@ import stat
 import subprocess
 import sys
 import time
-from typing import Any, Iterable
+from typing import Any, Iterable, NoReturn
 
 
 EX_PASS = 0
 EX_FAIL = 1
 EX_UNKNOWN = 2
+EX_USAGE = 64
 
 CHECKS = ("N1", "I1", "F1", "F2", "F3", "F4", "F5")
 SOURCE_BY_CHECK = {
@@ -2680,8 +2681,23 @@ def evaluate_run(
     )
 
 
+class UsageErrorParser(argparse.ArgumentParser):
+    """argparse with the runner's invocation-error status (runbook §32).
+
+    A missing or invalid argument is a bug in the caller; stop with 64
+    instead of argparse's default 2, which would read as "unknown".
+    """
+
+    def error(self, message: str) -> NoReturn:
+        self.print_usage(sys.stderr)
+        self.exit(
+            EX_USAGE,
+            f"{self.prog}: error: {message}\n",
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = UsageErrorParser(
         description=(
             "Issue #396 pilot gate "
             "cleanup/evaluation helper"
@@ -2751,11 +2767,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--artifact-dir",
         required=True,
     )
+    # No default: an omitted status must not be read as success.
     compare_live.add_argument(
         "--after-status",
         type=int,
         choices=(0, 1, 2, 70),
-        default=0,
+        required=True,
     )
     compare_live.set_defaults(
         handler=compare_live_pm
@@ -2780,11 +2797,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         default="all",
     )
+    # No default: an omitted status must not be read as success.
     evaluate.add_argument(
         "--execution-status",
         type=int,
         choices=(0, 1, 2),
-        default=0,
+        required=True,
     )
     evaluate.set_defaults(
         handler=evaluate_run
