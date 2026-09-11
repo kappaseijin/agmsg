@@ -63,6 +63,14 @@ F4_HELPER="$SCRIPT_DIR/lib/pilot-gate-f4.py"
 F5_HELPER="$SCRIPT_DIR/lib/pilot-gate-f5.py"
 CLEANUP_HELPER="$SCRIPT_DIR/lib/pilot-gate-cleanup.py"
 
+# Liveness of the launcher pids this runner spawns goes through
+# _agmsg_pid_alive_local (EPERM-aware, ps cross-check), never a bare
+# signal-0 probe (tests/test_instance_id.bats, #500).
+# Resolved from BASH_SOURCE, not SCRIPT_DIR: SCRIPT_DIR comes from $0, which
+# names the caller when this file is sourced (the bats unit tests do).
+# shellcheck source=lib/instance-id.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/instance-id.sh"
+
 SUBCOMMAND="run"
 SOURCE=""
 LIVE_SKILL_DIR=""
@@ -785,7 +793,7 @@ wait_for_binding() {
       return 0
     fi
 
-    if ! kill -0 "$pid" >/dev/null 2>&1; then
+    if ! _agmsg_pid_alive_local "$pid"; then
       return 1
     fi
 
@@ -829,7 +837,7 @@ terminate_native_process() {
   [ -n "$pid" ] ||
     return 0
 
-  if ! kill -0 "$pid" >/dev/null 2>&1; then
+  if ! _agmsg_pid_alive_local "$pid"; then
     return 0
   fi
 
@@ -839,7 +847,7 @@ terminate_native_process() {
   deadline=$((SECONDS + N1_EXIT_GRACE_SECONDS))
 
   while [ "$SECONDS" -le "$deadline" ]; do
-    if ! kill -0 "$pid" >/dev/null 2>&1; then
+    if ! _agmsg_pid_alive_local "$pid"; then
       return 0
     fi
     sleep 1
@@ -908,7 +916,7 @@ launch_n1_case() {
     ) \
       < "$fifo" \
       > "$case_dir/stdout.raw" \
-      2> "$case_dir/stderr.raw" &
+      2> "$case_dir/stderr.raw" 3>&- 4>&- &
 
     launcher_pid="$!"
   else
@@ -922,7 +930,7 @@ launch_n1_case() {
     ) \
       < "$fifo" \
       > "$case_dir/stdout.raw" \
-      2> "$case_dir/stderr.raw" &
+      2> "$case_dir/stderr.raw" 3>&- 4>&- &
 
     launcher_pid="$!"
   fi
@@ -1004,7 +1012,7 @@ launch_n1_case() {
   # The immutable binding is written immediately before launcher exec.
   # Therefore a binding without a still-live process is insufficient proof that
   # the native Claude process actually started.
-  if ! kill -0 "$launcher_pid" >/dev/null 2>&1; then
+  if ! _agmsg_pid_alive_local "$launcher_pid"; then
     exec 9>&-
     CURRENT_NATIVE_PID=""
 
