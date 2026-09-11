@@ -226,7 +226,7 @@ guard の判定から shell が request を読むまでの間に request が差�
 
 **live PM の記録先へ pilot の決定が混ざる経路を、guard の側でも塞ぐ。**
 
-pilot の起動経路では、`AGMSG_PM_DECISIONS_FILE` と `AGMSG_PM_EXECUTIONS_FILE` が live PM の環境から継承されうる（#415 の議論で判明）。
+pilot の起動経路では、`AGMSG_PM_DECISIONS_FILE` と `AGMSG_PM_EXECUTIONS_FILE` が live PM の環境から継承されうる（#415 に関する breaker 断定）。
 継承された値のまま動くと、pilot の決定と実行記録が live PM の log へ書かれる。
 
 記録先の基準ディレクトリは pilot seat の `logs/` とする。
@@ -297,7 +297,7 @@ live PM 側に新しい変数が増えるたびに、pilot へ漏れる経路が
 launcher の export の一覧が、そのまま pilot の環境の完全な一覧になる。
 
 この契約により、harness は `AGMSG_PM_DECISIONS_FILE` を外から与えられなくなる。
-I1 と F2 は決定記録を `SEAT_DIR/logs/pretool-decisions.jsonl` から読むことになる（`pilot-gate-i1.py:405,433` の変更が要る）。harness の変更は #415 の範囲である。
+I1 と F2 は決定記録を `SEAT_DIR/logs/pretool-decisions.jsonl` から読むことになる（`pilot-gate-i1.py:405,433` の変更が要る）。harness の変更は #415 の範囲である（#415 本文の作業内容 4）。
 
 ## 10. 出力と exit code
 
@@ -384,14 +384,20 @@ guard は形 B を許すので、harness 側が形 B を組み立てれば通る
 
 ## 14. Errata（2026-09-11T15:29:03+09:00）
 
-PR #414（実装）のレビューと #415 の議論で見つかった差分を、本文へ反映した。1〜3 は breaker が「実装のほうが正しい」と判断したもの、4・5 は新しく加えた契約である。
+errata の出所は 3 種類ある。**混同しないよう、行ごとに出所を分けて書く。**
+
+| 出所の種類 | 該当 | 意味 |
+| --- | --- | --- |
+| 実装が先行した | 1、2 | PR #414 の実装が初版と異なり、breaker が「実装のほうが正しい」と判断した |
+| Issue の断定 | 3 | Issue #415 の「作業内容」に列挙された断定。**PR #414 には未実装である**（`scripts/lib/pilot-profile.js` の `renderProfile()` は `PostToolUse` を生成しない） |
+| breaker 断定の具体化 | 4、5 | breaker の断定（PM 経由、2026-09-11T15:27:38+09:00 の依頼）を本書が規則にした。本 PR の作成時点で、Issue #415 本文にこの規則は無かった。4 のうち「`SEAT_DIR/logs/` の直下と一致」という配置は本書での設計判断である。その後 PM が #415 本文の作業内容 3・4 に追記した |
 
 | # | 箇所 | 初版 | 訂正後 | 出所 |
 | --- | --- | --- | --- | --- |
-| 1 | §6 段 7・段 9、§6.3 | `path.join(__dirname, ...)` との文字列一致 | lexical 同士は文字列、`__filename`・`__dirname` とは realpath で比べる | PR #414 レビュー。Node は main module の `__filename` を realpath で解決する（`/tmp/x.js` → `/private/tmp/x.js`） |
-| 2 | §5 | 環境変数欠落時の reason 名が未定義 | `env_<name>_invalid`。細部は実装の裁量 | PR #414 |
-| 3 | §9 | PostToolUse は guard の契約外 | 既存の `scripts/pm-posttool-record` を handler にする | #415、G4 設計 §6 |
-| 4 | §6 段 0、§8.1 | 無し | 決定記録と実行記録の置き場所を pilot seat の `logs/` 直下に限る | #415 の議論（live PM の環境変数が継承されうる） |
-| 5 | §9.1 | 無し | launcher は `AGMSG_PM_*` を接頭辞で全部 unset してから全部 export する | #415 の議論 |
+| 1 | §6 段 7・段 9、§6.3 | `path.join(__dirname, ...)` との文字列一致 | lexical 同士は文字列、`__filename`・`__dirname` とは realpath で比べる | 実装が先行（PR #414 head `5fdcdd0` の `checkGuard`・`checkBroker`）。Node は main module の `__filename` を realpath で解決する（`/tmp/x.js` → `/private/tmp/x.js`） |
+| 2 | §5 | 環境変数欠落時の reason 名が未定義 | `env_<name>_invalid`。細部は実装の裁量 | 実装が先行（PR #414 head `5fdcdd0` の `envText`） |
+| 3 | §9 | PostToolUse は guard の契約外 | 既存の `scripts/pm-posttool-record` を handler にする | Issue #415 の断定（作業内容 2）。根拠は G4 設計 §6。PR #414 には未実装 |
+| 4 | §6 段 0、§8.1 | 無し | 決定記録と実行記録の置き場所を pilot seat の `logs/` 直下に限る | breaker 断定「binding 配下、symlink でない」を具体化。`SEAT_DIR/logs/` 直下という配置は本書での設計判断 |
+| 5 | §9.1 | 無し | launcher は `AGMSG_PM_*` を接頭辞で全部 unset してから全部 export する | breaker 断定（PM 経由）。書き先の値は 4 に従う |
 
 **§12.1（profile 作成の未割当）は初版時点の報告として残す。** その後 PR #414 が profile 生成を担当した。
