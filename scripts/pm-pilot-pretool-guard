@@ -10,6 +10,22 @@
  * running the fixed p2-consumer-broker contract with a single stdin
  * redirection. Every other input is denied. Allow is explicit and must be
  * recorded; deny is exit 2 plus a deny JSON.
+ *
+ * Path convention (do not change to plain string equality):
+ *   - Only binding.project is canonical (realpath). Every other path — the
+ *     exported AGMSG_PM_GUARD_PATH / AGMSG_PM_BROKER_PATH and the command
+ *     tokens — is handled as the lexical path the launcher and harness wrote.
+ *   - Lexical paths are compared with each other as strings, and each must be
+ *     a regular file (or directory), not a symlink.
+ *   - realpath is used only as a secondary check of placement: that a lexical
+ *     path points at this guard, at the broker next to it, or under the
+ *     project.
+ *   Node resolves the main module through symlinks, so __filename/__dirname
+ *   are canonical (/tmp/x -> /private/tmp/x on macOS) while the launcher
+ *   exports lexical paths (pilot-launcher.sh keeps SCRIPT_DIR lexical). The
+ *   contract's `AGMSG_PM_GUARD_PATH === path.join(__dirname, ...)` as a plain
+ *   string comparison would therefore deny every run under such a directory.
+ *   This deviation was reviewed and accepted in PR #414.
  */
 
 'use strict';
