@@ -259,6 +259,10 @@ install_main_stubs() {
     record_call "bootstrap_run"
     return 0
   }
+  load_existing_run() {
+    record_call "load_existing_run"
+    return 0
+  }
 
   subcommand_preflight() {
     record_call "subcommand_preflight"
@@ -499,6 +503,19 @@ invoke_runner_function() {
         assert_called "$candidate" 0
       fi
     done
+
+    # run/preflight create a new run; cleanup/evaluate act on the existing
+    # one and must not mint a new run id (Issue #405).
+    case "$subcommand" in
+      preflight|run)
+        assert_called bootstrap_run 1
+        assert_called load_existing_run 0
+        ;;
+      *)
+        assert_called bootstrap_run 0
+        assert_called load_existing_run 1
+        ;;
+    esac
   done
 }
 
@@ -550,7 +567,7 @@ invoke_runner_function() {
   esac
 }
 
-@test "subcommand_run CHECK=N1 passes immediately after N1 and skips later phases" {
+@test "subcommand_run CHECK=N1 stops checks after N1 but still runs P5 P6 P7" {
   install_orchestration_stubs
   reset_stub_statuses
   CHECK="N1"
@@ -566,12 +583,14 @@ invoke_runner_function() {
   assert_called "F3" 0
   assert_called "F4" 0
   assert_called "F5" 0
-  assert_called "P5" 0
-  assert_called "P6" 0
-  assert_called "P7" 0
+  # runbook §33: cleanup is attempted whatever the result or scope.
+  assert_called "P5" 1
+  assert_called "P6" 1
+  assert_called "P7" 1
+  [ "$(last_call_arg P7)" = "0" ]
 }
 
-@test "subcommand_run CHECK=N1 passes through N1 fail and unknown without cleanup" {
+@test "subcommand_run CHECK=N1 fail or unknown still runs P5 P6 P7 and returns P7" {
   local n1_status
 
   install_orchestration_stubs
@@ -582,21 +601,51 @@ invoke_runner_function() {
     : > "$CALL_LOG"
     reset_stub_statuses
     STUB_N1="$n1_status"
+    STUB_P7="$n1_status"
 
     run invoke_runner_function subcommand_run
 
     [ "$status" -eq "$n1_status" ]
-    assert_called "P0-P4" 1
     assert_called "N1" 1
     assert_called "I1" 0
-    assert_called "F1" 0
-    assert_called "F2" 0
-    assert_called "F3" 0
-    assert_called "F4" 0
-    assert_called "F5" 0
-    assert_called "P5" 0
-    assert_called "P6" 0
-    assert_called "P7" 0
+    assert_called "P5" 1
+    assert_called "P6" 1
+    assert_called "P7" 1
+    [ "$(last_call_arg P7)" = "$n1_status" ]
+  done
+}
+
+@test "subcommand_run partial check stops after the requested check for every check" {
+  local check
+  local later
+
+  install_orchestration_stubs
+
+  for check in I1 F1 F2 F3 F4 F5
+  do
+    : > "$CALL_LOG"
+    reset_stub_statuses
+    CHECK="$check"
+
+    run invoke_runner_function subcommand_run
+
+    [ "$status" -eq 0 ]
+    assert_called "$check" 1
+    assert_called "P5" 1
+    assert_called "P6" 1
+    assert_called "P7" 1
+
+    case "$check" in
+      I1) later="F1" ;;
+      F1) later="F2" ;;
+      F2) later="F3" ;;
+      F3) later="F4" ;;
+      F4) later="F5" ;;
+      F5) later="" ;;
+    esac
+    if [ -n "$later" ]; then
+      assert_called "$later" 0
+    fi
   done
 }
 
@@ -820,4 +869,295 @@ EOF
     assert_called "P6" 0
     assert_called "P7" 0
   done
+}
+
+# --- Issue #405 -------------------------------------------------------------
+
+# A python helper that records calls and writes the artifacts P5/P6/P7 and N1
+# would leave behind. The shell dummies above cannot be run by python3.
+write_python_helper() {
+  local path="$1"
+  cat > "$path" <<'PY'
+#!/usr/bin/env python3
+import json, os, sys
+log = os.environ.get("CALL_LOG")
+if log:
+    with open(log, "a") as fh:
+        fh.write("helper|" + " ".join(sys.argv[1:3]) + "\n")
+args = sys.argv[1:]
+def opt(name):
+    return args[args.index(name) + 1] if name in args else None
+cmd = args[0] if args else ""
+if cmd == "write-n1-result":
+    os.makedirs(os.path.dirname(opt("--output")), exist_ok=True)
+    with open(opt("--output"), "w") as fh:
+        json.dump({"verdict": opt("--verdict"), "reason": opt("--reason")}, fh)
+PY
+  chmod +x "$path"
+}
+
+# Runs the real main() in a fresh bash with the production shell options, so
+# errexit behaves as in a real gate run (bats' own invocation disables it).
+run_main_production_options() {
+  local check="$1"
+  run bash -c '
+    set -euo pipefail
+    RUNNER="$1"; CHECK_ARG="$2"
+    source "$RUNNER"
+    set -euo pipefail
+    parse_args() { SUBCOMMAND=run; CHECK="$CHECK_ARG"; }
+    require_command() { :; }
+    validate_static_inputs() { :; }
+    scrub_github_credentials() { :; }
+    identify_native_claude() { :; }
+    bootstrap_run() { RUN_ID=unit-run; printf "bootstrap|\n" >> "$CALL_LOG"; }
+    run_p0_through_p4() { printf "P0-P4|\n" >> "$CALL_LOG"; }
+    launch_n1_case() {
+      printf "launch_n1_case|%s\n" "$1" >> "$CALL_LOG"
+      # The production launcher used to end with `set -e`, re-enabling
+      # errexit inside the set +e window of its caller.
+      if [ "${REENABLE_ERREXIT:-0}" = "1" ]; then set -e; fi
+      return 2
+    }
+    phase_p5_cleanup() {
+      printf "P5|\n" >> "$CALL_LOG"
+      printf "{\"status\": \"pass\"}\n" > "$ARTIFACT_DIR/cleanup.json"
+    }
+    phase_p6_live_pm_after() {
+      printf "P6|\n" >> "$CALL_LOG"
+      mkdir -p "$ARTIFACT_DIR/live-pm"
+      printf "{\"verdict\": \"pass\"}\n" > "$ARTIFACT_DIR/live-pm/result.json"
+    }
+    phase_p7_aggregate() {
+      printf "P7|%s\n" "$1" >> "$CALL_LOG"
+      printf "{\"verdict\": \"unknown\"}\n" > "$ARTIFACT_DIR/results.json"
+      return 2
+    }
+    ISOLATION_HELPER="$HELPER"
+    ARTIFACT_DIR="$ART"
+    main run
+  ' bash "$RUNNER" "$check"
+}
+
+@test "#405: a real N1 unknown still reaches P5 P6 P7 and writes results.json" {
+  export HELPER="$TEST_ROOT/isolation-helper.py"
+  export ART="$TEST_ROOT/prod-artifacts"
+  mkdir -p "$ART"
+  write_python_helper "$HELPER"
+
+  for check in N1 all
+  do
+    : > "$CALL_LOG"
+    rm -rf "$ART"; mkdir -p "$ART"
+
+    run_main_production_options "$check"
+
+    [ "$status" -eq 2 ]
+    # The real phase_n1 ran and recorded its own unknown result.
+    assert_called launch_n1_case 1
+    grep -q '"verdict": "unknown"' "$ART/N1/result.json"
+    # And every P5-P7 artifact is present.
+    assert_called P5 1
+    assert_called P6 1
+    assert_called P7 1
+    [ "$(last_call_arg P7)" = "2" ]
+    [ -f "$ART/cleanup.json" ]
+    [ -f "$ART/live-pm/result.json" ]
+    [ -f "$ART/results.json" ]
+  done
+}
+
+@test "#405: an internal_error abort still attempts P5 P6 P7 and keeps exit 70" {
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    set -euo pipefail
+    phase_p5_cleanup() { printf "P5|\n" >> "$CALL_LOG"; }
+    phase_p6_live_pm_after() { printf "P6|\n" >> "$CALL_LOG"; }
+    phase_p7_aggregate() { printf "P7|%s\n" "$1" >> "$CALL_LOG"; }
+    SUBCOMMAND=run
+    trap finalize_after_abort EXIT
+    FINALIZE_PENDING=1
+    internal_error "simulated abort"
+  ' bash "$RUNNER"
+
+  [ "$status" -eq 70 ]
+  assert_called P5 1
+  assert_called P6 1
+  assert_called P7 1
+  [ "$(last_call_arg P7)" = "2" ]
+}
+
+@test "#405: an aborted preflight attempts P5 only" {
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    set -euo pipefail
+    phase_p5_cleanup() { printf "P5|\n" >> "$CALL_LOG"; }
+    phase_p6_live_pm_after() { printf "P6|\n" >> "$CALL_LOG"; }
+    phase_p7_aggregate() { printf "P7|\n" >> "$CALL_LOG"; }
+    SUBCOMMAND=preflight
+    trap finalize_after_abort EXIT
+    FINALIZE_PENDING=1
+    internal_error "simulated abort"
+  ' bash "$RUNNER"
+
+  [ "$status" -eq 70 ]
+  assert_called P5 1
+  assert_called P6 0
+  assert_called P7 0
+}
+
+@test "#405: a normal exit does not trigger the abort finalizer" {
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    phase_p5_cleanup() { printf "P5|\n" >> "$CALL_LOG"; }
+    SUBCOMMAND=run
+    trap finalize_after_abort EXIT
+    FINALIZE_PENDING=0
+    exit 0
+  ' bash "$RUNNER"
+
+  [ "$status" -eq 0 ]
+  assert_called P5 0
+}
+
+@test "#405: preflight runs P5 after P0-P4 and returns the worse status" {
+  local p0 p5 expected
+
+  install_orchestration_stubs
+
+  for p0 in 0 1 2
+  do
+    for p5 in 0 1 2
+    do
+      : > "$CALL_LOG"
+      reset_stub_statuses
+      STUB_P0_P4="$p0"
+      STUB_P5="$p5"
+
+      run invoke_runner_function subcommand_preflight
+
+      if [ "$p0" -eq 1 ] || [ "$p5" -eq 1 ]; then
+        expected=1
+      elif [ "$p0" -eq 2 ] || [ "$p5" -eq 2 ]; then
+        expected=2
+      else
+        expected=0
+      fi
+      [ "$status" -eq "$expected" ]
+      assert_called "P0-P4" 1
+      assert_called "P5" 1
+      assert_called "P6" 0
+      assert_called "P7" 0
+    done
+  done
+}
+
+@test "#405: worst_status orders internal over fail over unknown over pass" {
+  [ "$(worst_status 0 0)" = "0" ]
+  [ "$(worst_status 0 2)" = "2" ]
+  [ "$(worst_status 2 1)" = "1" ]
+  [ "$(worst_status 1 0)" = "1" ]
+  [ "$(worst_status 70 0)" = "70" ]
+  [ "$(worst_status 1 70)" = "70" ]
+  [ "$(worst_status 64 0)" = "70" ]
+}
+
+write_state_file() {
+  local artifact="$1"
+  python3 - "$artifact" "$TEST_ROOT/run root" <<'PY'
+import json, sys
+artifact, root = sys.argv[1], sys.argv[2]
+json.dump({
+    "schemaVersion": 1, "part": 1, "runId": "existing-run",
+    "runRoot": root, "gateTeam": "agmsg-g4gate-existing",
+    "gateRepo": root + "/repo", "gateHome": root + "/home",
+    "xdg": {"config": root + "/xdg/config", "cache": root + "/xdg/cache",
+            "data": root + "/xdg/data", "state": root + "/xdg/state"},
+    "claudeConfigDir": root + "/claude", "artifactDir": artifact,
+}, open(artifact + "/part1-state.json", "w"))
+PY
+}
+
+@test "#405: load_existing_run reads the run without minting or rewriting state" {
+  write_state_file "$UNIT_ARTIFACT"
+  local before
+  before="$(shasum -a 256 "$UNIT_ARTIFACT/part1-state.json")"
+
+  load_existing_run 2>/dev/null
+
+  [ "$RUN_ID" = "existing-run" ]
+  [ "$RUN_ROOT" = "$TEST_ROOT/run root" ]
+  [ "$GATE_TEAM" = "agmsg-g4gate-existing" ]
+  [ "$GATE_REPO" = "$TEST_ROOT/run root/repo" ]
+  [ "$GATE_XDG_STATE" = "$TEST_ROOT/run root/xdg/state" ]
+  [ "$GATE_CLAUDE_CONFIG" = "$TEST_ROOT/run root/claude" ]
+  [ "$(shasum -a 256 "$UNIT_ARTIFACT/part1-state.json")" = "$before" ]
+}
+
+@test "#405: load_existing_run rejects missing, broken or foreign state with 64" {
+  run load_existing_run
+  [ "$status" -eq 64 ]
+  [[ "$output" == *"no existing run"* ]]
+
+  printf '{broken\n' > "$UNIT_ARTIFACT/part1-state.json"
+  run load_existing_run
+  [ "$status" -eq 64 ]
+
+  mkdir -p "$TEST_ROOT/other-artifacts"
+  write_state_file "$TEST_ROOT/other-artifacts"
+  cp "$TEST_ROOT/other-artifacts/part1-state.json" \
+    "$UNIT_ARTIFACT/part1-state.json"
+  run load_existing_run
+  [ "$status" -eq 64 ]
+  [[ "$output" == *"another artifact directory"* ]]
+}
+
+@test "#405: a phase that re-enables errexit cannot abort the run before P5" {
+  export HELPER="$TEST_ROOT/isolation-helper.py"
+  export ART="$TEST_ROOT/prod-artifacts"
+  export REENABLE_ERREXIT=1
+  rm -rf "$ART"; mkdir -p "$ART"
+  write_python_helper "$HELPER"
+
+  run_main_production_options all
+
+  [ "$status" -eq 2 ]
+  assert_called launch_n1_case 1
+  assert_called P5 1
+  assert_called P6 1
+  assert_called P7 1
+  [ -f "$ART/results.json" ]
+}
+
+@test "#405: no function in the runner toggles errexit" {
+  # Status is captured with `cmd || status=$?`; a set +e / set -e pair
+  # inside a function is what let a nested phase re-enable errexit.
+  local offenders
+  offenders="$(grep -nE '^[[:space:]]+set [+-]e' "$RUNNER" || true)"
+  [ -z "$offenders" ] || { echo "$offenders"; false; }
+  # Positive control: the top-level shell options are still there.
+  grep -qE '^set -euo pipefail$' "$RUNNER"
+}
+
+
+@test "#405: main maps an unexpected subcommand status to 70 under production options" {
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    set -euo pipefail
+    parse_args() { SUBCOMMAND=run; }
+    require_command() { :; }
+    validate_static_inputs() { :; }
+    scrub_github_credentials() { :; }
+    identify_native_claude() { :; }
+    bootstrap_run() { :; }
+    subcommand_run() { FINALIZE_PENDING=0; return 5; }
+    main run
+  ' bash "$RUNNER"
+
+  [ "$status" -eq 70 ]
+  [[ "$output" == *"unexpected internal status=5"* ]]
 }
