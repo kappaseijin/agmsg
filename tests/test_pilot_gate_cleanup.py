@@ -942,6 +942,88 @@ class PilotGateCleanupRoundB(SignalGuardedCase):
         before = json.loads((self.artifact / "claims-before.json").read_text())
         self.assertEqual(before["readErrors"], ["gate:claim_row_unidentified:m1"])
 
+    # --- schema-first claims read (#427) ---------------------------------
+
+    def drop_tables(self, db, *tables):
+        connection = sqlite3.connect(db)
+        try:
+            for table in tables:
+                connection.execute(f"DROP TABLE {table}")
+            connection.commit()
+        finally:
+            connection.close()
+
+    def test_release_message_claims_no_events_table_is_pass_with_reason(self):
+        # A team that never sent anything has no events table yet.
+        i1, recorder, _, dbs = self.claims_fixture({"gate": []})
+        self.drop_tables(dbs["gate"], "events")
+        status, claims = self.release(i1, recorder, ["gate"])
+        self.assertEqual((status, claims), ("pass", []))
+        self.assertEqual(recorder.calls, [])
+        before = json.loads((self.artifact / "claims-before.json").read_text())
+        self.assertEqual(before["readErrors"], [])
+        self.assertEqual(before["notes"], ["gate:claims:no_events_table"])
+        after = json.loads((self.artifact / "claims-after.json").read_text())
+        self.assertEqual(after["remaining"], [])
+        self.assertEqual(after["verifyErrors"], [])
+
+    def test_release_message_claims_missing_messages_table_is_unknown(self):
+        # The store was never initialised (#423): not a decidable state.
+        i1, recorder, _, dbs = self.claims_fixture({"gate": []})
+        self.drop_tables(dbs["gate"], "events", "messages")
+        status, claims = self.release(i1, recorder, ["gate"])
+        self.assertEqual((status, claims), ("unknown", []))
+        self.assertEqual(recorder.calls, [])
+        before = json.loads((self.artifact / "claims-before.json").read_text())
+        self.assertEqual(before["readErrors"], ["gate:claims:messages_table_missing"])
+        self.assertEqual(before["notes"], [])
+
+    def test_release_message_claims_missing_messages_alone_is_unknown(self):
+        # events is present, so only the messages check can refuse.
+        i1, recorder, _, dbs = self.claims_fixture({"gate": []})
+        self.drop_tables(dbs["gate"], "messages")
+        status, _ = self.release(i1, recorder, ["gate"])
+        self.assertEqual(status, "unknown")
+        before = json.loads((self.artifact / "claims-before.json").read_text())
+        self.assertEqual(before["readErrors"], ["gate:claims:messages_table_missing"])
+
+    def test_release_message_claims_missing_claims_table_is_unknown(self):
+        i1, recorder, _, dbs = self.claims_fixture({"gate": []})
+        self.drop_tables(dbs["gate"], "message_claims")
+        status, _ = self.release(i1, recorder, ["gate"])
+        self.assertEqual(status, "unknown")
+        before = json.loads((self.artifact / "claims-before.json").read_text())
+        self.assertEqual(before["readErrors"], ["gate:claims:message_claims_table_missing"])
+        self.assertEqual(before["notes"], [])
+
+    def test_release_message_claims_events_table_keeps_the_join_path(self):
+        i1, recorder, _, _ = self.claims_fixture(
+            {"gate": [("m1", "gate", "owner-a", "uuid-m1")]}
+        )
+        status, claims = self.release(i1, recorder, ["gate"])
+        self.assertEqual(status, "pass")
+        self.assertEqual(
+            claims,
+            [{"team": "gate", "messageId": "uuid-m1", "owner": "owner-a",
+              "legacyId": "m1"}],
+        )
+        self.assertEqual([call["argv"][3] for call in recorder.calls], ["uuid-m1"])
+        before = json.loads((self.artifact / "claims-before.json").read_text())
+        self.assertEqual(before["notes"], [])
+
+    def test_release_message_claims_no_events_table_with_a_claim_left_is_fail(self):
+        # Without events nothing can be released by uuid; a claim that still
+        # exists is caught by the independent re-check instead of passing.
+        i1, recorder, _, dbs = self.claims_fixture(
+            {"gate": [("m1", "gate", "owner-a", ...)]}
+        )
+        self.drop_tables(dbs["gate"], "events")
+        status, claims = self.release(i1, recorder, ["gate"])
+        self.assertEqual((status, claims), ("fail", []))
+        self.assertEqual(recorder.calls, [])
+        after = json.loads((self.artifact / "claims-after.json").read_text())
+        self.assertEqual([r["legacyId"] for r in after["remaining"]], ["m1"])
+
     def test_release_message_claims_missing_provider_is_unknown(self):
         i1 = mock.Mock()
         recorder = FakeRecorder()
