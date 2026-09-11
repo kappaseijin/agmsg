@@ -7,7 +7,11 @@ setup() {
   export STOP_HELPERS="$BATS_TEST_DIRNAME"
   cat > "$STOP_ROOT/watcher.sh" <<'SH'
 #!/usr/bin/env bash
-if [ "$MODE" = ignore ]; then trap '' TERM; else trap 'exit 0' TERM; fi
+case "$MODE" in
+  ignore) trap '' TERM ;;
+  code) trap 'exit 42' TERM ;;
+  *) trap 'exit 0' TERM ;;
+esac
 : > "$STOP_ROOT/ready"
 while :; do sleep 1; done
 SH
@@ -53,6 +57,21 @@ SH
   done
 }
 
+@test "bounded watch stop: an owned child exiting other than 0/143 fails at child-status" {
+  # #268: ownership, signal, and wait all succeed; only child_rc=42 is wrong.
+  run env MODE=code CASE=normal bash "$STOP_ROOT/driver.sh"
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | grep -Fq -- "stop_rc=1"
+  grep -q 'phase=signal-result.*result=0' "$STOP_ROOT/packet"
+  grep -q 'phase=wait-exit.*result=0' "$STOP_ROOT/packet"
+  grep -q 'phase=child-status.*result=42' "$STOP_ROOT/packet"
+  grep -q 'phase=test-stop-end.*result=1' "$STOP_ROOT/packet"
+  grep -q 'phase=ownership-unknown' "$STOP_ROOT/packet" && return 1
+  grep -q 'phase=recovery' "$STOP_ROOT/packet" && return 1
+  # The failure is reported, not hidden: the packet reaches stderr.
+  printf '%s\n' "$output" | grep -q 'phase=child-status.*result=42'
+}
+
 @test "bounded watch stop: TERM-ignoring owned tree fails and is recovered" {
   run env MODE=ignore CASE=timeout bash "$STOP_ROOT/driver.sh"
   [ "$status" -eq 1 ]
@@ -84,5 +103,6 @@ SH
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" | grep -Fq -- "caller-control=stop rc=1"
   printf '%s\n' "$output" | grep -Fq -- "caller-control=sentinel rc=1"
+  printf '%s\n' "$output" | grep -Fq -- "caller-control=childrc rc=1 child-status=42"
   printf '%s\n' "$output" | grep -Fq -- "Bats/xargs/driver rc=0"
 }
