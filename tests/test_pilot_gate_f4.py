@@ -1603,5 +1603,258 @@ class PilotGateF4RoundB(unittest.TestCase):
 
             sleep_mock.assert_not_called()
 
+
+class PilotGateF4RoundC(unittest.TestCase):
+    def test_liveness_sample_below_cutoff_is_healthy_and_captured(
+        self,
+    ):
+        with mock.patch.object(
+            F4.time,
+            "monotonic",
+            return_value=108.0,
+        ), mock.patch.object(
+            F4,
+            "utc_now",
+            return_value="2026-09-11T00:00:00.123Z",
+        ):
+            result = F4.liveness_sample(
+                last_success_monotonic=100.0,
+                cutoff_seconds=10.0,
+                expected="below",
+            )
+
+        self.assertEqual(
+            result,
+            {
+                "wallTimestamp":
+                    "2026-09-11T00:00:00.123Z",
+                "monotonicTimestamp":
+                    108.0,
+                "elapsedSinceLastSuccessfulScan":
+                    8.0,
+                "cutoffSeconds":
+                    10.0,
+                "cutoffExceeded":
+                    False,
+                "auditLiveness":
+                    "healthy",
+                "expectedObservation":
+                    "below",
+                "expectedObservationCaptured":
+                    True,
+            },
+        )
+
+    def test_liveness_sample_above_cutoff_is_stale_and_captured(
+        self,
+    ):
+        with mock.patch.object(
+            F4.time,
+            "monotonic",
+            return_value=111.5,
+        ), mock.patch.object(
+            F4,
+            "utc_now",
+            return_value="2026-09-11T00:00:01.456Z",
+        ):
+            result = F4.liveness_sample(
+                last_success_monotonic=100.0,
+                cutoff_seconds=10.0,
+                expected="above",
+            )
+
+        self.assertEqual(
+            result,
+            {
+                "wallTimestamp":
+                    "2026-09-11T00:00:01.456Z",
+                "monotonicTimestamp":
+                    111.5,
+                "elapsedSinceLastSuccessfulScan":
+                    11.5,
+                "cutoffSeconds":
+                    10.0,
+                "cutoffExceeded":
+                    True,
+                "auditLiveness":
+                    "failed/stale",
+                "expectedObservation":
+                    "above",
+                "expectedObservationCaptured":
+                    True,
+            },
+        )
+
+    def test_liveness_sample_exact_cutoff_is_healthy_but_not_below_observation(
+        self,
+    ):
+        with mock.patch.object(
+            F4.time,
+            "monotonic",
+            return_value=110.0,
+        ), mock.patch.object(
+            F4,
+            "utc_now",
+            return_value="2026-09-11T00:00:02.000Z",
+        ):
+            result = F4.liveness_sample(
+                last_success_monotonic=100.0,
+                cutoff_seconds=10.0,
+                expected="below",
+            )
+
+        self.assertEqual(
+            result["elapsedSinceLastSuccessfulScan"],
+            10.0,
+        )
+        self.assertIs(
+            result["cutoffExceeded"],
+            False,
+        )
+        self.assertEqual(
+            result["auditLiveness"],
+            "healthy",
+        )
+        self.assertEqual(
+            result["expectedObservation"],
+            "below",
+        )
+        self.assertIs(
+            result["expectedObservationCaptured"],
+            False,
+        )
+
+    def test_liveness_sample_exact_cutoff_is_healthy_but_not_above_observation(
+        self,
+    ):
+        with mock.patch.object(
+            F4.time,
+            "monotonic",
+            return_value=110.0,
+        ), mock.patch.object(
+            F4,
+            "utc_now",
+            return_value="2026-09-11T00:00:03.000Z",
+        ):
+            result = F4.liveness_sample(
+                last_success_monotonic=100.0,
+                cutoff_seconds=10.0,
+                expected="above",
+            )
+
+        self.assertEqual(
+            result["elapsedSinceLastSuccessfulScan"],
+            10.0,
+        )
+        self.assertIs(
+            result["cutoffExceeded"],
+            False,
+        )
+        self.assertEqual(
+            result["auditLiveness"],
+            "healthy",
+        )
+        self.assertEqual(
+            result["expectedObservation"],
+            "above",
+        )
+        self.assertIs(
+            result["expectedObservationCaptured"],
+            False,
+        )
+
+    def test_liveness_sample_rejects_unknown_expectation(
+        self,
+    ):
+        for expected in (
+            "exact",
+            "",
+            "BELOW",
+        ):
+            with self.subTest(expected=expected):
+                with mock.patch.object(
+                    F4.time,
+                    "monotonic",
+                    return_value=105.0,
+                ):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        "invalid liveness expectation",
+                    ):
+                        F4.liveness_sample(
+                            last_success_monotonic=100.0,
+                            cutoff_seconds=10.0,
+                            expected=expected,
+                        )
+
+    def test_sleep_until_returns_without_sleep_when_target_already_reached(
+        self,
+    ):
+        with mock.patch.object(
+            F4.time,
+            "monotonic",
+            return_value=10.0,
+        ) as monotonic_mock, mock.patch.object(
+            F4.time,
+            "sleep",
+        ) as sleep_mock:
+            result = F4.sleep_until(
+                10.0
+            )
+
+        self.assertIsNone(result)
+        monotonic_mock.assert_called_once_with()
+        sleep_mock.assert_not_called()
+
+    def test_sleep_until_caps_long_waits_and_uses_exact_short_remaining_time(
+        self,
+    ):
+        with mock.patch.object(
+            F4.time,
+            "monotonic",
+            side_effect=[
+                8.8,
+                9.3,
+                9.8,
+                10.0,
+            ],
+        ) as monotonic_mock, mock.patch.object(
+            F4.time,
+            "sleep",
+        ) as sleep_mock:
+            result = F4.sleep_until(
+                10.0
+            )
+
+        self.assertIsNone(result)
+
+        self.assertEqual(
+            monotonic_mock.call_count,
+            4,
+        )
+
+        self.assertEqual(
+            sleep_mock.call_count,
+            3,
+        )
+
+        first, second, third = (
+            sleep_mock.call_args_list
+        )
+
+        self.assertEqual(
+            first.args[0],
+            0.5,
+        )
+        self.assertEqual(
+            second.args[0],
+            0.5,
+        )
+        self.assertAlmostEqual(
+            third.args[0],
+            0.2,
+            places=7,
+        )
+
 if __name__ == "__main__":
     unittest.main()
