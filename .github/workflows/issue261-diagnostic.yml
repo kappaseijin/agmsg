@@ -2,6 +2,7 @@ name: Issue 261 failure attribution
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
     branches: [main]
     paths:
       - tests/test_codex_bridge_launcher.bats

@@ -1,6 +1,7 @@
 name: issue253 actas evaluator controls
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
     branches: [main]
     paths:
       - scripts/issue253_actas.py
