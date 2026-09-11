@@ -613,6 +613,7 @@ def release_message_claims(
 
     claims: list[dict[str, Any]] = []
     read_errors: list[str] = []
+    notes: list[str] = []
 
     seen_db_team: set[
         tuple[str, str]
@@ -639,6 +640,52 @@ def release_message_claims(
         seen_db_team.add(key)
 
         if not db.is_file():
+            continue
+
+        # Decide from the schema before joining (#427). init-db.sh creates
+        # messages and message_claims; the sqlite driver creates events on
+        # the first send. So a team that has never sent anything has no
+        # events table, which is a decidable state (nothing to release), not
+        # a failed observation. A store without messages was never
+        # initialised and stays unknown. A missing table is never inferred
+        # from an OperationalError.
+        try:
+            connection = sqlite3.connect(
+                f"file:{db}?mode=ro",
+                uri=True,
+            )
+            try:
+                tables = {
+                    name
+                    for (name,) in connection.execute(
+                        "SELECT name FROM sqlite_master"
+                        " WHERE type = 'table'"
+                    ).fetchall()
+                }
+            finally:
+                connection.close()
+        except sqlite3.Error as exc:
+            read_errors.append(
+                f"{team}:claims:{type(exc).__name__}:{exc}"
+            )
+            continue
+
+        if "messages" not in tables:
+            read_errors.append(
+                f"{team}:claims:messages_table_missing"
+            )
+            continue
+
+        if "message_claims" not in tables:
+            read_errors.append(
+                f"{team}:claims:message_claims_table_missing"
+            )
+            continue
+
+        if "events" not in tables:
+            notes.append(
+                f"{team}:claims:no_events_table"
+            )
             continue
 
         try:
@@ -701,6 +748,7 @@ def release_message_claims(
             "schemaVersion": 1,
             "claims": claims,
             "readErrors": read_errors,
+            "notes": notes,
         },
     )
 
