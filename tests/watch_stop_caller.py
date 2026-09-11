@@ -17,7 +17,8 @@ with tempfile.TemporaryDirectory(prefix='watch-stop-caller-') as temp:
     root=Path(temp); skill=root/'skill'; scripts=skill/'scripts'; scripts.mkdir(parents=True); (skill/'run').mkdir()
     for name in ('join.sh','send.sh'): (scripts/name).write_text('#!/usr/bin/env bash\nexit 0\n')
     (scripts/'watch.sh').write_text('''#!/usr/bin/env bash
-trap 'rm -f "$TEST_SKILL_DIR/run/ready.team__alice"; exit 0' TERM
+if [ "$CONTROL" = childrc ]; then trap 'exit 42' TERM
+else trap 'rm -f "$TEST_SKILL_DIR/run/ready.team__alice"; exit 0' TERM; fi
 if [ "$CONTROL" = sentinel ]; then : > "$TEST_SKILL_DIR/run/ready.team__alice"; fi
 printf 'M-broad-marker\\n'
 while :; do sleep 0.05; done
@@ -30,12 +31,26 @@ if [ "$CONTROL" = stop ]; then
 fi
 '''
     driver=root/'driver.sh'; driver.write_text(prefix+'\nbroad_test() {\n'+body+'\n}\nbroad_test\n')
-    for mode,expected in [('normal',0),('stop',1),('sentinel',1)]:
+    for mode,expected in [('normal',0),('stop',1),('sentinel',1),('childrc',1)]:
         env=dict(os.environ,CONTROL=mode,HELPERS=str(TESTS),TEST_SKILL_DIR=str(skill),SCRIPTS=str(scripts),PROJ=str(root/'project'),RUNNER_TEMP=str(root),AGMSG_TEST_WAIT_TIMEOUT_S='2',AGMSG_TEST_WAIT_POLL_S='0.05')
         result=subprocess.run(['bash',str(driver)],env=env,capture_output=True,text=True,timeout=15)
         if result.returncode!=expected:
             raise AssertionError(f'{mode}: expected {expected}, got {result.returncode}: {result.stdout} {result.stderr}')
-        print(f'caller-control={mode} rc={result.returncode}')
+        if mode=='childrc':
+            # #268: the caller's failure must come from the child-status branch
+            # (ownership, signal, and wait succeeded), not from another branch.
+            lines=result.stderr.splitlines()
+            if not any('phase=child-status' in l and 'result=42' in l for l in lines):
+                raise AssertionError(f'childrc: child-status result=42 not reached: {result.stderr}')
+            if not any('phase=test-stop-end' in l and 'result=1' in l for l in lines):
+                raise AssertionError(f'childrc: stop helper did not fail: {result.stderr}')
+            if not any('phase=wait-exit' in l and 'result=0' in l for l in lines):
+                raise AssertionError(f'childrc: child was not reaped within the bound: {result.stderr}')
+            if any('phase=ownership-unknown' in l or 'phase=recovery' in l for l in lines):
+                raise AssertionError(f'childrc: failed through another branch: {result.stderr}')
+            print(f'caller-control={mode} rc={result.returncode} child-status=42')
+        else:
+            print(f'caller-control={mode} rc={result.returncode}')
     # The test body reaches its final successful command, but another child
     # still owns fd3. A marker/individual assertion is not a suite EOF proof.
     fixture=root/'pipe.bats'
