@@ -132,9 +132,11 @@ class PilotGateCleanupRoundA(SignalGuardedCase):
         )
         self.assertEqual(set(CL.SOURCE_BY_CHECK), set(CL.CHECKS))
         self.assertEqual(CL.SOURCE_BY_CHECK["F5"], "provider-readback")
-        self.assertIn("pid", CL.VOLATILE_KEYS)
-        self.assertIn("observedAt", CL.VOLATILE_KEYS)
-        self.assertNotIn("verdict", CL.VOLATILE_KEYS)
+        self.assertEqual(
+            CL.LIVE_RAW_FILES, ("input.raw", "stdout.raw", "stderr.raw")
+        )
+        self.assertNotIn("phase", CL.LIVE_CONTROL_FIELDS)
+        self.assertNotIn("observedAt", CL.LIVE_CONTROL_FIELDS)
 
     def test_utc_now_is_millisecond_utc_with_z(self):
         value = CL.utc_now()
@@ -1469,45 +1471,6 @@ class PilotGateCleanupRoundC(SignalGuardedCase):
 class PilotGateCleanupRoundD(SignalGuardedCase):
     """Live-PM comparison and result/assertion helpers."""
 
-    # --- scrub / normalize -----------------------------------------------
-
-    def test_scrub_volatile_removes_volatile_keys_recursively_sorted(self):
-        value = {
-            "z": 1,
-            "pid": 99,
-            "observedAt": "t",
-            "nested": [{"timestamp": 1, "keep": [{"elapsed": 2, "k": 3}]}],
-            "a": "x",
-        }
-        scrubbed = CL.scrub_volatile(value)
-        self.assertEqual(
-            scrubbed,
-            {"a": "x", "nested": [{"keep": [{"k": 3}]}], "z": 1},
-        )
-        self.assertEqual(list(scrubbed), ["a", "nested", "z"])
-        self.assertEqual(CL.scrub_volatile("pid"), "pid")
-        self.assertEqual(CL.scrub_volatile([1, "t"]), [1, "t"])
-        self.assertEqual(value["pid"], 99)  # input not mutated
-
-    def test_normalized_file_value_json_text_and_invalid(self):
-        json_file = self.root / "r.json"
-        json_file.write_text('{"b": 1, "pid": 5, "a": {"startedAt": 1}}')
-        self.assertEqual(CL.normalized_file_value(json_file),
-                         {"a": {}, "b": 1})
-
-        broken = self.root / "bad.json"
-        broken.write_text("  {not json  \n")
-        self.assertEqual(CL.normalized_file_value(broken), "{not json")
-
-        text = self.root / "out.txt"
-        text.write_bytes(b"  deny \xff\n")
-        self.assertEqual(CL.normalized_file_value(text), "deny �")
-
-        # JSON content in a non-.json file is compared as text.
-        other = self.root / "response"
-        other.write_text('{"pid": 1}')
-        self.assertEqual(CL.normalized_file_value(other), '{"pid": 1}')
-
     # --- choose_exit_value -----------------------------------------------
 
     def test_choose_exit_value_requires_one_consistent_integer(self):
@@ -1547,51 +1510,18 @@ class PilotGateCleanupRoundD(SignalGuardedCase):
         self.assertEqual(CL.choose_exit_value(d),
                          (0, [str(d / "exit-ok")]))
 
-    # --- semantic_candidates ---------------------------------------------
-
-    def test_semantic_candidates_selects_keyword_files(self):
-        d = self.root / "d"
-        (d / "hooks").mkdir(parents=True)
-        (d / "deny-response.json").write_text('{"decision": "deny", "pid": 3}')
-        (d / "hooks" / "semantic.txt").write_text("blocked\n")
-        (d / "Decision.log").write_text("x")
-        (d / "guard.sha256").write_text("abc")
-        (d / "deny-exit").write_text("2")
-        (d / "notes.txt").write_text("irrelevant")
-        (d / "response-link").symlink_to(d / "notes.txt")
-        self.assertEqual(
-            CL.semantic_candidates(d),
-            (
-                {
-                    "deny-response.json": {"decision": "deny"},
-                    str(Path("hooks") / "semantic.txt"): "blocked",
-                    "Decision.log": "x",
-                },
-                [],
-            ),
-        )
-        self.assertEqual(CL.semantic_candidates(self.root / "none"), ({}, []))
-
-    def test_semantic_candidates_excludes_guard_digest_even_under_keyword(self):
-        # guard.sha256 is compared by its own check; under a directory
-        # whose name contains a keyword it must still be excluded here.
-        d = self.root / "d"
-        (d / "deny-hook").mkdir(parents=True)
-        (d / "deny-hook" / "guard.sha256").write_text("abc")
-        (d / "deny-hook" / "decision.txt").write_text("deny")
-        self.assertEqual(
-            CL.semantic_candidates(d),
-            ({str(Path("deny-hook") / "decision.txt"): "deny"}, []),
-        )
-
     # --- compare_live_pm -------------------------------------------------
 
     def live_fixture(self, *, before=None, after=None):
         artifact = self.root / "art"
+        # The artifacts run_live_pm_control() writes (Issue #406). Detailed
+        # live-PM cases live in tests/test_pilot_gate_live_pm.py.
         defaults = {
             "guard.sha256": "digest-1",
-            "deny-exit": "2",
-            "deny-response.json": json.dumps({"decision": "deny"}),
+            "exit-status": "2",
+            "input.raw": "{}\n",
+            "stdout.raw": "",
+            "stderr.raw": "denied\n",
         }
         for side, files in (("before", before), ("after", after)):
             directory = artifact / "live-pm" / side
@@ -1664,10 +1594,10 @@ class PilotGateCleanupRoundD(SignalGuardedCase):
 
     def test_compare_live_pm_exit_values(self):
         cases = (
-            ({"after": {"deny-exit": "0"}}, "fail", 1),
-            ({"after": {"deny-exit": None}}, "unknown", 2),
-            ({"before": {"deny-exit": "x"}}, "unknown", 2),
-            ({"after": {"exit-extra": "3"}}, "unknown", 2),  # ambiguous
+            ({"after": {"exit-status": "0"}}, "fail", 1),
+            ({"after": {"exit-status": None}}, "unknown", 2),
+            ({"before": {"exit-status": "x"}}, "unknown", 2),
+            ({"after": {"extra-exit": "3"}}, "unknown", 2),  # ambiguous
         )
         for fixture, verdict, rc_expected in cases:
             with self.subTest(fixture=fixture):
@@ -1679,20 +1609,14 @@ class PilotGateCleanupRoundD(SignalGuardedCase):
 
     def test_compare_live_pm_semantic_values(self):
         cases = (
-            ({"after": {"deny-response.json":
-                        json.dumps({"decision": "allow"})}}, "fail"),
-            # volatile keys are ignored
-            ({"after": {"deny-response.json":
-                        json.dumps({"decision": "deny", "pid": 7})}}, "pass"),
-            # a semantic file missing on one side is a mutation
-            ({"after": {"deny-response.json": None}}, "fail"),
-            ({"before": {"deny-response.json": None},
-              "after": {"deny-response.json": None}}, "unknown"),
-            # different file sets on the two sides
-            ({"before": {"deny-response.json": None,
-                         "semantic-a.txt": "x"},
-              "after": {"deny-response.json": None,
-                        "semantic-b.txt": "x"}}, "fail"),
+            ({"after": {"stdout.raw": "x"}}, "fail"),
+            # raw bytes are not normalized
+            ({"after": {"stderr.raw": "denied\n\n"}}, "fail"),
+            ({"after": {"stdout.raw": None}}, "fail"),
+            ({"before": {"input.raw": None, "stdout.raw": None,
+                         "stderr.raw": None},
+              "after": {"input.raw": None, "stdout.raw": None,
+                        "stderr.raw": None}}, "unknown"),
         )
         for fixture, verdict in cases:
             with self.subTest(fixture=fixture):
@@ -1704,7 +1628,7 @@ class PilotGateCleanupRoundD(SignalGuardedCase):
     def test_compare_live_pm_fail_wins_over_unknown(self):
         rc, result, _ = self.compare(
             self.live_fixture(after={"guard.sha256": "other",
-                                     "deny-exit": None}),
+                                     "exit-status": None}),
         )
         self.assertEqual(rc, 1)
         self.assertEqual(result["verdict"], "fail")
