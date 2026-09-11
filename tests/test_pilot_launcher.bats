@@ -1718,3 +1718,36 @@ EOF
   [ "$guard_path_env" = "$SCRIPTS/pm-pilot-pretool-guard" ]
   [ "$broker_path_env" = "$SCRIPTS/p2-consumer-broker.sh" ]
 }
+
+# --- #423: a repository without a runtime DB --------------------------------
+
+@test "pilot launcher: a fresh repository without a runtime DB initialises it and claims" {
+  join_pilot
+  # setup_test_env creates the DB; a disposable gate copy does not have one.
+  rm -f "$DBPATH" "$DBPATH-wal" "$DBPATH-shm"
+  [ ! -e "$DBPATH" ]
+
+  run run_fresh
+
+  [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
+  [ "$(fake_launch_count)" -eq 1 ]
+  [ -f "$DBPATH" ]
+  [ -f "$(binding_file 1)" ]
+}
+
+@test "pilot launcher: a store that cannot be initialised stops before the claim" {
+  join_pilot
+  rm -f "$DBPATH" "$DBPATH-wal" "$DBPATH-shm"
+  # A regular file where the storage directory must be: nothing can be
+  # created there, so initialisation fails.
+  rm -rf "$AGMSG_STORAGE_PATH"
+  : > "$AGMSG_STORAGE_PATH"
+
+  run run_fresh
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"runtime store initialization failed"* ]] ||
+    { echo "unexpected output: $output" >&2; return 1; }
+  [ "$(fake_launch_count)" -eq 0 ]
+  assert_no_claim_file
+}

@@ -415,6 +415,14 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# The actas claim takes the runtime lock in the skill's runtime DB, which a
+# fresh repository (a disposable gate copy, a new install) may not have yet:
+# agmsg_runtime_lock_acquire then fails without a word (#423). Initialise the
+# store the same way, and at the same point, as the live actas path
+# (actas-claim.sh) instead of writing a separate initialisation here.
+agmsg_storage_ensure_initialized ||
+  die "runtime store initialization failed"
+
 CLAIM_OUTPUT=""
 
 if CLAIM_OUTPUT="$(
