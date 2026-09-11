@@ -1206,6 +1206,51 @@ class PilotGateI1RoundA(unittest.TestCase):
             ),
         )
 
+    def test_exact_broker_command_issue_record_uses_form_b(self):
+        broker = Path("/tmp/gate/scripts/p2-consumer-broker.sh")
+        config = Path("/tmp/gate/config.json")
+        request = Path("/tmp/gate/issue-record.json")
+        gh_config = Path("/tmp/gate/run/gh-config")
+        self.assertEqual(
+            I1.exact_broker_command(
+                broker, config, "issue-record", request, gh_config
+            ),
+            f"{broker} --config {config} --gh-config-dir {gh_config} "
+            f"issue-record < {request}",
+        )
+
+    def test_exact_broker_command_issue_record_requires_gh_config_dir(self):
+        # Form A issue-record is refused by the broker
+        # (gh_config_dir_required); the harness refuses to build it.
+        with self.assertRaisesRegex(RuntimeError, "requires gh_config_dir"):
+            I1.exact_broker_command(
+                Path("/b"), Path("/c"), "issue-record", Path("/r")
+            )
+
+    def test_exact_broker_command_gh_config_dir_only_for_issue_record(self):
+        for operation in ("receive", "delegate", "collect-result",
+                          "observe-owner"):
+            with self.subTest(operation=operation):
+                with self.assertRaisesRegex(
+                    RuntimeError, "only valid for issue-record"
+                ):
+                    I1.exact_broker_command(
+                        Path("/b"), Path("/c"), operation, Path("/r"),
+                        Path("/g"),
+                    )
+
+    def test_exact_broker_command_checks_gh_config_dir_token(self):
+        for unsafe in (Path("/tmp/gh config"), Path("/tmp/gh;rm"),
+                       Path("/tmp/gh$(id)"), Path("/tmp/gh`id`")):
+            with self.subTest(unsafe=str(unsafe)):
+                with self.assertRaisesRegex(
+                    RuntimeError, "I1 paths contain shell"
+                ):
+                    I1.exact_broker_command(
+                        Path("/b"), Path("/c"), "issue-record", Path("/r"),
+                        unsafe,
+                    )
+
     def test_exact_broker_command_rejects_unsafe_path_tokens(self):
         safe = Path(
             "/tmp/gate/file.json"
@@ -4727,7 +4772,8 @@ class PilotGateI1RoundDRunI1(unittest.TestCase):
                             lambda broker,
                             config,
                             operation,
-                            request:
+                            request,
+                            gh_config_dir=None:
                                 operation
                         ),
                     )
@@ -5601,6 +5647,30 @@ class PilotGateI1RoundDRunI1(unittest.TestCase):
                     "knownCollectResultGapPreserved"
                 ]
             )
+
+    def test_only_issue_record_gets_the_disposable_gh_config_dir(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            args = self.make_args(root)
+
+            with self.harness(args) as harness:
+                I1.run_i1(args)
+
+            gh_config = Path(args.run_root).resolve() / "gh-config"
+            self.assertTrue(gh_config.is_dir())
+            calls = harness["exact_broker_command"].call_args_list
+            by_operation = {c.args[2]: c.args for c in calls}
+            self.assertEqual(
+                set(by_operation),
+                {"receive", "delegate", "collect-result", "issue-record",
+                 "observe-owner"},
+            )
+            for operation, call_args in by_operation.items():
+                with self.subTest(operation=operation):
+                    expected = (
+                        gh_config if operation == "issue-record" else None
+                    )
+                    self.assertEqual(call_args[4], expected)
 
     def test_issue_record_success_merges_gh_checks_and_verifies_both_receipts_once(
         self,
