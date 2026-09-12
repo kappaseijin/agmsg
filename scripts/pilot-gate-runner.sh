@@ -62,6 +62,9 @@ F3_HELPER="$SCRIPT_DIR/lib/pilot-gate-f3.py"
 F4_HELPER="$SCRIPT_DIR/lib/pilot-gate-f4.py"
 F5_HELPER="$SCRIPT_DIR/lib/pilot-gate-f5.py"
 CLEANUP_HELPER="$SCRIPT_DIR/lib/pilot-gate-cleanup.py"
+# The one start path for the native pilot (#426); the Python helpers use
+# the same module through pilot-gate-i1.NativePilot.
+PTY_HELPER="$SCRIPT_DIR/lib/pilot-pty.py"
 
 # Liveness of the launcher pids this runner spawns goes through
 # _agmsg_pid_alive_local (EPERM-aware, ps cross-check), never a bare
@@ -297,6 +300,10 @@ validate_static_inputs() {
   [ -x "$CLEANUP_HELPER" ] ||
     usage_error \
       "cleanup helper unavailable or not executable: $CLEANUP_HELPER"
+
+  [ -x "$PTY_HELPER" ] ||
+    usage_error \
+      "pty helper unavailable or not executable: $PTY_HELPER"
 
   [ -d "$SOURCE" ] ||
     usage_error \
@@ -1025,12 +1032,56 @@ record_process_command() {
   return 1
 }
 
+# Wait for the pty helper to report the launcher's PID. Fails if the helper
+# exits first or nothing valid appears in time.
+wait_for_launcher_pid() {
+  local pid_file="$1"
+  local helper_pid="$2"
+  local deadline
+  local pid
+
+  deadline=$((SECONDS + N1_START_TIMEOUT_SECONDS))
+
+  while [ "$SECONDS" -le "$deadline" ]; do
+    if [ -f "$pid_file" ]; then
+      pid="$(cat "$pid_file" 2>/dev/null || true)"
+      if _agmsg_pid_valid "$pid" 2147483647; then
+        printf '%s\n' "$pid"
+        return 0
+      fi
+    fi
+
+    _agmsg_pid_alive_local "$helper_pid" ||
+      return 1
+
+    sleep 0.2
+  done
+
+  return 1
+}
+
+# Stop an N1 case: the launcher (if known), then the pty helper holding its
+# terminal, and reap the helper so no background job is left behind.
+stop_native_case() {
+  local launcher_pid="$1"
+  local helper_pid="$2"
+
+  if [ -n "$launcher_pid" ]; then
+    terminate_native_process "$launcher_pid"
+  fi
+
+  if [ -n "$helper_pid" ]; then
+    terminate_native_process "$helper_pid"
+    wait "$helper_pid" >/dev/null 2>&1 || true
+  fi
+}
+
 launch_n1_case() {
   local mode="$1"
   local expected_generation="$2"
   local expected_session="${3:-}"
   local case_dir="$ARTIFACT_DIR/N1/$mode"
-  local fifo="$case_dir/stdin.fifo"
+  local pty_helper_pid
   local launcher_pid
   local binding
   local session_id
@@ -1048,48 +1099,48 @@ launch_n1_case() {
     internal_error \
       "cannot create N1/$mode artifact directory"
 
-  rm -f "$fifo"
-  mkfifo "$fifo" ||
-    internal_error \
-      "cannot create N1/$mode stdin fifo"
+  # Start the launcher inside a pseudo terminal (#426). With a FIFO or a
+  # file as stdin, Claude Code runs in --print mode and exits at once
+  # ("Input must be provided either through stdin or as a prompt argument
+  # when using --print"); the live PM is an interactive session, and so is
+  # the pilot. The helper writes the launcher's PID (the launcher execs
+  # claude, so it is also claude's PID) to launcher-pid.
+  rm -f "$case_dir/launcher-pid"
 
-  # Open FIFO read/write so the launcher receives a live stdin but the harness
-  # does not need to inject arbitrary conversation text merely to prove N1.
-  exec 9<> "$fifo"
+  (
+    export_isolated_environment
 
-  if [ "$mode" = "fresh" ]; then
-    (
-      export_isolated_environment
-
-      exec "$GATE_REPO/scripts/pilot-launcher.sh" \
+    exec python3 "$PTY_HELPER" run \
+      --log "$case_dir/pty.raw" \
+      --pid-file "$case_dir/launcher-pid" \
+      --cwd "$GATE_REPO" \
+      -- \
+      "$GATE_REPO/scripts/pilot-launcher.sh" \
         --team "$GATE_TEAM" \
         --project "$GATE_REPO" \
-        --fresh
-    ) \
-      < "$fifo" \
-      > "$case_dir/stdout.raw" \
-      2> "$case_dir/stderr.raw" 3>&- 4>&- &
+        "--$mode"
+  ) \
+    > "$case_dir/stdout.raw" \
+    2> "$case_dir/stderr.raw" 3>&- 4>&- &
 
-    launcher_pid="$!"
-  else
-    (
-      export_isolated_environment
+  pty_helper_pid="$!"
 
-      exec "$GATE_REPO/scripts/pilot-launcher.sh" \
-        --team "$GATE_TEAM" \
-        --project "$GATE_REPO" \
-        --resume
-    ) \
-      < "$fifo" \
-      > "$case_dir/stdout.raw" \
-      2> "$case_dir/stderr.raw" 3>&- 4>&- &
+  if ! launcher_pid="$(
+    wait_for_launcher_pid \
+      "$case_dir/launcher-pid" \
+      "$pty_helper_pid"
+  )"; then
+    log \
+      "N1/$mode: the pty helper did not report a launcher PID"
 
-    launcher_pid="$!"
+    stop_native_case "" "$pty_helper_pid"
+
+    printf '%s\n' "unknown" > "$case_dir/verdict"
+    CASE_STATUS="$EX_GATE_UNKNOWN"
+    return "$EX_GATE_UNKNOWN"
   fi
 
   CURRENT_NATIVE_PID="$launcher_pid"
-  printf '%s\n' "$launcher_pid" \
-    > "$case_dir/launcher-pid"
 
   if ! binding="$(
     wait_for_binding \
@@ -1099,8 +1150,7 @@ launch_n1_case() {
     log \
       "N1/$mode: binding was not positively observed"
 
-    exec 9>&-
-    terminate_native_process "$launcher_pid"
+    stop_native_case "$launcher_pid" "$pty_helper_pid"
     CURRENT_NATIVE_PID=""
 
     printf '%s\n' "unknown" \
@@ -1119,8 +1169,7 @@ launch_n1_case() {
   session_id="$(
     json_field "$binding" sessionId
   )" || {
-    exec 9>&-
-    terminate_native_process "$launcher_pid"
+    stop_native_case "$launcher_pid" "$pty_helper_pid"
     CURRENT_NATIVE_PID=""
     printf '%s\n' "unknown" > "$case_dir/verdict"
     CASE_STATUS="$EX_GATE_UNKNOWN"
@@ -1141,8 +1190,7 @@ launch_n1_case() {
     ${expected_session:+--expected-session "$expected_session"} || validation_status="$?"
 
   if [ "$validation_status" -ne 0 ]; then
-    exec 9>&-
-    terminate_native_process "$launcher_pid"
+    stop_native_case "$launcher_pid" "$pty_helper_pid"
     CURRENT_NATIVE_PID=""
 
     case "$validation_status" in
@@ -1163,7 +1211,7 @@ launch_n1_case() {
   # Therefore a binding without a still-live process is insufficient proof that
   # the native Claude process actually started.
   if ! _agmsg_pid_alive_local "$launcher_pid"; then
-    exec 9>&-
+    stop_native_case "" "$pty_helper_pid"
     CURRENT_NATIVE_PID=""
 
     printf '%s\n' "unknown" > "$case_dir/verdict"
@@ -1177,8 +1225,7 @@ launch_n1_case() {
     "$launcher_pid" \
     "$process_command"
   then
-    exec 9>&-
-    terminate_native_process "$launcher_pid"
+    stop_native_case "$launcher_pid" "$pty_helper_pid"
     CURRENT_NATIVE_PID=""
 
     printf '%s\n' "unknown" > "$case_dir/verdict"
@@ -1198,8 +1245,7 @@ launch_n1_case() {
     --settings "$GATE_REPO/.claude/settings.local.json" || validation_status="$?"
 
   if [ "$validation_status" -ne 0 ]; then
-    exec 9>&-
-    terminate_native_process "$launcher_pid"
+    stop_native_case "$launcher_pid" "$pty_helper_pid"
     CURRENT_NATIVE_PID=""
 
     case "$validation_status" in
@@ -1222,8 +1268,7 @@ launch_n1_case() {
     log \
       "N1/$mode: native transcript not uniquely observed"
 
-    exec 9>&-
-    terminate_native_process "$launcher_pid"
+    stop_native_case "$launcher_pid" "$pty_helper_pid"
     CURRENT_NATIVE_PID=""
 
     printf '%s\n' "unknown" > "$case_dir/verdict"
@@ -1237,17 +1282,10 @@ launch_n1_case() {
     > "$case_dir/transcript-path"
 
   # End the session after all required live observations have been captured.
-  #
-  # Closing stdin gives the native CLI a chance to end normally. TERM/KILL are
-  # only bounded fallbacks. Full runtime cleanup belongs to a later Part.
-  exec 9>&-
-
-  sleep 1
-
-  terminate_native_process "$launcher_pid"
+  # TERM, then KILL after the grace period; the pty helper then exits with the
+  # launcher. Full runtime cleanup belongs to a later Part.
+  stop_native_case "$launcher_pid" "$pty_helper_pid"
   CURRENT_NATIVE_PID=""
-
-  wait "$launcher_pid" >/dev/null 2>&1 || true
 
   printf '%s\n' "pass" > "$case_dir/verdict"
 

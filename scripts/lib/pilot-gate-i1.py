@@ -31,6 +31,16 @@ SAFE_PATH_TOKEN = re.compile(r"^[A-Za-z0-9_./:-]+$")
 CREDENTIAL_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
 
 
+def _load_pty_helper():
+    path = pathlib.Path(__file__).resolve().parent / "pilot-pty.py"
+    spec = importlib.util.spec_from_file_location("pilot_pty", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load module: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def load_iso(script_dir: pathlib.Path):
     path = script_dir / "pilot-gate-isolation.py"
     spec = importlib.util.spec_from_file_location("pilot_gate_isolation", path)
@@ -456,15 +466,14 @@ class NativePilot:
     def start(self) -> None:
         previous = current_generation(self.gate_repo, self.team)
         self.generation = previous + 1
-        master, slave = pty.openpty()
-        self.master = master
         # No AGMSG_PM_* reaches the launcher from the harness: live PM
         # state must not leak into the pilot (#415). The launcher clears
         # and re-sets them as well.
         env = {key: value for key, value in self.env.items() if not key.startswith("AGMSG_PM_")}
         argv = [str(self.launcher), "--team", self.team, "--project", str(self.gate_repo), "--fresh"]
-        self.proc = subprocess.Popen(argv, cwd=self.gate_repo, env=env, stdin=slave, stdout=slave, stderr=slave, close_fds=True, start_new_session=True)
-        os.close(slave)
+        # The one start path for every native pilot (#426): N1 in the runner
+        # uses the same helper through its command line.
+        self.proc, self.master = _load_pty_helper().spawn(argv, cwd=self.gate_repo, env=env)
         binding_path, binding = wait_binding(self.gate_repo, self.team, self.generation, self.proc, self.timeout, self.pump)
         session = binding.get("sessionId")
         if not isinstance(session, str) or not UUID_RE.fullmatch(session):
