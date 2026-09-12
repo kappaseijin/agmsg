@@ -342,22 +342,33 @@ EOF
     foreign_launcher=$!
 
     _reap_diag_phase snapshot
-    snapshot=''; bridge_pid=''; i=0
+    snapshot=''; bridge_pid=''; ready=0; i=0
     for i in {1..100}; do
       snapshot="$(_launcher_snapshot_owned_pids)"
+      bridge_pid=''
+      if [ -s "$RUN_DIR/codex-bridge.team.alice.pid" ]; then
+        bridge_pid="$(cat "$RUN_DIR/codex-bridge.team.alice.pid")"
+      fi
+      case "$bridge_pid" in
+        ''|*[!0-9]*|0) bridge_pid='' ;;
+      esac
       if [ -n "$snapshot" ] \
-        && [ -s "$RUN_DIR/codex-bridge.team.alice.pid" ] \
+        && [ -n "$bridge_pid" ] \
+        && printf '%s\n' "$snapshot" | grep -Fxq "$dispatcher" \
+        && printf '%s\n' "$snapshot" | grep -Fxq "$bridge_pid" \
         && kill -0 "$foreign" 2>/dev/null \
         && kill -0 "$foreign_launcher" 2>/dev/null; then
+        ready=1
         break
       fi
       sleep 0.1
     done
     _reap_diag_pid_set
-    [ -n "$snapshot" ]
+    if [ "$ready" -ne 1 ]; then
+      _reap_diag_log readiness-timeout 1 "snapshot=$snapshot bridge_pid=${bridge_pid:-empty}"
+      exit 1
+    fi
     _reap_diag_phase bridge-ready
-    bridge_pid="$(cat "$RUN_DIR/codex-bridge.team.alice.pid")"
-    [ -n "$bridge_pid" ]
     _reap_diag_pid_set
     _reap_diag_phase owned-live
     kill -0 "$dispatcher"
