@@ -295,7 +295,7 @@ teardown() {
     cat "$out" "$log" >&2 2>/dev/null || true
     false
   fi
-  if ! wait_for_file_contains "$log" "storage_read_cursor_consume failed"; then
+  if ! wait_for_file_contains "$log" "team/carol: storage_read_cursor_consume failed"; then
     kill "$watcher" 2>/dev/null || true
     wait "$watcher" 2>/dev/null || true
     cat "$out" "$log" >&2 2>/dev/null || true
@@ -310,6 +310,65 @@ teardown() {
   [ "$status" -eq 0 ]
   run grep -F "team/carol: storage_read_cursor_consume failed" "$log"
   [ "$status" -eq 0 ]
+  run grep -F "status 13" "$log"
+  [ "$status" -eq 0 ]
+}
+
+@test "watch: recipient-specific consume wait does not accept alice control log" {
+  local out="$BATS_TEST_TMPDIR/watch-consume-recipient-control.out"
+  local log="$RUN_DIR/watch.sid-consume-recipient-control.log"
+  local barrier="$BATS_TEST_TMPDIR/consume-recipient-control"
+  local watcher
+
+  # alice has no unread messages, but watch still consumes its cursor. Hold
+  # carol after stdout and before its consume failure so alice's cursor-only
+  # diagnostic deterministically satisfies the legacy generic needle first.
+  bash "$SCRIPTS/send.sh" team alice carol consume-recipient-control-marker >/dev/null
+  export AGMSG_STORAGE_DRIVER=sqlite
+  export AGMSG_TEST_CONSUME_BARRIER="$barrier"
+  printf '%s\n' '' 'storage_read_cursor_consume() {' \
+    '  if [ "$2" = carol ] && [ -n "${AGMSG_TEST_CONSUME_BARRIER:-}" ]; then' \
+    '    : > "$AGMSG_TEST_CONSUME_BARRIER.reached"' \
+    '    local attempts=0' \
+    '    while [ ! -e "$AGMSG_TEST_CONSUME_BARRIER.release" ]; do' \
+    '      sleep 0.05' \
+    '      attempts=$((attempts + 1))' \
+    '      [ "$attempts" -ge 200 ] && break' \
+    '    done' \
+    '  fi' \
+    '  return 13' \
+    '}' >> "$SCRIPTS/drivers/storage/sqlite.sh"
+
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" sid-consume-recipient-control "$PROJ" claude-code \
+    >"$out" 2>/dev/null 3>&- 4>&- &
+  watcher=$!
+  if ! wait_for_file_contains "$out" "consume-recipient-control-marker" \
+    || ! wait_for_file "$barrier.reached" \
+    || ! wait_for_file_contains "$log" "storage_read_cursor_consume failed"; then
+    : > "$barrier.release"
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+    cat "$out" "$log" >&2 2>/dev/null || true
+    false
+  fi
+
+  # The generic needle has matched alice's cursor-only failure, but carol is
+  # still blocked. A recipient-specific readiness predicate cannot pass here.
+  run grep -F "team/alice: storage_read_cursor_consume failed" "$log"
+  [ "$status" -eq 0 ]
+  run grep -F "team/carol: storage_read_cursor_consume failed" "$log"
+  [ "$status" -ne 0 ]
+
+  : > "$barrier.release"
+  if ! wait_for_file_contains "$log" "team/carol: storage_read_cursor_consume failed"; then
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+    cat "$out" "$log" >&2 2>/dev/null || true
+    false
+  fi
+  kill "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+
   run grep -F "status 13" "$log"
   [ "$status" -eq 0 ]
 }
