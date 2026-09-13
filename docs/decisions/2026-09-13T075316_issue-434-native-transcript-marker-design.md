@@ -75,6 +75,24 @@ flowchart TD
   G --> H[停止後にfresh/resume関係を照合]
 ```
 
+### 3.0 前提条件: N1はPTY起動に限る
+
+本設計の「promptを1回送り、transcriptを観測する」は、**N1のnative CLIが
+`scripts/lib/pilot-pty.py`経由のPTYで起動され、runnerがそのchildのPTY master FDへ書ける**
+ことを前提とする。PTYで起動していなければpromptを送れず、promptを送らなければtranscriptは
+生成されない（§2のT4〜T6）。
+
+- N1の起動経路は、現行の`pilot-gate-runner.sh`が`pilot-pty.py run`を呼ぶ経路だけとする。
+- prompt送信の直前に、送信先がspawn済みchildのPTY master FDであることを確かめる。
+  FDを確保できない、childがPTY配下で起動していない、または確かめられない場合は、
+  **promptを送らず（送信回数0）、そのcaseを`unknown`とする。**
+- その場合に、stdin・FIFO・file・別プロセスのpane入力など**代わりの入力経路を試さない**。
+  代替経路はCLIの対話modeを変え得るうえ、PTY前提の観測と別の事象を測ることになる（§5手順1）。
+- この前提の不成立を`fail`や`pass`へ変換しない。`pilot_ready=false`を維持する。
+
+§3.2の「FD不在は`unknown`」は送信時点の失敗を扱う。本節は、そもそもPTY起動でない状態を
+送信前に検出して止めることを定める。
+
 ### 3.1 入力前提をN1のidentity contractから分離する
 
 テーマ選択・login choice・folder trust確認は、markerを投入してよい準備完了画面へ至るための
@@ -158,6 +176,7 @@ passとしてしまう」ことである。従って通常の正しいfixtureだ
 | N1M-06 | 探索root外の正しい候補、root内は0件 | unknown | home/別sessionを誤探索 |
 | N1M-07 | master writeをpartial/EIOにする | unknown、送信record=1、retry=0 | 送信失敗の隠蔽・重複入力 |
 | N1M-08 | 無送信で短い観測窓を通す旧経路 | passにならない | 25秒0件を永続的不生成または成功と誤読 |
+| N1M-09 | PTY master FDを持たない起動（例: pipe stdinでchildを起動、またはFDを送信前に閉じる） | unknown、送信record=0、代替入力0 | PTY前提（§3.0）の不成立を見逃し、別経路で入力する・passにする |
 
 N1M-01/02は実pilot settings、実launcher、固定CLI版を用いる独立smokeの候補である。fixture testは
 PTY/input、candidate selection、三値、counterを決定的に検査するが、native smokeを代替しない。
@@ -184,5 +203,6 @@ smokeが示すのは、固定CLI版・実pilot settings/launcher経路でmarker�
 4. old session、root外、複数候補、別file結合、I/O/parse不明は`unknown`である。
 5. tokenその他の秘密値は出力・記録されない。
 6. fixture controlsと実native smokeを分け、smokeをgate受入へ代用しない。
+7. N1はPTY起動に限り、PTY master FDを確保できないcaseはpromptを送らず`unknown`とし、代替入力経路を試さない（§3.0、N1M-09）。
 
 非対象は実装、PR作成、全gate再実行、live pilot起動、physical migration、README変更である。
