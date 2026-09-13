@@ -1299,14 +1299,20 @@ launch_n1_case() {
   printf '%s\n' "$marker" > "$case_dir/marker.txt"
   prompt="Reply with exactly this marker once. Do not use tools, commands, files, or network: $marker"
   printf '%s\n' "$prompt" > "$case_dir/prompt.txt"
+  # Exactly one attempt per case, recorded before it is made: a failed or
+  # partial write is still one input, and is never retried (design 3.2,
+  # N1M-07). input-result records whether the whole prompt reached the PTY.
+  printf '%s\n' "1" > "$case_dir/input-count"
   if ! python3 "$PTY_HELPER" send --socket "$control_socket" --input "$case_dir/prompt.txt"; then
+    printf '%s\n' "error" > "$case_dir/input-result"
+    log "N1/$mode: the prompt did not reach the native PTY in full"
     printf '%s\n' "unknown" > "$case_dir/verdict"
     CASE_STATUS="$EX_GATE_UNKNOWN"
     stop_native_case "$launcher_pid" "$pty_helper_pid"
     CURRENT_NATIVE_PID=""
     return "$EX_GATE_UNKNOWN"
   fi
-  printf '%s\n' "1" > "$case_dir/input-count"
+  printf '%s\n' "ok" > "$case_dir/input-result"
 
   if ! transcript="$(
     wait_for_transcript "$session_id" "$marker"

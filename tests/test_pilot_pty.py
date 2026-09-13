@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import importlib.util
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -158,6 +160,32 @@ class SmallTests(unittest.TestCase):
             PTY.write_pid_file(path, 4242)
             self.assertEqual(path.read_text(), "4242\n")
             self.assertEqual(sorted(p.name for p in path.parent.iterdir()), ["launcher-pid"])
+
+
+class WriteMasterTests(unittest.TestCase):
+    # #434 N1M-07: only a complete write counts as the prompt reaching the PTY.
+    def test_complete_write_is_ok(self) -> None:
+        read_end, write_end = os.pipe()
+        try:
+            self.assertEqual(PTY.write_master(write_end, b"marker\n"), 0)
+            self.assertEqual(os.read(read_end, 64), b"marker\n")
+        finally:
+            os.close(read_end)
+            os.close(write_end)
+
+    def test_partial_write_is_an_error(self) -> None:
+        with mock.patch.object(PTY.os, "write", return_value=3):
+            self.assertEqual(PTY.write_master(99, b"marker\n"), 1)
+
+    def test_eio_is_an_error(self) -> None:
+        with mock.patch.object(PTY.os, "write", side_effect=OSError(errno.EIO, "EIO")):
+            self.assertEqual(PTY.write_master(99, b"marker\n"), 1)
+
+    def test_closed_descriptor_is_an_error(self) -> None:
+        read_end, write_end = os.pipe()
+        os.close(read_end)
+        os.close(write_end)
+        self.assertEqual(PTY.write_master(write_end, b"marker\n"), 1)
 
 
 class CommandLineTests(Base):

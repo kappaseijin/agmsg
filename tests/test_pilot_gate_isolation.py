@@ -5842,6 +5842,64 @@ class PilotGateIsolationN1ProcessAndTranscriptTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertEqual(result.stdout.strip(), str(config / "session.jsonl"))
 
+    # #434 controls: sessionId and marker must be proven by the same single
+    # file inside the searched root; everything else is not a pass.
+    N1_MARKER = "AGMSG_N1_TRANSCRIPT_MARKER_run_fresh_nonce"
+
+    def find_with_marker(self, config: Path):
+        return self.run_cli(
+            "find-transcript",
+            "--claude-config", str(config),
+            "--session-id", self.SESSION_ID,
+            "--marker", self.N1_MARKER,
+        )
+
+    def test_n1m03_marker_in_another_session_is_not_found(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp).resolve() / "claude"
+            self.write_transcript(config / "other.jsonl", [{"sessionId": self.OTHER_SESSION_ID, "text": self.N1_MARKER}])
+            result = self.find_with_marker(config)
+            self.assertEqual(result.returncode, 1, result.stdout)
+            self.assertEqual(result.stdout.strip(), "")
+
+    def test_n1m04_session_and_marker_in_different_files_are_not_joined(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp).resolve() / "claude"
+            self.write_transcript(config / "old.jsonl", [{"sessionId": self.SESSION_ID, "text": "earlier turn"}])
+            self.write_transcript(config / "marker.jsonl", [{"text": self.N1_MARKER}])
+            result = self.find_with_marker(config)
+            self.assertEqual(result.returncode, 1, result.stdout)
+            self.assertEqual(result.stdout.strip(), "")
+
+    def test_n1m05_two_files_with_session_and_marker_are_ambiguous(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp).resolve() / "claude"
+            record = [{"sessionId": self.SESSION_ID, "text": self.N1_MARKER}]
+            self.write_transcript(config / "a" / "one.jsonl", record)
+            self.write_transcript(config / "b" / "two.jsonl", record)
+            result = self.find_with_marker(config)
+            self.assertEqual(result.returncode, 2, result.stdout)
+            self.assertEqual(result.stdout.strip(), "")
+
+    def test_n1m06_a_match_outside_the_searched_root_is_not_found(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            config = root / "claude"
+            config.mkdir()
+            self.write_transcript(root / "home" / "session.jsonl", [{"sessionId": self.SESSION_ID, "text": self.N1_MARKER}])
+            result = self.find_with_marker(config)
+            self.assertEqual(result.returncode, 1, result.stdout)
+            self.assertEqual(result.stdout.strip(), "")
+
+    def test_n1m08_a_session_transcript_without_the_marker_is_not_found(self):
+        # The old path: a session file exists but no prompt was ever answered.
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp).resolve() / "claude"
+            self.write_transcript(config / "session.jsonl", [{"sessionId": self.SESSION_ID, "text": "no marker here"}])
+            result = self.find_with_marker(config)
+            self.assertEqual(result.returncode, 1, result.stdout)
+            self.assertEqual(result.stdout.strip(), "")
+
     def test_find_transcript_finds_single_nested_match_even_when_filename_has_no_session_id(
         self,
     ):
