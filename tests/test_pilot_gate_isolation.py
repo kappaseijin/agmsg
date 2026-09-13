@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -7629,3 +7630,55 @@ class PilotGateIsolationN1InputPreconditionTests(unittest.TestCase):
             json.loads(text)["claudeAuthEnvironmentPresent"],
             {key: True for key in ISOLATION.CLAUDE_AUTH_ENV_KEYS},
         )
+
+
+class PilotGateIsolationN1ExecClassificationTests(unittest.TestCase):
+    """#448 section 3: classification details the runner fixtures cannot pin."""
+
+    def test_an_exited_unreaped_launcher_is_absent_not_unrecognized(self):
+        # ps shows an exited child its parent has not waited for as
+        # "<defunct>"; that is a launcher that is gone.
+        child = subprocess.Popen([sys.executable, "-c", "pass"])
+        try:
+            deadline = time.monotonic() + 10
+            while ISOLATION.read_process_stat(child.pid)[:1] != "Z":
+                self.assertLess(time.monotonic(), deadline, "child never became a zombie")
+                time.sleep(0.05)
+            cls, argv, _ = ISOLATION.observe_n1_process(
+                child.pid,
+                launcher="/nonexistent/pilot-launcher.sh",
+                claude_bin="/nonexistent/claude",
+                claude_bin_canonical="/nonexistent/claude",
+            )
+            self.assertEqual((cls, argv), ("absent", None))
+        finally:
+            child.wait()
+
+    def test_the_launcher_is_recognised_as_interpreter_argument_or_directly(self):
+        with tempfile.TemporaryDirectory() as temp:
+            launcher = Path(os.path.realpath(temp)) / "pilot-launcher.sh"
+            launcher.write_text("", encoding="utf-8")
+            for command in (f"bash {launcher} --fresh", f"{launcher} --fresh"):
+                with self.subTest(command=command):
+                    cls, _ = ISOLATION.classify_n1_process(
+                        command, True,
+                        launcher=str(launcher),
+                        claude_bin="/nonexistent/claude",
+                        claude_bin_canonical="/nonexistent/claude",
+                    )
+                    self.assertEqual(cls, "launcher")
+            for command, alive, expected in (
+                (None, False, "absent"),
+                (None, True, "unrecognized"),
+                ("", True, "unrecognized"),
+                ("unterminated 'quote", True, "unrecognized"),
+                ("sleep 60", True, "unrecognized"),
+            ):
+                with self.subTest(command=command, alive=alive):
+                    cls, _ = ISOLATION.classify_n1_process(
+                        command, alive,
+                        launcher=str(launcher),
+                        claude_bin="/nonexistent/claude",
+                        claude_bin_canonical="/nonexistent/claude",
+                    )
+                    self.assertEqual(cls, expected)
