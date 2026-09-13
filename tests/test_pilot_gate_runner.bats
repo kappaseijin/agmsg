@@ -1472,7 +1472,6 @@ prepare_n1_marker_case() {
   wait_for_n1_ready() { :; }
   wait_for_binding() { sleep 1; printf '%s\n' "$TEST_ROOT/binding.json"; }
   json_field() { printf '%s\n' "123e4567-e89b-42d3-a456-426614174000"; }
-  record_process_command() { printf '%s\n' "claude" > "$2"; }
   wait_for_transcript() {
     printf '%s|%s\n' "$1" "$2" >> "$TEST_ROOT/transcript-calls"
     return 1
@@ -1623,7 +1622,6 @@ EOF
 
   wait_for_binding() { sleep 1; printf '%s\n' "$TEST_ROOT/binding.json"; }
   json_field() { printf '%s\n' "123e4567-e89b-42d3-a456-426614174000"; }
-  record_process_command() { printf '%s\n' "claude" > "$2"; }
   wait_for_transcript() { printf '%s\n' "$2" >> "$TEST_ROOT/transcript-calls"; return 1; }
 }
 
@@ -1777,4 +1775,192 @@ import json, sys
 data = json.load(open(sys.argv[1]))
 assert data["projects"][sys.argv[2]]["hasTrustDialogAccepted"] is True, data
 ' "$GATE_CLAUDE_CONFIG/.claude.json" "$GATE_REPO"
+}
+
+# --- #448: N1 observes the launcher's exec into claude -----------------------
+
+N1E_SESSION="123e4567-e89b-42d3-a456-426614174000"
+
+# A real launcher PID whose command line changes the way the native one does:
+# `bash .../pilot-launcher.sh` first, then (optionally) an exec whose argv[0]
+# is the configured claude path. The stand-in keeps running as /bin/sh so the
+# PID stays alive with that argv.
+prepare_n1_exec_case() {
+  local behaviour="$1"
+
+  prepare_n1_precondition_case ready
+  CLAUDE_BIN="$RUN_ROOT/bin/claude"
+  mkdir -p "$RUN_ROOT/bin" "$GATE_REPO/.claude"
+  : > "$RUN_ROOT/bin/claude-real"
+  chmod +x "$RUN_ROOT/bin/claude-real"
+  ln -s "$RUN_ROOT/bin/claude-real" "$CLAUDE_BIN"
+  CLAUDE_BIN_CANONICAL="$RUN_ROOT/bin/claude-real"
+  printf '%s\n' '{}' > "$GATE_REPO/.claude/settings.local.json"
+  printf '%s\n' '{}' > "$RUN_ROOT/other-settings.json"
+
+  printf '%s\n' "$behaviour" > "$GATE_REPO/exec-behaviour"
+  printf '%s\n' "$CLAUDE_BIN" > "$GATE_REPO/exec-argv0"
+  printf '%s\n' "$N1E_SESSION" > "$GATE_REPO/exec-session"
+
+  cat > "$GATE_REPO/scripts/pilot-launcher.sh" <<'EOF'
+#!/usr/bin/env bash
+repo="$(cd "$(dirname "$0")/.." && pwd)"
+argv0="$(cat "$repo/exec-argv0")"
+session="$(cat "$repo/exec-session")"
+settings="$repo/.claude/settings.local.json"
+become_claude() {
+  exec -a "$argv0" /bin/sh -c 'sleep 60; :' sh "$@"
+}
+read -r behaviour delay < "$repo/exec-behaviour"
+case "$behaviour" in
+  exec-after) sleep "$delay"; become_claude --session-id "$session" --settings "$settings" ;;
+  stay) printf '%s\n' "pilot-launcher: still before exec"; sleep 60 ;;
+  exit-after) sleep "$delay"; printf '%s\n' "pilot-launcher: roster preflight failed"; exit 3 ;;
+  unrecognized) exec sleep 60 ;;
+  other-settings) become_claude --session-id "$session" --settings "$repo/../other-settings.json" ;;
+  fresh-args) become_claude --session-id "$session" --settings "$settings" ;;
+  canonical-argv0) argv0="$(cd "$(dirname "$argv0")" && pwd -P)/claude-real"; become_claude --session-id "$session" --settings "$settings" ;;
+esac
+EOF
+  chmod +x "$GATE_REPO/scripts/pilot-launcher.sh"
+
+  # The real helper also observes the exec; other isolation checks accept.
+  local real_isolation="$SCRIPTS/lib/pilot-gate-isolation.py"
+  cat > "$ISOLATION_HELPER" <<EOF
+import os, sys
+if sys.argv[1:2] and sys.argv[1] in ("prewrite-claude-config", "observe-n1-exec", "n1-auth", "write-n1-result"):
+    os.execv(sys.executable, [sys.executable, "$real_isolation", *sys.argv[1:]])
+raise SystemExit(0)
+EOF
+  json_field() { printf '%s\n' "$N1E_SESSION"; }
+  wait_for_n1_ready() { printf '%s\n' reached >> "$TEST_ROOT/ready-calls"; return 1; }
+}
+
+n1e_field() {
+  python3 -c 'import json,sys; v=json.load(open(sys.argv[1]))
+for k in sys.argv[2].split("."): v=v[int(k)] if isinstance(v, list) else v[k]
+print(json.dumps(v) if not isinstance(v, str) else v)' "$1" "$2"
+}
+
+@test "#448 N1E-01: a launcher that execs claude a little after the binding passes the exec check" {
+  # The binding stub takes about a second, so exec at 3 s is observed as a
+  # launcher first and as claude about 2 s later.
+  prepare_n1_exec_case "exec-after 3"
+
+  local case_status=0
+  launch_n1_case fresh 1 || case_status="$?"
+
+  local record="$ARTIFACT_DIR/N1/fresh/exec-observation.json"
+  [ "$(n1e_field "$record" result)" = "claude_matched" ] ||
+    { cat "$record" "$ARTIFACT_DIR/N1/fresh/stderr.raw" >&2; return 1; }
+  [ "$(n1e_field "$record" transitions.0.class)" = "launcher" ]
+  [ "$(n1e_field "$record" transitions.1.class)" = "claude" ]
+  python3 -c 'import json,sys; e=json.load(open(sys.argv[1]))["elapsedSecondsToClaude"]; assert 0.8 <= e <= 5, e' "$record"
+  # Passed the exec check: the case went on to the readiness wait.
+  [ "$(n1p_count "$TEST_ROOT/ready-calls")" = "1" ]
+}
+
+@test "#448 N1E-02: a launcher that never execs is unknown exec_not_observed, never fail" {
+  prepare_n1_exec_case stay
+
+  local case_status=0
+  launch_n1_case fresh 1 || case_status="$?"
+
+  local case_dir="$ARTIFACT_DIR/N1/fresh"
+  [ "$case_status" -eq "$EX_GATE_UNKNOWN" ] ||
+    { echo "status $case_status: $(cat "$case_dir/verdict")" >&2; cat "$case_dir/exec-observation.json" >&2; return 1; }
+  [ "$(cat "$case_dir/verdict")" = "unknown" ]
+  [ "$(cat "$case_dir/reason")" = "exec_not_observed" ]
+  [ -s "$case_dir/launcher-stat.txt" ]
+  grep -qF "still before exec" "$case_dir/launcher-output-tail.txt"
+  grep -qF "pilot-launcher.sh" "$case_dir/process-command.raw"
+  [ "$(n1e_field "$case_dir/exec-late-observation.json" lateClass)" = "launcher" ]
+  [ "$(n1p_count "$TEST_ROOT/ready-calls")" = "0" ]
+}
+
+@test "#448 N1E-03: claude with a different --settings is fail claude_args_mismatch" {
+  prepare_n1_exec_case other-settings
+
+  local case_status=0
+  launch_n1_case fresh 1 || case_status="$?"
+
+  local case_dir="$ARTIFACT_DIR/N1/fresh"
+  [ "$case_status" -eq "$EX_GATE_FAIL" ] ||
+    { echo "status $case_status" >&2; cat "$case_dir/exec-observation.json" >&2; return 1; }
+  [ "$(cat "$case_dir/verdict")" = "fail" ]
+  [ "$(cat "$case_dir/reason")" = "claude_args_mismatch" ]
+}
+
+@test "#448 N1E-04: a launcher that exits before exec is unknown launcher_exited_before_exec" {
+  prepare_n1_exec_case "exit-after 1"
+
+  local case_status=0
+  launch_n1_case fresh 1 || case_status="$?"
+
+  local case_dir="$ARTIFACT_DIR/N1/fresh"
+  [ "$case_status" -eq "$EX_GATE_UNKNOWN" ]
+  [ "$(cat "$case_dir/reason")" = "launcher_exited_before_exec" ] ||
+    { cat "$case_dir/exec-observation.json" >&2; return 1; }
+  grep -qF "pilot-launcher: roster preflight failed" "$case_dir/launcher-output-tail.txt"
+  [ "$(cat "$case_dir/launcher-stat.txt")" = "absent" ]
+}
+
+@test "#448 N1E-05: an unrecognised process is unknown at once, without waiting for the timeout" {
+  prepare_n1_exec_case unrecognized
+
+  local started="$SECONDS"
+  local case_status=0
+  launch_n1_case fresh 1 || case_status="$?"
+
+  local case_dir="$ARTIFACT_DIR/N1/fresh"
+  [ "$case_status" -eq "$EX_GATE_UNKNOWN" ]
+  [ "$(cat "$case_dir/reason")" = "process_identity_unrecognized" ] ||
+    { cat "$case_dir/exec-observation.json" >&2; return 1; }
+  python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["pollCount"] <= 3, r' "$case_dir/exec-observation.json"
+  [ ! -e "$case_dir/exec-late-observation.json" ]
+}
+
+@test "#448 N1E-06: an exec after the timeout stays unknown; the late observation records claude" {
+  # Observation starts about 1 s after launch and ends 10 s later; exec at
+  # 13 s lands inside the 5 s late window.
+  prepare_n1_exec_case "exec-after 13"
+
+  local case_status=0
+  launch_n1_case fresh 1 || case_status="$?"
+
+  local case_dir="$ARTIFACT_DIR/N1/fresh"
+  [ "$case_status" -eq "$EX_GATE_UNKNOWN" ]
+  [ "$(cat "$case_dir/reason")" = "exec_not_observed" ]
+  [ "$(n1e_field "$case_dir/exec-late-observation.json" lateClass)" = "claude" ] ||
+    { cat "$case_dir/exec-late-observation.json" >&2; return 1; }
+  [ "$(n1e_field "$case_dir/exec-observation.json" elapsedSecondsToClaude)" = "null" ]
+  [ "$(n1p_count "$TEST_ROOT/ready-calls")" = "0" ]
+}
+
+@test "#448 N1E-07: claude with fresh args in the resume case is fail claude_args_mismatch" {
+  prepare_n1_exec_case fresh-args
+
+  local case_status=0
+  launch_n1_case resume 2 "$N1E_SESSION" || case_status="$?"
+
+  local case_dir="$ARTIFACT_DIR/N1/resume"
+  [ "$case_status" -eq "$EX_GATE_FAIL" ] ||
+    { cat "$case_dir/exec-observation.json" >&2; return 1; }
+  [ "$(cat "$case_dir/reason")" = "claude_args_mismatch" ]
+}
+
+@test "#448 N1E-08: a symlinked CLAUDE_BIN is recognised by its path and by its canonical target" {
+  local behaviour
+  for behaviour in "exec-after 0" canonical-argv0; do
+    prepare_n1_exec_case "$behaviour"
+    rm -f "$TEST_ROOT/ready-calls"
+
+    local case_status=0
+    launch_n1_case fresh 1 || case_status="$?"
+
+    local record="$ARTIFACT_DIR/N1/fresh/exec-observation.json"
+    [ "$(n1e_field "$record" result)" = "claude_matched" ] ||
+      { echo "$behaviour" >&2; cat "$record" "$ARTIFACT_DIR/N1/fresh/process-command.raw" >&2; return 1; }
+    rm -rf "$RUN_ROOT"
+  done
 }

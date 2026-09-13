@@ -3125,8 +3125,28 @@ def command_validate_process_command(
     if not argv:
         return 2
 
+    return process_argv_matches(
+        argv,
+        mode=args.mode,
+        session_id=args.session_id,
+        settings=args.settings,
+    )
+
+
+def process_argv_matches(
+    argv: list[str],
+    *,
+    mode: str,
+    session_id: str,
+    settings: str,
+) -> int:
+    """The N1 argv rule: 0 matches, 1 does not match, 2 cannot judge.
+
+    Shared by validate-process-command and observe-n1-exec (#448), which
+    applies it only to a process already classified as claude.
+    """
     settings_real = canonical(
-        args.settings
+        settings
     )
 
     expected_settings_seen = False
@@ -3151,13 +3171,13 @@ def command_validate_process_command(
             expected_settings_seen = True
             break
 
-    if args.mode == "fresh":
+    if mode == "fresh":
         session_seen = (
             find_option_value(
                 argv,
                 "--session-id",
             )
-            == args.session_id
+            == session_id
         )
 
         resume_seen = (
@@ -3171,13 +3191,13 @@ def command_validate_process_command(
             and expected_settings_seen
         )
 
-    elif args.mode == "resume":
+    elif mode == "resume":
         session_seen = (
             find_option_value(
                 argv,
                 "--resume",
             )
-            == args.session_id
+            == session_id
         )
 
         fresh_seen = (
@@ -4002,6 +4022,277 @@ def add_n1_input_precondition_commands(subparsers: Any) -> None:
     command.set_defaults(handler=command_wait_n1_ready)
 
 
+# --- #448: observe the launcher's exec into claude ---------------------------
+
+
+def _real(path: str) -> str | None:
+    try:
+        return os.path.realpath(path)
+    except (OSError, ValueError):
+        return None
+
+
+def read_process_command(pid: int) -> str | None:
+    try:
+        result = subprocess.run(
+            ["ps", "-ww", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def read_process_stat(pid: int) -> str:
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "stat="],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "absent"
+    value = result.stdout.strip()
+    return value if result.returncode == 0 and value else "absent"
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def classify_n1_process(
+    command: str | None,
+    alive: bool,
+    *,
+    launcher: str,
+    claude_bin: str,
+    claude_bin_canonical: str,
+) -> tuple[str, list[str] | None]:
+    """Classify one observation of the launcher PID (#448 section 3)."""
+    if command is None:
+        return ("unrecognized" if alive else "absent"), None
+    if not command:
+        return "unrecognized", None
+    try:
+        argv = shlex.split(command, posix=True)
+    except ValueError:
+        return "unrecognized", None
+    if not argv:
+        return "unrecognized", None
+
+    launcher_real = _real(launcher)
+    for token in argv[:2]:
+        if launcher_real is not None and _real(token) == launcher_real:
+            return "launcher", argv
+
+    if argv[0] == claude_bin or _real(argv[0]) == claude_bin_canonical:
+        return "claude", argv
+    return "unrecognized", argv
+
+
+def observe_n1_process(
+    pid: int,
+    *,
+    launcher: str,
+    claude_bin: str,
+    claude_bin_canonical: str,
+) -> tuple[str, list[str] | None, str | None]:
+    """One observation: class, argv, raw command line."""
+    command = read_process_command(pid)
+    alive = pid_alive(pid) if command is None else True
+    cls, argv = classify_n1_process(
+        command,
+        alive,
+        launcher=launcher,
+        claude_bin=claude_bin,
+        claude_bin_canonical=claude_bin_canonical,
+    )
+    if cls == "unrecognized" and read_process_stat(pid).startswith("Z"):
+        # An exited launcher its parent has not reaped yet ("<defunct>").
+        return "absent", None, None
+    return cls, argv, command
+
+
+def command_observe_n1_exec(
+    args: argparse.Namespace,
+) -> int:
+    """Watch the launcher PID until it has exec'ed into claude (#448).
+
+    pass (0): claude with the expected args. fail (1): claude with other
+    args, the only fail. unknown (2): never reached claude, the PID exited,
+    or an unrecognised process. The launcher's own command line is never
+    put through the args rule.
+    """
+    import time
+
+    case_dir = pathlib.Path(args.case_dir)
+    started = time.monotonic()
+    deadline = started + args.timeout
+    transitions: list[dict[str, Any]] = []
+    last_class: str | None = None
+    last_command: str | None = None
+    poll_count = 0
+    elapsed_to_claude: float | None = None
+
+    try:
+        binding_mtime = dt.datetime.fromtimestamp(
+            os.stat(args.binding).st_mtime, dt.timezone.utc
+        ).astimezone().isoformat(timespec="milliseconds")
+    except OSError:
+        binding_mtime = None
+
+    def observe() -> tuple[str, list[str] | None, float]:
+        nonlocal last_class, last_command, poll_count
+        cls, argv, command = observe_n1_process(
+            args.pid,
+            launcher=args.launcher,
+            claude_bin=args.claude_bin,
+            claude_bin_canonical=args.claude_bin_canonical,
+        )
+        elapsed = round(time.monotonic() - started, 3)
+        poll_count += 1
+        if command:
+            last_command = command
+        if cls != last_class:
+            transitions.append({"elapsedSeconds": elapsed, "class": cls})
+            last_class = cls
+        return cls, argv, elapsed
+
+    def record(result: str) -> None:
+        write_json(
+            case_dir / "exec-observation.json",
+            {
+                "schemaVersion": 1,
+                "result": result,
+                "timeoutSeconds": args.timeout,
+                "pollIntervalSeconds": args.poll,
+                "bindingObservedElapsedFromLauncherStart": args.binding_observed_elapsed,
+                "bindingFileMtime": binding_mtime,
+                "elapsedSecondsToClaude": elapsed_to_claude,
+                "pollCount": poll_count,
+                "transitions": transitions,
+            },
+        )
+        (case_dir / "process-command.raw").write_text(
+            (last_command or "") + "\n", encoding="utf-8"
+        )
+
+    def record_unreached() -> None:
+        (case_dir / "launcher-stat.txt").write_text(
+            read_process_stat(args.pid) + "\n", encoding="utf-8"
+        )
+        final = read_process_command(args.pid)
+        if final:
+            (case_dir / "process-command.raw").write_text(final + "\n", encoding="utf-8")
+        try:
+            with open(args.pty_raw, "rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                size = fh.tell()
+                fh.seek(max(0, size - 4096))
+                tail = fh.read().decode("utf-8", errors="replace")
+        except OSError:
+            tail = ""
+        (case_dir / "launcher-output-tail.txt").write_text(
+            strip_terminal_escapes(tail), encoding="utf-8"
+        )
+
+    result: str
+    while True:
+        cls, argv, elapsed = observe()
+        if cls == "claude":
+            elapsed_to_claude = elapsed
+            status = process_argv_matches(
+                argv or [],
+                mode=args.mode,
+                session_id=args.session_id,
+                settings=args.settings,
+            )
+            if status == 0:
+                record("claude_matched")
+                return 0
+            if status == 1:
+                record("claude_args_mismatch")
+                return 1
+            result = "process_identity_unrecognized"
+            break
+        if cls == "absent":
+            result = "launcher_exited_before_exec"
+            break
+        if cls == "unrecognized":
+            result = "process_identity_unrecognized"
+            break
+        if time.monotonic() >= deadline:
+            result = "exec_not_observed"
+            break
+        time.sleep(args.poll)
+
+    record(result)
+    record_unreached()
+
+    if result == "exec_not_observed":
+        # Section 6.3: keep watching without changing the verdict, to tell a
+        # late exec from a launcher that never gets there.
+        late_started = time.monotonic()
+        late_deadline = late_started + args.late_window
+        late_class = last_class
+        late_elapsed: float | None = None
+        while time.monotonic() < late_deadline:
+            time.sleep(args.poll)
+            late_class, _, _ = observe_n1_process(
+                args.pid,
+                launcher=args.launcher,
+                claude_bin=args.claude_bin,
+                claude_bin_canonical=args.claude_bin_canonical,
+            )
+            if late_class != "launcher":
+                if late_class == "claude":
+                    late_elapsed = round(time.monotonic() - started, 3)
+                break
+        write_json(
+            case_dir / "exec-late-observation.json",
+            {
+                "lateWindowSeconds": args.late_window,
+                "lateClass": late_class,
+                "lateElapsedSecondsToClaude": late_elapsed,
+            },
+        )
+    return 2
+
+
+def add_n1_exec_observation_command(subparsers: Any) -> None:
+    command = subparsers.add_parser("observe-n1-exec")
+    command.add_argument("--pid", required=True, type=int)
+    command.add_argument("--launcher", required=True)
+    command.add_argument("--claude-bin", required=True)
+    command.add_argument("--claude-bin-canonical", required=True)
+    command.add_argument("--mode", required=True, choices=("fresh", "resume"))
+    command.add_argument("--session-id", required=True)
+    command.add_argument("--settings", required=True)
+    command.add_argument("--binding", required=True)
+    command.add_argument("--binding-observed-elapsed", required=True, type=float)
+    command.add_argument("--pty-raw", required=True)
+    command.add_argument("--case-dir", required=True)
+    command.add_argument("--timeout", required=True, type=float)
+    command.add_argument("--poll", required=True, type=float)
+    command.add_argument("--late-window", required=True, type=float)
+    command.set_defaults(handler=command_observe_n1_exec)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -4663,6 +4954,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     add_n1_input_precondition_commands(subparsers)
+    add_n1_exec_observation_command(subparsers)
 
     return parser
 

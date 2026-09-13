@@ -44,6 +44,11 @@ readonly DEFAULT_COLLECTOR_CUTOFF_SECONDS=180
 readonly N1_START_TIMEOUT_SECONDS=30
 readonly N1_TRANSCRIPT_TIMEOUT_SECONDS=20
 readonly N1_EXIT_GRACE_SECONDS=5
+# #448: after the binding is observed, how long the launcher PID is watched
+# for its exec into claude, and how often. A separate budget from
+# N1_START_TIMEOUT_SECONDS so an unobserved exec means only that.
+readonly N1_EXEC_TIMEOUT_SECONDS=10
+readonly N1_EXEC_POLL_SECONDS=0.2
 # #444 section 5: how long to wait for the native prompt input, and the CLI
 # versions whose ready/blocking screen texts the verifier has observed. Add a
 # version only after the verifier has measured it.
@@ -1032,20 +1037,6 @@ terminate_native_process() {
   return 0
 }
 
-record_process_command() {
-  local pid="$1"
-  local output="$2"
-
-  if ps -ww -p "$pid" -o command= \
-    > "$output" 2>/dev/null
-  then
-    return 0
-  fi
-
-  : > "$output"
-  return 1
-}
-
 # Wait for the pty helper to report the launcher's PID. Fails if the helper
 # exits first or nothing valid appears in time.
 wait_for_launcher_pid() {
@@ -1132,13 +1123,19 @@ wait_for_n1_ready() {
 
 # The reason recorded by a precondition helper, or the given fallback.
 n1_record_reason() {
+  n1_record_reason_field "$1" reason "$2"
+}
+
+# A string field of a helper's JSON record, or the given fallback.
+n1_record_reason_field() {
   local record="$1"
-  local fallback="$2"
+  local field="$2"
+  local fallback="$3"
   local reason
 
   reason="$(
-    python3 -c 'import json,sys; r=json.load(open(sys.argv[1])).get("reason"); print(r if isinstance(r, str) and r else "")' \
-      "$record" 2>/dev/null
+    python3 -c 'import json,sys; r=json.load(open(sys.argv[1])).get(sys.argv[2]); print(r if isinstance(r, str) and r else "")' \
+      "$record" "$field" 2>/dev/null
   )" || reason=""
 
   printf '%s\n' "${reason:-$fallback}"
@@ -1159,6 +1156,8 @@ launch_n1_case() {
   local validation_status
   local control_socket
   local prompt
+  local launch_started_seconds
+  local binding_observed_elapsed
 
   CASE_BINDING=""
   CASE_SESSION=""
@@ -1220,6 +1219,7 @@ launch_n1_case() {
     2> "$case_dir/stderr.raw" 3>&- 4>&- &
 
   pty_helper_pid="$!"
+  launch_started_seconds="$SECONDS"
 
   if ! launcher_pid="$(
     wait_for_launcher_pid \
@@ -1303,46 +1303,38 @@ launch_n1_case() {
     esac
   fi
 
-  # The immutable binding is written immediately before launcher exec.
-  # Therefore a binding without a still-live process is insufficient proof that
-  # the native Claude process actually started.
-  if ! _agmsg_pid_alive_local "$launcher_pid"; then
-    stop_native_case "" "$pty_helper_pid"
-    CURRENT_NATIVE_PID=""
-
-    printf '%s\n' "unknown" > "$case_dir/verdict"
-    CASE_STATUS="$EX_GATE_UNKNOWN"
-    return "$EX_GATE_UNKNOWN"
-  fi
-
-  process_command="$case_dir/process-command.raw"
-
-  if ! record_process_command \
-    "$launcher_pid" \
-    "$process_command"
-  then
-    stop_native_case "$launcher_pid" "$pty_helper_pid"
-    CURRENT_NATIVE_PID=""
-
-    printf '%s\n' "unknown" > "$case_dir/verdict"
-    CASE_STATUS="$EX_GATE_UNKNOWN"
-    return "$EX_GATE_UNKNOWN"
-  fi
-
-  CASE_PROCESS_COMMAND="$(
-    cat "$process_command"
-  )"
-
+  # The launcher publishes the binding and then still checks its claim, the
+  # roster and the profile/guard/broker digests (several node starts) before
+  # it execs claude (#448). The launcher PID may therefore still be the
+  # launcher here. Watch it until it has become claude, and only then judge
+  # the argv; the launcher's own command line is never an args mismatch.
+  binding_observed_elapsed="$((SECONDS - launch_started_seconds))"
   validation_status=0
-  python3 "$ISOLATION_HELPER" validate-process-command \
-    --command-file "$process_command" \
+  python3 "$ISOLATION_HELPER" observe-n1-exec \
+    --pid "$launcher_pid" \
+    --launcher "$GATE_REPO/scripts/pilot-launcher.sh" \
+    --claude-bin "$CLAUDE_BIN" \
+    --claude-bin-canonical "$CLAUDE_BIN_CANONICAL" \
     --mode "$mode" \
     --session-id "$session_id" \
-    --settings "$GATE_REPO/.claude/settings.local.json" || validation_status="$?"
+    --settings "$GATE_REPO/.claude/settings.local.json" \
+    --binding "$binding" \
+    --binding-observed-elapsed "$binding_observed_elapsed" \
+    --pty-raw "$case_dir/pty.raw" \
+    --case-dir "$case_dir" \
+    --timeout "$N1_EXEC_TIMEOUT_SECONDS" \
+    --poll "$N1_EXEC_POLL_SECONDS" \
+    --late-window "$N1_EXIT_GRACE_SECONDS" || validation_status="$?"
+
+  process_command="$case_dir/process-command.raw"
+  CASE_PROCESS_COMMAND="$(cat "$process_command" 2>/dev/null || true)"
 
   if [ "$validation_status" -ne 0 ]; then
+    CASE_REASON="$(n1_record_reason_field "$case_dir/exec-observation.json" result process_identity_unrecognized)"
+    log "N1/$mode: exec into claude not confirmed: $CASE_REASON"
     stop_native_case "$launcher_pid" "$pty_helper_pid"
     CURRENT_NATIVE_PID=""
+    printf '%s\n' "$CASE_REASON" > "$case_dir/reason"
 
     case "$validation_status" in
       1)
