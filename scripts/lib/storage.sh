@@ -346,7 +346,12 @@ agmsg_runtime_lock_acquire() {
   resource="$1"; owner_pid="$2"; expected_owner="${3:-}"
   case "$owner_pid:$expected_owner" in *[!0-9:]*) return 1 ;; esac
   db="$(_agmsg_runtime_db_path)"
-  _agmsg_runtime_db_exists "$db" || return 1
+  if ! _agmsg_runtime_db_exists "$db"; then
+    # Leave a diagnostic (#424). The status stays 1. Keep the words busy and
+    # locked out of this line: actas-lock.sh retries stderr that matches them.
+    printf 'agmsg_runtime_lock_acquire: runtime db missing: %s\n' "$db" >&2
+    return 1
+  fi
   resource_sql="$(_agmsg_runtime_lock_resource_sql "$resource")"
   sql=".bail on
 BEGIN IMMEDIATE;

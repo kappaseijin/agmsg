@@ -213,6 +213,36 @@ SH
   [ ! -e "$AGMSG_STORAGE_PATH/messages.db" ]
 }
 
+@test "storage: runtime lock acquire on an absent store says why on stderr and keeps status 1" {
+  # #424: the refusal used to be silent.
+  export AGMSG_STORAGE_PATH="$BATS_TEST_TMPDIR/silent-lock-store"
+  source "$SCRIPTS/lib/storage.sh"
+  local err="$BATS_TEST_TMPDIR/lock-acquire.stderr" out rc=0 db
+  db="$(_agmsg_runtime_db_path)"
+
+  out="$(agmsg_runtime_lock_acquire codex-dispatcher:test 111 2>"$err")" || rc=$?
+
+  [ "$rc" -eq 1 ]
+  [ -z "$out" ]
+  [ "$(wc -l < "$err" | tr -d ' ')" -eq 1 ]
+  [ "$(cat "$err")" = "agmsg_runtime_lock_acquire: runtime db missing: $db" ]
+  [ ! -e "$db" ]
+}
+
+@test "storage: runtime lock acquire on a present store writes nothing to stderr" {
+  # Negative control for #424: the diagnostic belongs to the absent-store path only.
+  export AGMSG_STORAGE_PATH="$BATS_TEST_TMPDIR/present-lock-store"
+  source "$SCRIPTS/lib/storage.sh"
+  agmsg_storage_ensure_initialized
+  local err="$BATS_TEST_TMPDIR/lock-acquire-present.stderr" out rc=0
+
+  out="$(agmsg_runtime_lock_acquire codex-dispatcher:test 111 2>"$err")" || rc=$?
+
+  [ "$rc" -eq 0 ]
+  [ "$out" = 111 ]
+  [ ! -s "$err" ]
+}
+
 @test "storage: every runtime lock entrypoint refuses an absent store" {
   export AGMSG_STORAGE_PATH="$BATS_TEST_TMPDIR/absent-lock-store"
   source "$SCRIPTS/lib/storage.sh"
