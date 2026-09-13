@@ -7398,3 +7398,234 @@ class PilotGateIsolationN1StateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PilotGateIsolationN1InputPreconditionTests(unittest.TestCase):
+    """#444 design section 7.1 (N1P) for the isolation helper commands."""
+
+    def run_cli(self, *args: str, env: dict[str, str] | None = None, timeout: float = 60):
+        return subprocess.run(
+            [sys.executable, str(HELPER), *args],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            timeout=timeout,
+            check=False,
+        )
+
+    def setUp(self) -> None:
+        self._temp = tempfile.TemporaryDirectory()
+        self.root = Path(os.path.realpath(self._temp.name))
+        self.run_root = self.root / "run"
+        self.config = self.run_root / "claude"
+        self.repo = str(self.run_root / "repo")
+        self.config.mkdir(parents=True)
+        self.record = self.root / "prewrite.json"
+
+    def tearDown(self) -> None:
+        self._temp.cleanup()
+
+    def prewrite(self, config: Path | None = None):
+        return self.run_cli(
+            "prewrite-claude-config",
+            "--config-dir", str(config or self.config),
+            "--run-root", str(self.run_root),
+            "--gate-repo", self.repo,
+            "--output", str(self.record),
+        )
+
+    def load(self, path: Path):
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    # --- prewrite ----------------------------------------------------------
+
+    def test_n1p_prewrite_writes_the_three_keys_0600_and_reads_them_back(self):
+        result = self.prewrite()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        target = self.config / ".claude.json"
+        self.assertEqual(
+            self.load(target),
+            {
+                "hasCompletedOnboarding": True,
+                "theme": "dark",
+                "projects": {self.repo: {"hasTrustDialogAccepted": True}},
+            },
+        )
+        self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+        record = self.load(self.record)
+        self.assertEqual((record["verdict"], record["readBack"], record["reason"]), ("pass", "verified", None))
+        self.assertEqual(sorted(p.name for p in self.config.iterdir()), [".claude.json"])
+
+    def test_n1p08_other_keys_and_other_projects_are_kept(self):
+        target = self.config / ".claude.json"
+        target.write_text(json.dumps({
+            "numStartups": 3,
+            "theme": "light",
+            "projects": {
+                "/elsewhere": {"hasTrustDialogAccepted": False, "allowedTools": ["x"]},
+                self.repo: {"history": [1]},
+            },
+        }), encoding="utf-8")
+        result = self.prewrite()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.load(target),
+            {
+                "numStartups": 3,
+                "theme": "dark",
+                "hasCompletedOnboarding": True,
+                "projects": {
+                    "/elsewhere": {"hasTrustDialogAccepted": False, "allowedTools": ["x"]},
+                    self.repo: {"history": [1], "hasTrustDialogAccepted": True},
+                },
+            },
+        )
+
+    def test_n1p09_a_symlinked_config_file_is_not_written_through(self):
+        outside = self.root / "real-home-claude.json"
+        outside.write_text('{"keep": true}\n', encoding="utf-8")
+        (self.config / ".claude.json").symlink_to(outside)
+        result = self.prewrite()
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(self.load(self.record)["reason"], "claude_config_unreadable")
+        self.assertEqual(outside.read_text(encoding="utf-8"), '{"keep": true}\n')
+        self.assertTrue((self.config / ".claude.json").is_symlink())
+
+    def test_n1p09_invalid_json_or_non_object_is_not_overwritten(self):
+        target = self.config / ".claude.json"
+        for content in ("{not json", "[1, 2]", '{"projects": []}', '{"projects": {"%s": 1}}' % self.repo):
+            with self.subTest(content=content):
+                target.write_text(content, encoding="utf-8")
+                result = self.prewrite()
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(self.load(self.record)["reason"], "claude_config_unreadable")
+                self.assertEqual(target.read_text(encoding="utf-8"), content)
+
+    def test_n1p10_a_config_directory_outside_run_root_is_not_written(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        linked = self.run_root / "linked-claude"
+        linked.symlink_to(outside)
+        for config in (outside, linked, self.run_root, Path("relative/claude")):
+            with self.subTest(config=str(config)):
+                result = self.prewrite(config)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(self.load(self.record)["reason"], "claude_config_outside_run_root")
+        self.assertFalse((outside / ".claude.json").exists())
+
+    def test_n1p11_a_second_prewrite_restores_a_removed_trust(self):
+        self.assertEqual(self.prewrite().returncode, 0)
+        target = self.config / ".claude.json"
+        data = self.load(target)
+        del data["projects"][self.repo]["hasTrustDialogAccepted"]
+        data["hasCompletedOnboarding"] = False
+        target.write_text(json.dumps(data), encoding="utf-8")
+        result = self.prewrite()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.load(self.record)["readBack"], "verified")
+        data = self.load(target)
+        self.assertIs(data["projects"][self.repo]["hasTrustDialogAccepted"], True)
+        self.assertIs(data["hasCompletedOnboarding"], True)
+
+    # --- readiness ---------------------------------------------------------
+
+    def wait_ready(self, screen: bytes, *, version: str = "2.1.268 (Claude Code)", timeout: float = 1.5, pid: int | None = None):
+        log = self.root / "pty.raw"
+        log.write_bytes(screen)
+        output = self.root / "ready.json"
+        result = self.run_cli(
+            "wait-n1-ready",
+            "--log", str(log),
+            "--pid", str(pid or os.getpid()),
+            "--cli-version", version,
+            "--verified-cli-version", "2.1.268",
+            "--timeout", str(timeout),
+            "--output", str(output),
+        )
+        return result.returncode, self.load(output)["reason"]
+
+    def test_n1p_ready_text_behind_terminal_escapes_is_ready(self):
+        screen = b"\x1b]0;claude\x07\x1b[2m\xe2\x8f\xb8 manual mode on \xc2\xb7 ? for\x1b[0m shortcuts"
+        # The ready text is split by an escape: it only matches once stripped.
+        self.assertNotIn(b"? for shortcuts", screen)
+        self.assertEqual(self.wait_ready(screen), (0, None))
+
+    def test_n1p04_n1p05_a_blocking_screen_wins_over_later_ready_text(self):
+        for text, reason in (
+            (b"Select login method:\r\n", "login_method_screen"),
+            (b"Quick safety check: Is this a project you created or one you trust?\r\n", "trust_dialog_screen"),
+        ):
+            with self.subTest(reason=reason):
+                self.assertEqual(self.wait_ready(text + b"\x1b[2J? for shortcuts"), (2, reason))
+
+    def test_n1p06_nothing_on_screen_times_out_as_not_observed(self):
+        self.assertEqual(self.wait_ready(b"Welcome\r\n", timeout=0.6), (2, "ready_not_observed"))
+
+    def test_n1p07_an_unverified_cli_version_is_not_judged(self):
+        for version in ("2.1.269 (Claude Code)", "", "2.1.2680"):
+            with self.subTest(version=version):
+                self.assertEqual(
+                    self.wait_ready(b"? for shortcuts", version=version),
+                    (2, "ready_patterns_unverified_for_cli_version"),
+                )
+
+    def test_n1p_an_exited_child_is_an_observation_failure(self):
+        child = subprocess.Popen([sys.executable, "-c", "pass"])
+        child.wait()
+        self.assertEqual(self.wait_ready(b"loading", pid=child.pid, timeout=5), (2, "ready_observation_failed"))
+
+    # --- auth and environment ---------------------------------------------
+
+    def test_n1p02_n1p03_token_presence_only(self):
+        base = {k: v for k, v in os.environ.items() if k not in ISOLATION.CLAUDE_AUTH_ENV_KEYS}
+        output = self.root / "auth.json"
+        token = "qqzz-synthetic-" + os.urandom(8).hex()
+        for value, expected, rc in (
+            (None, "absent", 2),
+            ("", "absent", 2),
+            ("qqzz\x1bsynthetic", "absent", 2),
+            (token, "present", 0),
+        ):
+            with self.subTest(value=value):
+                env = dict(base)
+                if value is not None:
+                    env["CLAUDE_CODE_OAUTH_TOKEN"] = value
+                result = self.run_cli("n1-auth", "--output", str(output), env=env)
+                self.assertEqual(result.returncode, rc, result.stderr)
+                text = output.read_text(encoding="utf-8")
+                self.assertEqual(
+                    json.loads(text),
+                    {
+                        "schemaVersion": 1,
+                        "oauthTokenEnv": expected,
+                        "unsetCompetingEnv": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
+                    },
+                )
+                self.assertNotIn(token, text + result.stdout + result.stderr)
+
+    def test_n1p14_capture_environment_records_no_credential_value(self):
+        values = {key: f"qqzz-synthetic-{key}-{os.urandom(6).hex()}" for key in ISOLATION.CLAUDE_AUTH_ENV_KEYS}
+        env = {**os.environ, **values}
+        output = self.root / "environment.json"
+        result = self.run_cli(
+            "capture-environment",
+            "--output", str(output), "--run-id", "run", "--source", str(self.root),
+            "--source-head", "0" * 40, "--live-skill-dir", str(self.root),
+            "--artifact-dir", str(self.root), "--run-root", str(self.run_root),
+            "--gate-team", "team", "--claude-bin", "claude", "--claude-resolved", "claude",
+            "--claude-version", "2.1.268", "--claude-digest", "0" * 64,
+            "--collector-cutoff-seconds", "180",
+            env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = output.read_text(encoding="utf-8")
+        for value in values.values():
+            self.assertNotIn(value, text + result.stdout + result.stderr)
+        # Positive control: presence is recorded for all three names.
+        self.assertEqual(
+            json.loads(text)["claudeAuthEnvironmentPresent"],
+            {key: True for key in ISOLATION.CLAUDE_AUTH_ENV_KEYS},
+        )

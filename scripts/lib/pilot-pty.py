@@ -25,6 +25,7 @@ child writes to the terminal into --log, and exits with the child's status
 from __future__ import annotations
 
 import argparse
+import fcntl
 import os
 import pathlib
 import pty
@@ -32,8 +33,16 @@ import select
 import signal
 import socket
 import subprocess
+import struct
 import sys
+import termios
 from typing import Sequence
+
+
+# #444: the size the verifier observed the native screens at. Without it the
+# pty reports 0x0 and the CLI may wrap or cut the texts the runner looks for.
+TERMINAL_ROWS = 40
+TERMINAL_COLUMNS = 120
 
 
 def spawn(
@@ -50,6 +59,11 @@ def spawn(
     """
     master, slave = pty.openpty()
     try:
+        fcntl.ioctl(
+            slave,
+            termios.TIOCSWINSZ,
+            struct.pack("HHHH", TERMINAL_ROWS, TERMINAL_COLUMNS, 0, 0),
+        )
         proc = subprocess.Popen(
             list(argv),
             cwd=str(cwd),
