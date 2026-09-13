@@ -3255,6 +3255,17 @@ def transcript_has_session(
     return False
 
 
+def transcript_has_marker(
+    path: pathlib.Path,
+    marker: str,
+) -> bool:
+    try:
+        with open(path, "r", encoding="utf-8", errors="strict") as fh:
+            return marker in fh.read()
+    except (OSError, UnicodeError):
+        return False
+
+
 def command_find_transcript(
     args: argparse.Namespace,
 ) -> int:
@@ -3287,22 +3298,12 @@ def command_find_transcript(
 
                 # Fast positive candidate: many Claude layouts use session
                 # UUID as transcript filename.
-                if (
-                    args.session_id
-                    in candidate.name
-                ):
-                    if transcript_has_session(
-                        candidate,
-                        args.session_id,
-                    ):
-                        matches.append(
-                            candidate
-                        )
-                    continue
-
                 if transcript_has_session(
                     candidate,
                     args.session_id,
+                ) and (
+                    not args.marker
+                    or transcript_has_marker(candidate, args.marker)
                 ):
                     matches.append(
                         candidate
@@ -4313,6 +4314,11 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument(
         "--session-id",
         required=True,
+    )
+
+    command.add_argument(
+        "--marker",
+        default="",
     )
 
     command.set_defaults(

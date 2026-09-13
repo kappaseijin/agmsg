@@ -1394,6 +1394,10 @@ EOF
     if _agmsg_pid_alive_local "$2"; then
       printf '%s\n' "$2" > "$TEST_ROOT/alive-after-8s"
     fi
+    # #434: the control socket is bound in the case's private directory.
+    if [ -S "$CURRENT_N1_CONTROL_DIR/control.sock" ]; then
+      printf '%s\n' "$CURRENT_N1_CONTROL_DIR" > "$TEST_ROOT/control-dir"
+    fi
     return 1
   }
 
@@ -1412,6 +1416,13 @@ EOF
     { echo "no terminal output recorded" >&2; return 1; }
   [ "$(cat "$case_dir/launcher-pid")" = "$(cat "$TEST_ROOT/alive-after-8s")" ] ||
     { echo "launcher-pid does not name the observed launcher" >&2; return 1; }
+  # #434: the socket lived in a private directory, removed with the case.
+  [ -s "$TEST_ROOT/control-dir" ] ||
+    { echo "control socket was not bound in a private directory" >&2; return 1; }
+  [ ! -e "$(cat "$TEST_ROOT/control-dir")" ] ||
+    { echo "control directory left behind" >&2; return 1; }
+  [ -z "$CURRENT_N1_CONTROL_DIR" ] ||
+    { echo "control directory still recorded" >&2; return 1; }
   # The case stopped both the launcher and the pty helper.
   ! _agmsg_pid_alive_local "$(cat "$TEST_ROOT/alive-after-8s")"
 }
@@ -1436,4 +1447,76 @@ EOF
   [ "$case_status" -eq "$EX_GATE_UNKNOWN" ]
   [ "$(cat "$UNIT_ARTIFACT/N1/fresh/verdict")" = "unknown" ]
   [ ! -s "$CALL_LOG" ]
+}
+
+# --- #434: one marker prompt per N1 case ------------------------------------
+
+# Carry a case past the binding and process checks (all stubbed) up to the
+# marker prompt, with the real pty helper holding a tty-checking launcher.
+prepare_n1_marker_case() {
+  install_tty_checking_launcher
+  ARTIFACT_DIR="$UNIT_ARTIFACT"
+  GATE_TEAM="gate-team"
+  RUN_ID="run434"
+  PTY_HELPER="$SCRIPTS/lib/pilot-pty.py"
+  printf '%s\n' '{}' > "$TEST_ROOT/binding.json"
+  # The runner calls the isolation helper with python3; accept every check.
+  printf '%s\n' 'raise SystemExit(0)' > "$ISOLATION_HELPER"
+
+  export_isolated_environment() { :; }
+  wait_for_binding() { sleep 1; printf '%s\n' "$TEST_ROOT/binding.json"; }
+  json_field() { printf '%s\n' "123e4567-e89b-42d3-a456-426614174000"; }
+  record_process_command() { printf '%s\n' "claude" > "$2"; }
+  wait_for_transcript() {
+    printf '%s|%s\n' "$1" "$2" >> "$TEST_ROOT/transcript-calls"
+    return 1
+  }
+}
+
+@test "#434 N1M-01: the marker prompt reaches the native PTY once and the transcript wait uses that marker" {
+  prepare_n1_marker_case
+
+  local case_status=0
+  launch_n1_case fresh 1 || case_status="$?"
+
+  local case_dir="$ARTIFACT_DIR/N1/fresh"
+  local marker
+  marker="$(cat "$case_dir/marker.txt")"
+  [[ "$marker" == AGMSG_N1_TRANSCRIPT_MARKER_run434_fresh_* ]] ||
+    { echo "marker: $marker" >&2; return 1; }
+  [ "$(cat "$case_dir/input-count")" = "1" ]
+  [ "$(cat "$case_dir/input-result")" = "ok" ] ||
+    { cat "$case_dir/stderr.raw" >&2; return 1; }
+  grep -qF "$marker" "$case_dir/pty.raw" ||
+    { echo "prompt not seen on the PTY" >&2; return 1; }
+  [ "$(cat "$TEST_ROOT/transcript-calls")" = "123e4567-e89b-42d3-a456-426614174000|$marker" ] ||
+    { cat "$TEST_ROOT/transcript-calls" >&2; return 1; }
+  # No transcript was observed: unknown, never pass.
+  [ "$case_status" -eq "$EX_GATE_UNKNOWN" ]
+}
+
+@test "#434 N1M-07: a prompt that does not reach the PTY is unknown, recorded once and not retried" {
+  prepare_n1_marker_case
+  local real_helper="$PTY_HELPER"
+  PTY_HELPER="$DUMMY_HELPERS/pilot-pty-send-fails.py"
+  cat > "$PTY_HELPER" <<EOF
+import os, sys
+if sys.argv[1:2] == ["send"]:
+    with open("$TEST_ROOT/send-calls", "a") as fh:
+        fh.write("send\n")
+    sys.exit(1)
+os.execv(sys.executable, [sys.executable, "$real_helper", *sys.argv[1:]])
+EOF
+  chmod +x "$PTY_HELPER"
+
+  local case_status=0
+  launch_n1_case fresh 1 || case_status="$?"
+
+  local case_dir="$ARTIFACT_DIR/N1/fresh"
+  [ "$case_status" -eq "$EX_GATE_UNKNOWN" ]
+  [ "$(cat "$case_dir/verdict")" = "unknown" ]
+  [ "$(cat "$case_dir/input-count")" = "1" ]
+  [ "$(cat "$case_dir/input-result")" = "error" ]
+  [ "$(wc -l < "$TEST_ROOT/send-calls" | tr -d ' ')" = "1" ]
+  [ ! -e "$TEST_ROOT/transcript-calls" ]
 }
