@@ -13,7 +13,13 @@ case "$MODE" in
   *) trap 'exit 0' TERM ;;
 esac
 : > "$STOP_ROOT/ready"
-while :; do sleep 1; done
+# `sleep 1 &` + `wait`, not a bare `sleep 1`: bash runs a trap only after the
+# foreground command it is sitting in returns, so a bare sleep defers the TERM
+# handler by however much of that second is left -- 0 to 1s, measured at 0.48s
+# on average. `wait` is interruptible, so the handler runs on arrival: 0.013s
+# on the same measurement. The stop assertions have to fit inside a 2s wait,
+# and that deferral was most of it (#291).
+while :; do sleep 1 & wait $!; done
 SH
   cat > "$STOP_ROOT/driver.sh" <<'SH'
 #!/usr/bin/env bash
@@ -45,6 +51,20 @@ else
 fi
 exit "$rc"
 SH
+}
+
+@test "the watcher exits on TERM without waiting out its sleep (#291)" {
+  # Not a property of watch stop itself -- a property of the fixture the stop
+  # assertions are measured against. A watcher whose trap waits for a running
+  # `sleep` to return spends up to a second of the 2s window doing nothing, and
+  # that deferral was most of what made these tests flaky. TERM is delivered
+  # half a second into a sleep, so a deferring watcher takes ~0.5s here and an
+  # interruptible one takes ~0.01s.
+  local latency
+  latency="$(python3 "$BATS_TEST_DIRNAME/watcher_term_latency.py" \
+    "$STOP_ROOT/watcher.sh" "$STOP_ROOT/ready")"
+  # Hundredths, and well inside the 50 a deferring watcher would report.
+  [ "$latency" -lt 25 ]
 }
 
 @test "bounded watch stop: normal and already-exited children are reaped" {
