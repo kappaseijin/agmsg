@@ -44,6 +44,11 @@ readonly DEFAULT_COLLECTOR_CUTOFF_SECONDS=180
 readonly N1_START_TIMEOUT_SECONDS=30
 readonly N1_TRANSCRIPT_TIMEOUT_SECONDS=20
 readonly N1_EXIT_GRACE_SECONDS=5
+# #444 section 5: how long to wait for the native prompt input, and the CLI
+# versions whose ready/blocking screen texts the verifier has observed. Add a
+# version only after the verifier has measured it.
+readonly N1_READY_TIMEOUT_SECONDS=30
+readonly N1_READY_VERIFIED_CLI_VERSIONS="2.1.268"
 
 SCRIPT_DIR="$(
   cd "$(dirname "$0")" &&
@@ -642,6 +647,10 @@ export_isolated_environment() {
   export XDG_DATA_HOME="$GATE_XDG_DATA"
   export XDG_STATE_HOME="$GATE_XDG_STATE"
   export CLAUDE_CONFIG_DIR="$GATE_CLAUDE_CONFIG"
+  # #444: the pilot authenticates only with CLAUDE_CODE_OAUTH_TOKEN, which is
+  # inherited untouched. Competing credentials would make it unclear which
+  # one the native CLI used.
+  unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
 }
 
 phase_p0_environment_capture() {
@@ -1086,6 +1095,55 @@ stop_native_case() {
   fi
 }
 
+# --- #444: N1 input preconditions -------------------------------------------
+
+# Merge the onboarding/trust keys into the gate's .claude.json and read them
+# back. Runs before every N1 launch: the CLI rewrites the file during fresh.
+prewrite_claude_config() {
+  local case_dir="$1"
+
+  python3 "$ISOLATION_HELPER" prewrite-claude-config \
+    --config-dir "$GATE_CLAUDE_CONFIG" \
+    --run-root "$RUN_ROOT" \
+    --gate-repo "$GATE_REPO" \
+    --output "$case_dir/claude-config-prewrite.json"
+}
+
+# Wait until the native screen shows the prompt input and no blocking screen.
+# Sends nothing to the terminal.
+wait_for_n1_ready() {
+  local case_dir="$1"
+  local pid="$2"
+  local version
+  local -a verified=()
+
+  for version in $N1_READY_VERIFIED_CLI_VERSIONS; do
+    verified+=(--verified-cli-version "$version")
+  done
+
+  python3 "$ISOLATION_HELPER" wait-n1-ready \
+    --log "$case_dir/pty.raw" \
+    --pid "$pid" \
+    --cli-version "$CLAUDE_VERSION" \
+    "${verified[@]}" \
+    --timeout "$N1_READY_TIMEOUT_SECONDS" \
+    --output "$case_dir/ready.json"
+}
+
+# The reason recorded by a precondition helper, or the given fallback.
+n1_record_reason() {
+  local record="$1"
+  local fallback="$2"
+  local reason
+
+  reason="$(
+    python3 -c 'import json,sys; r=json.load(open(sys.argv[1])).get("reason"); print(r if isinstance(r, str) and r else "")' \
+      "$record" 2>/dev/null
+  )" || reason=""
+
+  printf '%s\n' "${reason:-$fallback}"
+}
+
 launch_n1_case() {
   local mode="$1"
   local expected_generation="$2"
@@ -1107,10 +1165,21 @@ launch_n1_case() {
   CASE_TRANSCRIPT=""
   CASE_PROCESS_COMMAND=""
   CASE_STATUS="$EX_GATE_UNKNOWN"
+  CASE_REASON=""
 
   mkdir -p "$case_dir" ||
     internal_error \
       "cannot create N1/$mode artifact directory"
+
+  # #444 section 3: onboarding and folder trust are prewritten, never passed
+  # by pressing keys. Without a verified prewrite the launcher is not started.
+  if ! prewrite_claude_config "$case_dir"; then
+    CASE_REASON="$(n1_record_reason "$case_dir/claude-config-prewrite.json" claude_config_prewrite_unverified)"
+    log "N1/$mode: .claude.json prewrite not verified: $CASE_REASON"
+    printf '%s\n' "unknown" > "$case_dir/verdict"
+    printf '%s\n' "$CASE_REASON" > "$case_dir/reason"
+    return "$EX_GATE_UNKNOWN"
+  fi
 
   # Start the launcher inside a pseudo terminal (#426). With a FIFO or a
   # file as stdin, Claude Code runs in --print mode and exits at once
@@ -1289,6 +1358,19 @@ launch_n1_case() {
     esac
   fi
 
+  # #444 section 5: prompt only a screen that is positively ready and never
+  # showed a blocking screen. No key is ever sent to get past one.
+  if ! wait_for_n1_ready "$case_dir" "$launcher_pid"; then
+    CASE_REASON="$(n1_record_reason "$case_dir/ready.json" ready_observation_failed)"
+    log "N1/$mode: native prompt input not ready: $CASE_REASON"
+    printf '%s\n' "unknown" > "$case_dir/verdict"
+    printf '%s\n' "$CASE_REASON" > "$case_dir/reason"
+    CASE_STATUS="$EX_GATE_UNKNOWN"
+    stop_native_case "$launcher_pid" "$pty_helper_pid"
+    CURRENT_NATIVE_PID=""
+    return "$EX_GATE_UNKNOWN"
+  fi
+
   marker="AGMSG_N1_TRANSCRIPT_MARKER_${RUN_ID}_${mode}_$(openssl rand -hex 16)" || {
     printf '%s\n' "unknown" > "$case_dir/verdict"
     CASE_STATUS="$EX_GATE_UNKNOWN"
@@ -1361,6 +1443,24 @@ phase_n1() {
 
   mkdir -p "$ARTIFACT_DIR/N1"
 
+  # #444 section 4: without a usable CLAUDE_CODE_OAUTH_TOKEN in the
+  # environment neither case starts a launcher. The token is never read from
+  # a file and no other credential is tried.
+  if ! python3 "$ISOLATION_HELPER" n1-auth --output "$ARTIFACT_DIR/N1/auth.json"; then
+    log "N1: CLAUDE_CODE_OAUTH_TOKEN is absent; no native pilot is started"
+    local absent_mode
+    for absent_mode in fresh resume; do
+      mkdir -p "$ARTIFACT_DIR/N1/$absent_mode"
+      printf '%s\n' "unknown" > "$ARTIFACT_DIR/N1/$absent_mode/verdict"
+      printf '%s\n' "auth_token_absent" > "$ARTIFACT_DIR/N1/$absent_mode/reason"
+    done
+    python3 "$ISOLATION_HELPER" write-n1-result \
+      --output "$ARTIFACT_DIR/N1/result.json" \
+      --verdict unknown \
+      --reason auth_token_absent
+    return "$EX_GATE_UNKNOWN"
+  fi
+
   fresh_status=0
   launch_n1_case "fresh" "1" || fresh_status="$?"
 
@@ -1378,7 +1478,7 @@ phase_n1() {
       python3 "$ISOLATION_HELPER" write-n1-result \
         --output "$ARTIFACT_DIR/N1/result.json" \
         --verdict unknown \
-        --reason fresh_unobservable
+        --reason "${CASE_REASON:-fresh_unobservable}"
       return "$EX_GATE_UNKNOWN"
       ;;
   esac
@@ -1415,7 +1515,7 @@ phase_n1() {
       python3 "$ISOLATION_HELPER" write-n1-result \
         --output "$ARTIFACT_DIR/N1/result.json" \
         --verdict unknown \
-        --reason resume_unobservable
+        --reason "${CASE_REASON:-resume_unobservable}"
       return "$EX_GATE_UNKNOWN"
       ;;
   esac

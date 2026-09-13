@@ -95,6 +95,17 @@ class SpawnTests(Base):
         self.assertEqual(proc.returncode, 0)
         self.assertIn("tty:111 sid:1", self.log.read_text(errors="replace"))
 
+    def test_n1p15_the_child_terminal_is_120_columns_by_40_rows(self) -> None:
+        # #444: the size the native screens were observed at.
+        report = [sys.executable, "-c", "import os; s = os.get_terminal_size(0); print('size=%dx%d' % (s.columns, s.lines))"]
+        proc, master = PTY.spawn(report, cwd=self.tmp, env=dict(os.environ))
+        try:
+            self.drain(master, proc)
+            proc.wait(timeout=10)
+        finally:
+            os.close(master)
+        self.assertIn("size=120x40", self.log.read_text(errors="replace"))
+
     def test_without_a_terminal_the_stand_in_takes_the_print_path(self) -> None:
         # Control for the stand-in itself: the FIFO/pipe start of the old
         # runner gives exactly the #426 failure.

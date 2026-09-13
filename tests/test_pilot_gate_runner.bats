@@ -1388,6 +1388,8 @@ EOF
   PTY_HELPER="$SCRIPTS/lib/pilot-pty.py"
 
   export_isolated_environment() { :; }
+  # #444 preconditions are covered by their own tests below.
+  prewrite_claude_config() { :; }
   # Observe the launcher 8 seconds after start instead of a real binding.
   wait_for_binding() {
     sleep 8
@@ -1439,6 +1441,7 @@ EOF
   chmod +x "$DUMMY_HELPERS/pilot-pty.py"
   PTY_HELPER="$DUMMY_HELPERS/pilot-pty.py"
   export_isolated_environment() { :; }
+  prewrite_claude_config() { :; }
   wait_for_binding() { printf '%s\n' called >> "$CALL_LOG"; return 1; }
 
   local case_status=0
@@ -1464,6 +1467,9 @@ prepare_n1_marker_case() {
   printf '%s\n' 'raise SystemExit(0)' > "$ISOLATION_HELPER"
 
   export_isolated_environment() { :; }
+  # #444 preconditions are covered by their own tests below.
+  prewrite_claude_config() { :; }
+  wait_for_n1_ready() { :; }
   wait_for_binding() { sleep 1; printf '%s\n' "$TEST_ROOT/binding.json"; }
   json_field() { printf '%s\n' "123e4567-e89b-42d3-a456-426614174000"; }
   record_process_command() { printf '%s\n' "claude" > "$2"; }
@@ -1519,4 +1525,256 @@ EOF
   [ "$(cat "$case_dir/input-result")" = "error" ]
   [ "$(wc -l < "$TEST_ROOT/send-calls" | tr -d ' ')" = "1" ]
   [ ! -e "$TEST_ROOT/transcript-calls" ]
+}
+
+# --- #444: N1 input preconditions -------------------------------------------
+
+# A gate run layout with canonical paths, the real isolation helper for the
+# #444 commands (every other isolation check accepts), a real pty helper that
+# counts prompt sends, and a stand-in launcher whose screen is chosen per test.
+prepare_n1_precondition_case() {
+  local screen="$1"
+  local root
+
+  root="$(cd "$TEST_ROOT" && pwd -P)"
+  RUN_ROOT="$root/run"
+  GATE_REPO="$RUN_ROOT/repo"
+  GATE_CLAUDE_CONFIG="$RUN_ROOT/claude"
+  GATE_HOME="$RUN_ROOT/home"
+  GATE_XDG_CONFIG="$RUN_ROOT/xdg/config"
+  GATE_XDG_CACHE="$RUN_ROOT/xdg/cache"
+  GATE_XDG_DATA="$RUN_ROOT/xdg/data"
+  GATE_XDG_STATE="$RUN_ROOT/xdg/state"
+  ARTIFACT_DIR="$RUN_ROOT/artifacts"
+  GATE_TEAM="gate-team"
+  RUN_ID="run444"
+  CLAUDE_VERSION="2.1.268 (Claude Code)"
+  mkdir -p "$GATE_REPO/scripts" "$GATE_CLAUDE_CONFIG" "$GATE_HOME" "$ARTIFACT_DIR"
+  printf '%s\n' "$screen" > "$GATE_REPO/screen"
+  printf '%s\n' '{}' > "$TEST_ROOT/binding.json"
+
+  N1P_TOKEN="qqzz-synthetic-$(openssl rand -hex 12)"
+  export CLAUDE_CODE_OAUTH_TOKEN="$N1P_TOKEN"
+
+  local real_isolation="$SCRIPTS/lib/pilot-gate-isolation.py"
+  ISOLATION_HELPER="$DUMMY_HELPERS/isolation-444.py"
+  cat > "$ISOLATION_HELPER" <<EOF
+import os, sys
+if sys.argv[1:2] and sys.argv[1] in ("prewrite-claude-config", "wait-n1-ready", "n1-auth", "write-n1-result"):
+    os.execv(sys.executable, [sys.executable, "$real_isolation", *sys.argv[1:]])
+raise SystemExit(0)
+EOF
+
+  local real_pty="$SCRIPTS/lib/pilot-pty.py"
+  PTY_HELPER="$DUMMY_HELPERS/pty-444.py"
+  cat > "$PTY_HELPER" <<EOF
+import os, sys
+if sys.argv[1:2] == ["send"]:
+    with open("$TEST_ROOT/send-calls", "a") as fh:
+        fh.write("send\n")
+os.execv(sys.executable, [sys.executable, "$real_pty", *sys.argv[1:]])
+EOF
+
+  cat > "$GATE_REPO/scripts/pilot-launcher.sh" <<'EOF'
+#!/usr/bin/env bash
+repo="$(cd "$(dirname "$0")/.." && pwd)"
+printf '%s\n' started >> "$repo/launcher-starts"
+stty size > "$repo/launcher-tty-size" 2>/dev/null
+[ -n "${ANTHROPIC_API_KEY+set}${ANTHROPIC_AUTH_TOKEN+set}" ] &&
+  printf '%s\n' competing > "$repo/launcher-competing-auth"
+[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] &&
+  printf '%s\n' present > "$repo/launcher-oauth"
+stty raw -echo 2>/dev/null
+case "$(cat "$repo/screen")" in
+  ready)
+    printf '\033[2m\342\217\270 manual mode on \302\267 ? for shortcuts\033[0m\r\n' ;;
+  # The blocking screen and the ready text arrive in one write, so the
+  # first observation already holds both: only the blocking-first priority
+  # can make this unknown, whatever the polling timing.
+  login)
+    printf 'Select login method:\r\n? for shortcuts\r\n' ;;
+  trust)
+    printf 'Quick safety check: Is this a project you created or one you trust?\r\n? for shortcuts\r\n' ;;
+  strip-trust)
+    python3 - "$CLAUDE_CONFIG_DIR/.claude.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+for project in data.get("projects", {}).values():
+    project.pop("hasTrustDialogAccepted", None)
+json.dump(data, open(path, "w"))
+PY
+    printf '? for shortcuts\r\n' ;;
+  none) ;;
+esac
+# Record every byte this terminal receives (prompts and any keystroke).
+exec python3 -c '
+import os, sys, time
+end = time.time() + 60
+with open(sys.argv[1], "ab") as out:
+    while time.time() < end:
+        data = os.read(0, 4096)
+        if not data:
+            break
+        out.write(data); out.flush()
+' "$repo/terminal-input"
+EOF
+  chmod +x "$GATE_REPO/scripts/pilot-launcher.sh"
+
+  wait_for_binding() { sleep 1; printf '%s\n' "$TEST_ROOT/binding.json"; }
+  json_field() { printf '%s\n' "123e4567-e89b-42d3-a456-426614174000"; }
+  record_process_command() { printf '%s\n' "claude" > "$2"; }
+  wait_for_transcript() { printf '%s\n' "$2" >> "$TEST_ROOT/transcript-calls"; return 1; }
+}
+
+n1p_count() {
+  if [ -f "$1" ]; then wc -l < "$1" | tr -d ' '; else printf '0\n'; fi
+}
+
+@test "#444 N1P-01/13/15: a ready screen is prompted once, in a 120x40 terminal, without competing credentials" {
+  prepare_n1_precondition_case ready
+  export ANTHROPIC_API_KEY="qqzz-competing-$(openssl rand -hex 6)"
+
+  local case_status=0
+  launch_n1_case fresh 1 || case_status="$?"
+
+  local case_dir="$ARTIFACT_DIR/N1/fresh"
+  [ "$(n1p_count "$TEST_ROOT/send-calls")" = "1" ] ||
+    { cat "$case_dir/ready.json" "$case_dir/stderr.raw" >&2; return 1; }
+  [ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["verdict"])' "$case_dir/ready.json")" = "ready" ]
+  grep -qF "AGMSG_N1_TRANSCRIPT_MARKER_run444_fresh_" "$GATE_REPO/terminal-input" ||
+    { echo "prompt did not reach the terminal" >&2; return 1; }
+  [ "$(cat "$GATE_REPO/launcher-tty-size")" = "40 120" ] ||
+    { echo "terminal size: $(cat "$GATE_REPO/launcher-tty-size")" >&2; return 1; }
+  [ "$(cat "$GATE_REPO/launcher-oauth")" = "present" ]
+  [ ! -e "$GATE_REPO/launcher-competing-auth" ] ||
+    { echo "a competing credential reached the pilot" >&2; return 1; }
+  # N1P-12 on the launched path: the token reached the pilot only through its
+  # environment, so no file in the run tree holds it. Positive control below.
+  [ -z "$(grep -rlF -e "$N1P_TOKEN" -e "$ANTHROPIC_API_KEY" "$RUN_ROOT" "$TEST_ROOT/send-calls" 2>/dev/null)" ] ||
+    { echo "credential value written to the run tree" >&2; return 1; }
+  printf '%s\n' "$N1P_TOKEN" > "$ARTIFACT_DIR/positive-control"
+  [ "$(grep -rlF -e "$N1P_TOKEN" "$RUN_ROOT" | wc -l | tr -d ' ')" = "1" ]
+  # No transcript is observed in this fixture: unknown, not pass.
+  [ "$case_status" -eq "$EX_GATE_UNKNOWN" ]
+}
+
+@test "#444 N1P-02/03/12/13: without a usable token no launcher starts, and only presence and names are recorded" {
+  prepare_n1_precondition_case ready
+  launch_n1_case() { printf '%s\n' "$1" >> "$TEST_ROOT/launch-calls"; return 0; }
+  export ANTHROPIC_API_KEY="qqzz-competing-$(openssl rand -hex 6)"
+  local competing="$ANTHROPIC_API_KEY"
+
+  local token_state
+  for token_state in unset empty control; do
+    rm -rf "$ARTIFACT_DIR/N1"
+    case "$token_state" in
+      unset) unset CLAUDE_CODE_OAUTH_TOKEN ;;
+      empty) export CLAUDE_CODE_OAUTH_TOKEN="" ;;
+      control) export CLAUDE_CODE_OAUTH_TOKEN="$(printf 'qqzz-synthetic\nline')" ;;
+    esac
+
+    local n1_status=0
+    phase_n1 || n1_status="$?"
+
+    [ "$n1_status" -eq "$EX_GATE_UNKNOWN" ] ||
+      { echo "$token_state: status $n1_status" >&2; return 1; }
+    [ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["reason"])' "$ARTIFACT_DIR/N1/result.json")" = "auth_token_absent" ]
+    [ "$(cat "$ARTIFACT_DIR/N1/fresh/reason")" = "auth_token_absent" ]
+    [ "$(cat "$ARTIFACT_DIR/N1/resume/reason")" = "auth_token_absent" ]
+    [ "$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r["oauthTokenEnv"], ",".join(r["unsetCompetingEnv"]), sorted(r))' "$ARTIFACT_DIR/N1/auth.json")" = "absent ANTHROPIC_API_KEY,ANTHROPIC_AUTH_TOKEN ['oauthTokenEnv', 'schemaVersion', 'unsetCompetingEnv']" ] ||
+      { cat "$ARTIFACT_DIR/N1/auth.json" >&2; return 1; }
+  done
+  [ "$(n1p_count "$TEST_ROOT/launch-calls")" = "0" ]
+  [ "$(n1p_count "$TEST_ROOT/send-calls")" = "0" ]
+
+  # N1P-12: no credential value anywhere in the run tree. Positive control:
+  # the same search finds a file that does contain the value.
+  [ -z "$(grep -rlF -e "$N1P_TOKEN" -e "$competing" "$RUN_ROOT" "$TEST_ROOT/send-calls" 2>/dev/null)" ] ||
+    { echo "credential value written to the run tree" >&2; return 1; }
+  printf '%s\n' "$N1P_TOKEN" > "$RUN_ROOT/positive-control"
+  [ "$(grep -rlF -e "$N1P_TOKEN" "$RUN_ROOT" | wc -l | tr -d ' ')" = "1" ]
+}
+
+@test "#444 N1P-04: a login screen shown with the ready text is never prompted or keyed through" {
+  prepare_n1_precondition_case login
+
+  local case_status=0
+  launch_n1_case fresh 1 || case_status="$?"
+
+  local case_dir="$ARTIFACT_DIR/N1/fresh"
+  [ "$case_status" -eq "$EX_GATE_UNKNOWN" ]
+  [ "$(cat "$case_dir/reason")" = "login_method_screen" ] ||
+    { cat "$case_dir/ready.json" >&2; return 1; }
+  [ "$(n1p_count "$TEST_ROOT/send-calls")" = "0" ]
+  [ ! -s "$GATE_REPO/terminal-input" ] ||
+    { echo "bytes were sent to the terminal" >&2; return 1; }
+}
+
+@test "#444 N1P-05: a trust dialog shown with the ready text is never prompted or keyed through" {
+  prepare_n1_precondition_case trust
+
+  local case_status=0
+  launch_n1_case fresh 1 || case_status="$?"
+
+  local case_dir="$ARTIFACT_DIR/N1/fresh"
+  [ "$case_status" -eq "$EX_GATE_UNKNOWN" ]
+  [ "$(cat "$case_dir/reason")" = "trust_dialog_screen" ] ||
+    { cat "$case_dir/ready.json" >&2; return 1; }
+  [ "$(n1p_count "$TEST_ROOT/send-calls")" = "0" ]
+  [ ! -s "$GATE_REPO/terminal-input" ]
+}
+
+@test "#444 N1P-07: an unverified CLI version is not judged ready and not prompted" {
+  prepare_n1_precondition_case ready
+  CLAUDE_VERSION="9.9.9 (Claude Code)"
+
+  local case_status=0
+  launch_n1_case fresh 1 || case_status="$?"
+
+  [ "$case_status" -eq "$EX_GATE_UNKNOWN" ]
+  [ "$(cat "$ARTIFACT_DIR/N1/fresh/reason")" = "ready_patterns_unverified_for_cli_version" ]
+  [ "$(n1p_count "$TEST_ROOT/send-calls")" = "0" ]
+}
+
+@test "#444 N1P-10: a claude config directory outside RUN_ROOT is not written and starts no launcher" {
+  prepare_n1_precondition_case ready
+  local outside
+  outside="$(cd "$TEST_ROOT" && pwd -P)/outside-claude"
+  mkdir -p "$outside"
+  GATE_CLAUDE_CONFIG="$outside"
+
+  local case_status=0
+  launch_n1_case fresh 1 || case_status="$?"
+
+  [ "$case_status" -eq "$EX_GATE_UNKNOWN" ]
+  [ "$(cat "$ARTIFACT_DIR/N1/fresh/reason")" = "claude_config_outside_run_root" ]
+  [ ! -e "$outside/.claude.json" ]
+  [ "$(n1p_count "$GATE_REPO/launcher-starts")" = "0" ]
+}
+
+@test "#444 N1P-11: resume rewrites the trust the fresh session removed and reads it back" {
+  prepare_n1_precondition_case strip-trust
+
+  local fresh_status=0
+  launch_n1_case fresh 1 || fresh_status="$?"
+  python3 -c '
+import json, sys
+data = json.load(open(sys.argv[1]))
+assert "hasTrustDialogAccepted" not in data["projects"][sys.argv[2]], data
+' "$GATE_CLAUDE_CONFIG/.claude.json" "$GATE_REPO" ||
+    { echo "the fixture did not remove the trust" >&2; return 1; }
+
+  printf '%s\n' ready > "$GATE_REPO/screen"
+  local resume_status=0
+  launch_n1_case resume 2 "123e4567-e89b-42d3-a456-426614174000" || resume_status="$?"
+
+  local record="$ARTIFACT_DIR/N1/resume/claude-config-prewrite.json"
+  [ "$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r["verdict"], r["readBack"])' "$record")" = "pass verified" ] ||
+    { cat "$record" >&2; return 1; }
+  python3 -c '
+import json, sys
+data = json.load(open(sys.argv[1]))
+assert data["projects"][sys.argv[2]]["hasTrustDialogAccepted"] is True, data
+' "$GATE_CLAUDE_CONFIG/.claude.json" "$GATE_REPO"
 }

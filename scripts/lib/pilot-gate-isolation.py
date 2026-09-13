@@ -70,6 +70,30 @@ GITHUB_CREDENTIAL_ENV_KEYS = (
     "GITHUB_ENTERPRISE_TOKEN",
 )
 
+# #444: the native pilot's credential and the credentials it must not use.
+# Only presence is ever recorded; values never leave the environment.
+N1_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
+N1_COMPETING_AUTH_ENV_KEYS = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+)
+CLAUDE_AUTH_ENV_KEYS = (
+    N1_OAUTH_TOKEN_ENV,
+    *N1_COMPETING_AUTH_ENV_KEYS,
+)
+
+# #444 section 5.2: screens that mean the prewrite did not take effect, and
+# the one text that means the prompt input is ready.
+N1_BLOCKING_SCREENS = (
+    ("Select login method", "login_method_screen"),
+    ("Quick safety check", "trust_dialog_screen"),
+)
+N1_READY_TEXT = "? for shortcuts"
+ANSI_ESCAPE_RE = re.compile(
+    r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC ... BEL or ST
+    r"|\x1b\[[0-?]*[ -/]*[@-~]"  # CSI
+)
+
 UUID_RE = re.compile(
     r"^[0-9a-f]{8}-"
     r"[0-9a-f]{4}-"
@@ -1120,6 +1144,12 @@ def command_capture_environment(
         in GITHUB_CREDENTIAL_ENV_KEYS
     }
 
+    # #444: presence only, as for the GitHub credentials above.
+    claude_auth_presence = {
+        key: bool(os.environ.get(key))
+        for key in CLAUDE_AUTH_ENV_KEYS
+    }
+
     git_version = run_command(
         [
             "git",
@@ -1168,6 +1198,8 @@ def command_capture_environment(
         # Presence only. Secret values are deliberately not recorded.
         "githubCredentialEnvironmentPresent":
             sensitive_presence,
+        "claudeAuthEnvironmentPresent":
+            claude_auth_presence,
     }
 
     write_json(
@@ -3726,6 +3758,250 @@ def command_write_n1_result(
     return 0
 
 
+# --- #444: N1 input preconditions ---------------------------------------------
+
+
+def n1_oauth_token_usable(value: str | None) -> bool:
+    if not value:
+        return False
+    return not any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value)
+
+
+def command_n1_auth(
+    args: argparse.Namespace,
+) -> int:
+    """Record whether the pilot's OAuth token is usable (#444 section 4).
+
+    Reads only the environment. Writes presence and the names of the
+    competing variables the runner unsets, never a value, length or digest.
+    """
+    present = n1_oauth_token_usable(os.environ.get(N1_OAUTH_TOKEN_ENV))
+    write_json(
+        args.output,
+        {
+            "schemaVersion": 1,
+            "oauthTokenEnv": "present" if present else "absent",
+            "unsetCompetingEnv": list(N1_COMPETING_AUTH_ENV_KEYS),
+        },
+    )
+    return 0 if present else 2
+
+
+def _inside(path: pathlib.Path, root: pathlib.Path) -> bool:
+    return path != root and root in path.parents
+
+
+def command_prewrite_claude_config(
+    args: argparse.Namespace,
+) -> int:
+    """Merge the three onboarding/trust keys into the gate's .claude.json.
+
+    #444 section 3: only inside RUN_ROOT, never through a symlink, other keys
+    kept, atomic 0600 write, read back. Exit 0 when verified, 2 (unknown)
+    otherwise; the record names the reason.
+    """
+    config_dir = pathlib.Path(args.config_dir)
+    target = config_dir / ".claude.json"
+    gate_repo = args.gate_repo
+    wanted = {
+        "hasCompletedOnboarding": True,
+        "theme": "dark",
+        "projects": {gate_repo: {"hasTrustDialogAccepted": True}},
+    }
+    record: dict[str, Any] = {
+        "schemaVersion": 1,
+        "path": str(target),
+        "set": wanted,
+        "written": False,
+        "readBack": "not_attempted",
+        "verdict": "unknown",
+        "reason": None,
+    }
+
+    def finish(reason: str | None) -> int:
+        record["reason"] = reason
+        record["verdict"] = "pass" if reason is None else "unknown"
+        write_json(args.output, record)
+        return 0 if reason is None else 2
+
+    try:
+        run_root = pathlib.Path(os.path.realpath(args.run_root))
+        resolved_dir = pathlib.Path(os.path.realpath(config_dir))
+    except OSError:
+        return finish("claude_config_outside_run_root")
+    if (
+        not config_dir.is_absolute()
+        or str(resolved_dir) != str(config_dir)
+        or str(run_root) != args.run_root
+        or not _inside(resolved_dir, run_root)
+    ):
+        return finish("claude_config_outside_run_root")
+
+    try:
+        config_dir.mkdir(parents=True, exist_ok=True)
+        if config_dir.is_symlink() or not config_dir.is_dir():
+            return finish("claude_config_outside_run_root")
+
+        data: dict[str, Any] = {}
+        try:
+            info = os.lstat(target)
+        except FileNotFoundError:
+            info = None
+        if info is not None:
+            if not stat.S_ISREG(info.st_mode):
+                return finish("claude_config_unreadable")
+            try:
+                with open(target, "r", encoding="utf-8") as fh:
+                    loaded = json.load(fh)
+            except (OSError, UnicodeError, ValueError):
+                return finish("claude_config_unreadable")
+            if not isinstance(loaded, dict):
+                return finish("claude_config_unreadable")
+            data = loaded
+
+        projects = data.get("projects", {})
+        if not isinstance(projects, dict):
+            return finish("claude_config_unreadable")
+        project = projects.get(gate_repo, {})
+        if not isinstance(project, dict):
+            return finish("claude_config_unreadable")
+
+        data["hasCompletedOnboarding"] = True
+        data["theme"] = "dark"
+        project["hasTrustDialogAccepted"] = True
+        projects[gate_repo] = project
+        data["projects"] = projects
+
+        temporary = config_dir / f".claude.json.{os.getpid()}.tmp"
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+                json.dump(data, fh, ensure_ascii=False, indent=2)
+                fh.write("\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+        except BaseException:
+            pathlib.Path(temporary).unlink(missing_ok=True)
+            raise
+        os.replace(temporary, target)
+        record["written"] = True
+    except OSError:
+        return finish("claude_config_unreadable")
+
+    try:
+        with open(target, "r", encoding="utf-8") as fh:
+            back = json.load(fh)
+        verified = (
+            isinstance(back, dict)
+            and back.get("hasCompletedOnboarding") is True
+            and back.get("theme") == "dark"
+            and isinstance(back.get("projects"), dict)
+            and isinstance(back["projects"].get(gate_repo), dict)
+            and back["projects"][gate_repo].get("hasTrustDialogAccepted") is True
+        )
+    except (OSError, UnicodeError, ValueError):
+        verified = False
+    record["readBack"] = "verified" if verified else "mismatch"
+    if not verified:
+        return finish("claude_config_prewrite_unverified")
+    return finish(None)
+
+
+def strip_terminal_escapes(text: str) -> str:
+    return ANSI_ESCAPE_RE.sub("", text)
+
+
+def evaluate_n1_screen(text: str) -> tuple[str, str | None]:
+    """Classify the whole terminal output seen so far (#444 section 5.2).
+
+    A blocking screen wins even if the ready text appears later.
+    Returns ("unknown", reason), ("ready", None) or ("waiting", None).
+    """
+    plain = strip_terminal_escapes(text)
+    for needle, reason in N1_BLOCKING_SCREENS:
+        if needle in plain:
+            return "unknown", reason
+    if N1_READY_TEXT in plain:
+        return "ready", None
+    return "waiting", None
+
+
+def command_wait_n1_ready(
+    args: argparse.Namespace,
+) -> int:
+    import time
+
+    record: dict[str, Any] = {
+        "schemaVersion": 1,
+        "cliVersion": args.cli_version,
+        "verifiedCliVersions": list(args.verified_cli_version),
+        "timeoutSeconds": args.timeout,
+        "verdict": "unknown",
+        "reason": None,
+    }
+
+    def finish(state: str, reason: str | None) -> int:
+        record["verdict"] = "ready" if state == "ready" else "unknown"
+        record["reason"] = reason
+        write_json(args.output, record)
+        return 0 if state == "ready" else 2
+
+    version = args.cli_version.split()[0] if args.cli_version.split() else ""
+    if version not in args.verified_cli_version:
+        return finish("unknown", "ready_patterns_unverified_for_cli_version")
+
+    log = pathlib.Path(args.log)
+    deadline = time.monotonic() + args.timeout
+
+    def read_screen() -> str | None:
+        try:
+            return log.read_bytes().decode("utf-8", errors="replace")
+        except FileNotFoundError:
+            return ""
+        except OSError:
+            return None
+
+    while True:
+        text = read_screen()
+        if text is None:
+            return finish("unknown", "ready_observation_failed")
+        state, reason = evaluate_n1_screen(text)
+        if state != "waiting":
+            return finish(state, reason)
+        try:
+            os.kill(args.pid, 0)
+        except ProcessLookupError:
+            return finish("unknown", "ready_observation_failed")
+        except PermissionError:
+            pass
+        if time.monotonic() >= deadline:
+            return finish("unknown", "ready_not_observed")
+        time.sleep(0.2)
+
+
+def add_n1_input_precondition_commands(subparsers: Any) -> None:
+    command = subparsers.add_parser("n1-auth")
+    command.add_argument("--output", required=True)
+    command.set_defaults(handler=command_n1_auth)
+
+    command = subparsers.add_parser("prewrite-claude-config")
+    command.add_argument("--config-dir", required=True)
+    command.add_argument("--run-root", required=True)
+    command.add_argument("--gate-repo", required=True)
+    command.add_argument("--output", required=True)
+    command.set_defaults(handler=command_prewrite_claude_config)
+
+    command = subparsers.add_parser("wait-n1-ready")
+    command.add_argument("--log", required=True)
+    command.add_argument("--pid", required=True, type=int)
+    command.add_argument("--cli-version", required=True)
+    command.add_argument("--verified-cli-version", action="append", default=[])
+    command.add_argument("--timeout", required=True, type=float)
+    command.add_argument("--output", required=True)
+    command.set_defaults(handler=command_wait_n1_ready)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -4385,6 +4661,8 @@ def build_parser() -> argparse.ArgumentParser:
     command.set_defaults(
         handler=command_write_n1_result
     )
+
+    add_n1_input_precondition_commands(subparsers)
 
     return parser
 
