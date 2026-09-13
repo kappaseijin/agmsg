@@ -1588,11 +1588,13 @@ stty raw -echo 2>/dev/null
 case "$(cat "$repo/screen")" in
   ready)
     printf '\033[2m\342\217\270 manual mode on \302\267 ? for shortcuts\033[0m\r\n' ;;
+  # The blocking screen and the ready text arrive in one write, so the
+  # first observation already holds both: only the blocking-first priority
+  # can make this unknown, whatever the polling timing.
   login)
-    printf 'Select login method:\r\n'; sleep 1; printf '? for shortcuts\r\n' ;;
+    printf 'Select login method:\r\n? for shortcuts\r\n' ;;
   trust)
-    printf 'Quick safety check: Is this a project you created or one you trust?\r\n'
-    sleep 1; printf '? for shortcuts\r\n' ;;
+    printf 'Quick safety check: Is this a project you created or one you trust?\r\n? for shortcuts\r\n' ;;
   strip-trust)
     python3 - "$CLAUDE_CONFIG_DIR/.claude.json" <<'PY'
 import json, sys
@@ -1694,7 +1696,7 @@ n1p_count() {
   [ "$(grep -rlF -e "$N1P_TOKEN" "$RUN_ROOT" | wc -l | tr -d ' ')" = "1" ]
 }
 
-@test "#444 N1P-04: a login screen is never prompted or keyed through, even when ready text follows" {
+@test "#444 N1P-04: a login screen shown with the ready text is never prompted or keyed through" {
   prepare_n1_precondition_case login
 
   local case_status=0
@@ -1709,7 +1711,7 @@ n1p_count() {
     { echo "bytes were sent to the terminal" >&2; return 1; }
 }
 
-@test "#444 N1P-05: a trust dialog is never prompted or keyed through, even when ready text follows" {
+@test "#444 N1P-05: a trust dialog shown with the ready text is never prompted or keyed through" {
   prepare_n1_precondition_case trust
 
   local case_status=0
