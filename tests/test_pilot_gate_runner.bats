@@ -1394,6 +1394,10 @@ EOF
     if _agmsg_pid_alive_local "$2"; then
       printf '%s\n' "$2" > "$TEST_ROOT/alive-after-8s"
     fi
+    # #434: the control socket is bound in the case's private directory.
+    if [ -S "$CURRENT_N1_CONTROL_DIR/control.sock" ]; then
+      printf '%s\n' "$CURRENT_N1_CONTROL_DIR" > "$TEST_ROOT/control-dir"
+    fi
     return 1
   }
 
@@ -1412,6 +1416,13 @@ EOF
     { echo "no terminal output recorded" >&2; return 1; }
   [ "$(cat "$case_dir/launcher-pid")" = "$(cat "$TEST_ROOT/alive-after-8s")" ] ||
     { echo "launcher-pid does not name the observed launcher" >&2; return 1; }
+  # #434: the socket lived in a private directory, removed with the case.
+  [ -s "$TEST_ROOT/control-dir" ] ||
+    { echo "control socket was not bound in a private directory" >&2; return 1; }
+  [ ! -e "$(cat "$TEST_ROOT/control-dir")" ] ||
+    { echo "control directory left behind" >&2; return 1; }
+  [ -z "$CURRENT_N1_CONTROL_DIR" ] ||
+    { echo "control directory still recorded" >&2; return 1; }
   # The case stopped both the launcher and the pty helper.
   ! _agmsg_pid_alive_local "$(cat "$TEST_ROOT/alive-after-8s")"
 }

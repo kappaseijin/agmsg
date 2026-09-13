@@ -214,6 +214,22 @@ class CommandLineTests(Base):
         result = self.run_helper("/bin/sh", "-c", "kill -KILL $$")
         self.assertEqual(result.returncode, 128 + signal.SIGKILL)
 
+    def test_an_unbindable_control_socket_starts_nothing(self) -> None:
+        # #434: longer than AF_UNIX allows; the pilot must not be started.
+        too_long = self.tmp / ("s" * 200)
+        marker = self.tmp / "started"
+        result = subprocess.run(
+            [sys.executable, str(PTY_HELPER), "run", "--log", str(self.log),
+             "--pid-file", str(self.pid_file), "--control-socket", str(too_long),
+             "--cwd", str(self.tmp), "--", "/bin/sh", "-c", f": > {marker}"],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 70, result.stderr)
+        self.assertIn("cannot bind control socket", result.stderr)
+        time.sleep(0.5)
+        self.assertFalse(marker.exists())
+        self.assertFalse(self.pid_file.exists())
+
     def test_run_without_a_command_is_a_usage_error(self) -> None:
         result = self.run_helper()
         self.assertEqual(result.returncode, 64)

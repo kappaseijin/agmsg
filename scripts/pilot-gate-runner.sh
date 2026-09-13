@@ -107,6 +107,9 @@ F2_PROBE_PROGRAM=""
 F2_PROBE_MANIFEST=""
 
 CURRENT_NATIVE_PID=""
+# Private directory holding the N1 PTY control socket (#434); removed when the
+# case stops.
+CURRENT_N1_CONTROL_DIR=""
 
 usage() {
   cat <<'USAGE'
@@ -964,6 +967,7 @@ wait_for_binding() {
 
 wait_for_transcript() {
   local session_id="$1"
+  local marker="$2"
   local deadline
   local result
 
@@ -974,6 +978,7 @@ wait_for_transcript() {
       python3 "$ISOLATION_HELPER" find-transcript \
         --claude-config "$GATE_CLAUDE_CONFIG" \
         --session-id "$session_id" \
+        --marker "$marker" \
         2>/dev/null ||
         true
     )"
@@ -1074,6 +1079,11 @@ stop_native_case() {
     terminate_native_process "$helper_pid"
     wait "$helper_pid" >/dev/null 2>&1 || true
   fi
+
+  if [ -n "$CURRENT_N1_CONTROL_DIR" ]; then
+    rm -rf -- "$CURRENT_N1_CONTROL_DIR"
+    CURRENT_N1_CONTROL_DIR=""
+  fi
 }
 
 launch_n1_case() {
@@ -1086,8 +1096,11 @@ launch_n1_case() {
   local binding
   local session_id
   local transcript
+  local marker
   local process_command
   local validation_status
+  local control_socket
+  local prompt
 
   CASE_BINDING=""
   CASE_SESSION=""
@@ -1106,6 +1119,19 @@ launch_n1_case() {
   # the pilot. The helper writes the launcher's PID (the launcher execs
   # claude, so it is also claude's PID) to launcher-pid.
   rm -f "$case_dir/launcher-pid"
+  # AF_UNIX paths are short (104 bytes on macOS), so the control socket
+  # cannot live in the nested artifact tree. Put it in a private 0700
+  # directory under /tmp that only this case owns: nothing else can sit at
+  # the path the helper unlinks and binds. The durable input record stays in
+  # the case directory below.
+  if ! CURRENT_N1_CONTROL_DIR="$(mktemp -d /tmp/agmsg-n1.XXXXXX)"; then
+    CURRENT_N1_CONTROL_DIR=""
+    log "N1/$mode: cannot create the PTY control directory"
+    printf '%s\n' "unknown" > "$case_dir/verdict"
+    CASE_STATUS="$EX_GATE_UNKNOWN"
+    return "$EX_GATE_UNKNOWN"
+  fi
+  control_socket="$CURRENT_N1_CONTROL_DIR/control.sock"
 
   (
     export_isolated_environment
@@ -1113,6 +1139,7 @@ launch_n1_case() {
     exec python3 "$PTY_HELPER" run \
       --log "$case_dir/pty.raw" \
       --pid-file "$case_dir/launcher-pid" \
+      --control-socket "$control_socket" \
       --cwd "$GATE_REPO" \
       -- \
       "$GATE_REPO/scripts/pilot-launcher.sh" \
@@ -1262,8 +1289,27 @@ launch_n1_case() {
     esac
   fi
 
+  marker="AGMSG_N1_TRANSCRIPT_MARKER_${RUN_ID}_${mode}_$(openssl rand -hex 16)" || {
+    printf '%s\n' "unknown" > "$case_dir/verdict"
+    CASE_STATUS="$EX_GATE_UNKNOWN"
+    stop_native_case "$launcher_pid" "$pty_helper_pid"
+    CURRENT_NATIVE_PID=""
+    return "$EX_GATE_UNKNOWN"
+  }
+  printf '%s\n' "$marker" > "$case_dir/marker.txt"
+  prompt="Reply with exactly this marker once. Do not use tools, commands, files, or network: $marker"
+  printf '%s\n' "$prompt" > "$case_dir/prompt.txt"
+  if ! python3 "$PTY_HELPER" send --socket "$control_socket" --input "$case_dir/prompt.txt"; then
+    printf '%s\n' "unknown" > "$case_dir/verdict"
+    CASE_STATUS="$EX_GATE_UNKNOWN"
+    stop_native_case "$launcher_pid" "$pty_helper_pid"
+    CURRENT_NATIVE_PID=""
+    return "$EX_GATE_UNKNOWN"
+  fi
+  printf '%s\n' "1" > "$case_dir/input-count"
+
   if ! transcript="$(
-    wait_for_transcript "$session_id"
+    wait_for_transcript "$session_id" "$marker"
   )"; then
     log \
       "N1/$mode: native transcript not uniquely observed"

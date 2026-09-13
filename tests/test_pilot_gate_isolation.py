@@ -5832,6 +5832,16 @@ class PilotGateIsolationN1ProcessAndTranscriptTests(unittest.TestCase):
                 1,
             )
 
+    def test_find_transcript_requires_marker_in_same_file_as_session(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            config = root / "claude"
+            marker = "AGMSG_N1_TRANSCRIPT_MARKER_run_fresh_nonce"
+            self.write_transcript(config / "session.jsonl", [{"sessionId": self.SESSION_ID, "text": marker}])
+            result = self.run_cli("find-transcript", "--claude-config", str(config), "--session-id", self.SESSION_ID, "--marker", marker)
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout.strip(), str(config / "session.jsonl"))
+
     def test_find_transcript_finds_single_nested_match_even_when_filename_has_no_session_id(
         self,
     ):

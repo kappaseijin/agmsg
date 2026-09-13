@@ -30,6 +30,7 @@ import pathlib
 import pty
 import select
 import signal
+import socket
 import subprocess
 import sys
 from typing import Sequence
@@ -106,6 +107,33 @@ def write_pid_file(path: pathlib.Path, pid: int) -> None:
     os.replace(temporary, path)
 
 
+def write_master(master: int, payload: bytes) -> int:
+    """Write one complete control payload to the retained PTY master."""
+    try:
+        written = os.write(master, payload)
+    except OSError:
+        return 1
+    return 0 if written == len(payload) else 1
+
+
+def command_send(args: argparse.Namespace) -> int:
+    payload = pathlib.Path(args.input).read_bytes()
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    client_path = f"{args.socket}.{os.getpid()}"
+    try:
+        pathlib.Path(client_path).unlink(missing_ok=True)
+        client.bind(client_path)
+        client.settimeout(2)
+        client.connect(args.socket)
+        client.sendall(payload)
+        return 0 if client.recv(16) == b"ok" else 1
+    except OSError:
+        return 1
+    finally:
+        client.close()
+        pathlib.Path(client_path).unlink(missing_ok=True)
+
+
 def command_run(args: argparse.Namespace) -> int:
     argv = list(args.argv)
     if argv and argv[0] == "--":
@@ -115,7 +143,29 @@ def command_run(args: argparse.Namespace) -> int:
         return 64
 
     log = pathlib.Path(args.log)
-    proc, master = spawn(argv, cwd=args.cwd, env=dict(os.environ))
+    control = None
+    if args.control_socket:
+        # Bind before the pilot starts: a socket that cannot be bound (for
+        # example a path longer than AF_UNIX allows) must not leave a running
+        # pilot behind with nobody able to reach its terminal.
+        control_path = pathlib.Path(args.control_socket)
+        try:
+            control_path.unlink(missing_ok=True)
+            control = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            control.bind(str(control_path))
+            control.setblocking(False)
+        except OSError as error:
+            if control is not None:
+                control.close()
+            print(f"pilot-pty: cannot bind control socket: {error}", file=sys.stderr)
+            return 70
+    try:
+        proc, master = spawn(argv, cwd=args.cwd, env=dict(os.environ))
+    except BaseException:
+        if control is not None:
+            control.close()
+            control_path.unlink(missing_ok=True)
+        raise
 
     def forward(signum: int, frame: object) -> None:
         # A signal to this helper stops the pilot it is holding; the loop
@@ -132,6 +182,12 @@ def command_run(args: argparse.Namespace) -> int:
         write_pid_file(pathlib.Path(args.pid_file), proc.pid)
         open_terminal = True
         while True:
+            if control is not None:
+                try:
+                    payload, peer = control.recvfrom(65536)
+                    control.sendto(b"ok" if write_master(master, payload) == 0 else b"error", peer)
+                except BlockingIOError:
+                    pass
             if open_terminal:
                 open_terminal = pump(master, log, 0.2)
             if proc.poll() is not None:
@@ -146,6 +202,9 @@ def command_run(args: argparse.Namespace) -> int:
                 proc.wait()
                 break
     finally:
+        if control is not None:
+            control.close()
+            pathlib.Path(args.control_socket).unlink(missing_ok=True)
         try:
             os.close(master)
         except OSError:
@@ -163,8 +222,13 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--log", required=True)
     run.add_argument("--pid-file", required=True)
     run.add_argument("--cwd", required=True)
+    run.add_argument("--control-socket")
     run.add_argument("argv", nargs=argparse.REMAINDER)
     run.set_defaults(handler=command_run)
+    send = sub.add_parser("send")
+    send.add_argument("--socket", required=True)
+    send.add_argument("--input", required=True)
+    send.set_defaults(handler=command_send)
     return parser
 
 
