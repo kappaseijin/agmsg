@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import importlib.util
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -160,6 +162,32 @@ class SmallTests(unittest.TestCase):
             self.assertEqual(sorted(p.name for p in path.parent.iterdir()), ["launcher-pid"])
 
 
+class WriteMasterTests(unittest.TestCase):
+    # #434 N1M-07: only a complete write counts as the prompt reaching the PTY.
+    def test_complete_write_is_ok(self) -> None:
+        read_end, write_end = os.pipe()
+        try:
+            self.assertEqual(PTY.write_master(write_end, b"marker\n"), 0)
+            self.assertEqual(os.read(read_end, 64), b"marker\n")
+        finally:
+            os.close(read_end)
+            os.close(write_end)
+
+    def test_partial_write_is_an_error(self) -> None:
+        with mock.patch.object(PTY.os, "write", return_value=3):
+            self.assertEqual(PTY.write_master(99, b"marker\n"), 1)
+
+    def test_eio_is_an_error(self) -> None:
+        with mock.patch.object(PTY.os, "write", side_effect=OSError(errno.EIO, "EIO")):
+            self.assertEqual(PTY.write_master(99, b"marker\n"), 1)
+
+    def test_closed_descriptor_is_an_error(self) -> None:
+        read_end, write_end = os.pipe()
+        os.close(read_end)
+        os.close(write_end)
+        self.assertEqual(PTY.write_master(write_end, b"marker\n"), 1)
+
+
 class CommandLineTests(Base):
     def run_helper(self, *argv: str, timeout: float = 20) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -213,6 +241,22 @@ class CommandLineTests(Base):
     def test_a_child_killed_by_a_signal_is_reported_as_128_plus_signal(self) -> None:
         result = self.run_helper("/bin/sh", "-c", "kill -KILL $$")
         self.assertEqual(result.returncode, 128 + signal.SIGKILL)
+
+    def test_an_unbindable_control_socket_starts_nothing(self) -> None:
+        # #434: longer than AF_UNIX allows; the pilot must not be started.
+        too_long = self.tmp / ("s" * 200)
+        marker = self.tmp / "started"
+        result = subprocess.run(
+            [sys.executable, str(PTY_HELPER), "run", "--log", str(self.log),
+             "--pid-file", str(self.pid_file), "--control-socket", str(too_long),
+             "--cwd", str(self.tmp), "--", "/bin/sh", "-c", f": > {marker}"],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 70, result.stderr)
+        self.assertIn("cannot bind control socket", result.stderr)
+        time.sleep(0.5)
+        self.assertFalse(marker.exists())
+        self.assertFalse(self.pid_file.exists())
 
     def test_run_without_a_command_is_a_usage_error(self) -> None:
         result = self.run_helper()
